@@ -106,14 +106,91 @@ git diff --check
 
 ## Running log (maintain during execution)
 
-- **Progress:** (milestone status + evidence paths)
-- **Surprises & Discoveries:** (e.g. marquee pitfalls, attribute leak vectors,
-  computed-style cost)
-- **Decisions:** (append to contract §13)
-- **Outcomes & Retrospective:** (filled at Goal end)
+### Progress
 
-## Handoff to Goal 03
+- M1 Multi/region selection: **DONE** — `src/studio/selection.ts` (pure state:
+  replace/toggle/clear/region normalize/commit with 50-element cap); toolbar
+  Shift+click/Shift+Enter multi (stays in picking mode), drag marquee, Esc
+  cancel; session lifecycle fix: closing the panel or starting a new session
+  clears stale selections (regression-tested).
+- M2 Enriched capture: **DONE** — schema v2 (additive): `elements[]`, `region`,
+  `domOutline`, curated `computedStyle` excerpts (≤30 props, ≤200 chars),
+  explainable candidates (`kind: fiber|dom`), business context
+  (`data-ai-page-element` / `data-nb-*` → workContext-shaped items, deduped,
+  ≤20); server resolves module-graph file:line candidates per element
+  (≤3/name, ≤5/element, ≤40 total).
+- M3 Redaction + size limits: **DONE** — client (`redact.ts`, baseline +
+  bare-assignment extension) and server (`endpoint.ts`, self-contained)
+  independent passes; `redaction` manifest in the artifact
+  (droppedKeys/redactedValues/truncatedValues); strict caps incl. per-route
+  body limits (tasks 256 KB, screenshots 2.8 MB wire / 2 MB decoded) and a
+  post-backfill artifact size re-check (256 KB UTF-8).
+- M4 Screenshot + lifecycle: **DONE** — zero-dep annotated viewport capture
+  (SVG foreignObject + curated style inlining + secret-attribute stripping +
+  marker strokes; D-010); POST `/__portal-studio/screenshots` (token, PNG
+  magic + IHDR validation, atomic 0600 write, traversal-safe naming); relative
+  refs in the artifact; replace/clear lifecycle with transaction-safe
+  screenshot pruning (D-013).
+- M5 Tests + E2E: **DONE** — 137 unit/component tests; E2E 3/3 (login
+  regression + users 3 rounds + dev-page keyboard/guards).
 
-Goal 03 consumes the redaction/artifact machinery: diagnostics attach to the
-same artifact (schema v3) with the same redaction and size discipline, and the
-screenshot capture path becomes the basis of the `current screenshot` command.
+### Surprises & Discoveries
+
+1. The DevTools-hook/fiber findings from Goal 01 carried over; the big Goal 02
+   surprise was the **SVG attribute-spacing bug**: `buildScreenshotSvg` joined
+   `height="480"` and `viewBox=…` without a space, producing invalid XML that
+   made `new Image()` fail to rasterize — captured only by a real-browser E2E
+   (the local manual repro with correct spacing masked it). Fixed + regression
+   test (DOMParser parse check).
+2. **Stale-selection leak**: after a saved round, closing/reopening the panel
+   kept the old selection, so a Shift+click on the same element *toggled it
+   out* (counter stayed 0). Fixed by resetting the whole session on close and
+   at session start.
+3. **Marquee region was dropped in the draft**: `commitDraft` rebuilt the
+   capture without `selection.region`, so artifacts never carried the region
+   even though ≥3 elements were captured (E2E caught it; unit tests did not —
+   jsdom has no layout for drag simulation).
+4. **Orphaned screenshots on replace**: each round left its screenshot behind
+   because only the *current* task's ref was cleaned on clear. Fixed with
+   transaction-safe pruning (read before write, delete after write, same-path
+   retention).
+5. `pruneSupersededScreenshot` placed before the atomic write had a
+   transaction hole (failed write would leave the old task without its
+   screenshot; same-path reuse would delete the fresh PNG) — reordered to
+   read → write → conditional delete.
+6. jsdom: `getBoundingClientRect` is all-zero (no layout) — selection/region
+   unit tests must mock rects; `PointerEvent` is unavailable — marquee drag is
+   E2E-only.
+7. The sandbox users table has a single row — E2E multi-select uses two cells
+   of the same row instead of two rows.
+
+### Decisions
+
+- See contract Decision Log D-010 … D-013 (appended during Goal 02).
+
+### Outcomes & Retrospective (filled at Goal end)
+
+- End-state reached: multi/region/screenshot selections form a complete,
+  redacted, size-bounded schema-v2 artifact, fully usable via the JSON path
+  alone; the v1 single-pick flow is regression-free.
+- Retro: real-browser E2E proved its worth three times (SVG spacing, region
+  drop, orphan pruning). The transaction-ordering review caught a real hole in
+  the replace lifecycle — worth keeping "write first, delete after, guard the
+  path" as the standard for every multi-file lifecycle.
+- Known trade-offs (documented, not defects): webfonts/media are not
+  rasterized in screenshots (media stripped to avoid canvas tainting); marquee
+  has no keyboard equivalent (Shift+Enter multi is the keyboard path);
+  descriptor *content* of registered page elements is not client-readable (the
+  provider registry is not exposed), so business context carries ids/sources
+  only.
+
+### AC checklist (Goal 02)
+
+| AC | Evidence |
+| --- | --- |
+| 1. Multi/region produce one coherent v2 artifact; v1 single flow unregressed | E2E users-page 3 rounds (single → shift-multi+replace → marquee) + dev-page keyboard rounds; v1 payload still accepted (endpoint tests) and print renders v1+v2 |
+| 2. Redacted + size-bounded by default; manifest present; secrets absent | redaction matrix tests (Bearer/Cookie/query/token/styles/attributes); endpoint hygiene tests incl. session-token redaction; E2E asserts artifact contains no `token`/`Bearer` and < 256 KB; manifest asserted in unit + E2E |
+| 3. Screenshot files exist, referenced relatively, broken refs fail | E2E: PNG magic check, file size > 100 B, ref regex, ref-to-disk match; `parseScreenshotPayload` unit tests (magic/IHDR/2 MB exact boundary) |
+| 4. Replace/clear atomic & idempotent; JSON path alone supports all | clear DELETE + replace pruning unit tests (read-only read, same-path retention, different-path removal, unsafe-target rejection); E2E clear → print exit 1 + empty screenshots dir |
+| 5. Keyboard + ARIA + i18n | toolbar component tests (Enter/Shift+Enter/Esc, focus trap, aria labels); new i18n keys in en-US + zh-CN |
+| 6. `git diff --check` clean; no lockfile changes | exit 0; `git status` shows only intended files; no package.json/lockfile diff |

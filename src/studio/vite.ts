@@ -16,20 +16,34 @@ import path from "node:path";
 import type { Plugin, ViteDevServer } from "vite";
 
 import {
+  atomicWriteScreenshot,
   atomicWriteTaskFile,
+  clearActiveTask,
   generateSessionToken,
+  readReferencedScreenshot,
+  removeScreenshotFile,
+  MAX_ARTIFACT_BYTES,
+  MAX_SCREENSHOT_BODY_BYTES,
   MAX_TASK_BODY_BYTES,
+  parseScreenshotPayload,
   redactSessionToken,
   resolveActiveTaskPath,
   sanitizeTask,
   SESSION_FILENAME,
   verifySessionToken,
 } from "./endpoint";
-import type { SourceCandidate } from "./types";
+import type {
+  ElementCapture,
+  PortalStudioTask,
+  SourceCandidate,
+} from "./types";
 
-const ENDPOINT_PATH = "/__portal-studio/tasks";
+const TASKS_ENDPOINT_PATH = "/__portal-studio/tasks";
+const SCREENSHOTS_ENDPOINT_PATH = "/__portal-studio/screenshots";
 const TOKEN_HEADER = "x-portal-studio-token";
-const MAX_SOURCE_CANDIDATES = 8;
+const MAX_SOURCE_CANDIDATES_PER_NAME = 3;
+const MAX_SOURCE_CANDIDATES_PER_ELEMENT = 5;
+const MAX_TOTAL_SOURCE_CANDIDATES = 40;
 
 export type PortalStudioPluginOptions = {
   root?: string;
@@ -41,21 +55,33 @@ const isLoopbackAddress = (address: string | undefined) =>
   address === "::ffff:127.0.0.1" ||
   address === undefined;
 
-const readRequestBody = async (
-  request: IncomingMessage
+/**
+ * Read a request body up to the given byte limit. The limit is per-route:
+ * task payloads use MAX_TASK_BODY_BYTES, screenshot payloads use
+ * MAX_SCREENSHOT_BODY_BYTES (base64 PNG data may legitimately exceed 256 KB
+ * while still far below the decoded 2 MB cap).
+ */
+export const readRequestBody = async (
+  request: AsyncIterable<unknown>,
+  limit: number
 ): Promise<{ ok: true; body: string } | { ok: false; status: number }> => {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const buffer = Buffer.isBuffer(chunk)
+      ? chunk
+      : Buffer.from(chunk as Uint8Array);
     size += buffer.length;
-    if (size > MAX_TASK_BODY_BYTES) {
+    if (size > limit) {
       return { ok: false, status: 413 };
     }
     chunks.push(buffer);
   }
   return { ok: true, body: Buffer.concat(chunks).toString("utf8") };
 };
+
+const isRecordLike = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
 
 const writeJsonResponse = (
   response: ServerResponse,
@@ -88,7 +114,7 @@ export function resolveComponentSources(
 
   for (const name of uniqueNames) {
     for (const module of modules) {
-      if (candidates.length >= MAX_SOURCE_CANDIDATES) break;
+      if (candidates.length >= MAX_TOTAL_SOURCE_CANDIDATES) break;
       const file = module.file;
       if (!file) continue;
       const extension = path.extname(file);
@@ -123,7 +149,68 @@ export function resolveComponentSources(
     }
   }
 
-  return candidates.slice(0, MAX_SOURCE_CANDIDATES);
+  return candidates;
+}
+
+/**
+ * Assign resolved source candidates, serialize, re-verify the final UTF-8
+ * artifact size (source-candidate backfill happens after `sanitizeTask`'s
+ * own size check, so the limit must be re-enforced here), and redact the
+ * session token. Returns the artifact text or a size rejection.
+ */
+export function serializeTaskArtifact(
+  task: PortalStudioTask,
+  resolved: SourceCandidate[],
+  sessionToken: string
+):
+  | { ok: true; serialized: string }
+  | { ok: false; error: "artifact_too_large" } {
+  const elements = assignSourceCandidates(task.elements, resolved);
+  const serialized = redactSessionToken(
+    JSON.stringify({ ...task, elements }, null, 2),
+    sessionToken
+  );
+  if (Buffer.byteLength(serialized, "utf8") > MAX_ARTIFACT_BYTES) {
+    return { ok: false, error: "artifact_too_large" };
+  }
+  return { ok: true, serialized };
+}
+
+/**
+ * Assign resolved module candidates back to each element by component name
+ * (bounded per element and in total).
+ */
+export function assignSourceCandidates(
+  elements: ElementCapture[],
+  resolved: SourceCandidate[]
+): ElementCapture[] {
+  const byName = new Map<string, SourceCandidate[]>();
+  for (const candidate of resolved) {
+    if (!candidate.name) continue;
+    const list = byName.get(candidate.name) ?? [];
+    if (list.length < MAX_SOURCE_CANDIDATES_PER_NAME) list.push(candidate);
+    byName.set(candidate.name, list);
+  }
+  let total = 0;
+  return elements.map((element) => {
+    if (total >= MAX_TOTAL_SOURCE_CANDIDATES) return element;
+    const names = new Set(
+      element.componentCandidates
+        .map((candidate) => candidate.name)
+        .filter((name): name is string => typeof name === "string")
+    );
+    const assigned: SourceCandidate[] = [];
+    for (const name of names) {
+      for (const candidate of byName.get(name) ?? []) {
+        if (assigned.length >= MAX_SOURCE_CANDIDATES_PER_ELEMENT) break;
+        assigned.push(candidate);
+        total += 1;
+        if (total >= MAX_TOTAL_SOURCE_CANDIDATES) break;
+      }
+      if (total >= MAX_TOTAL_SOURCE_CANDIDATES) break;
+    }
+    return { ...element, sourceCandidates: assigned };
+  });
 }
 
 export function portalStudioPlugin(
@@ -144,7 +231,7 @@ export function portalStudioPlugin(
           {
             token: sessionToken,
             createdAt: new Date().toISOString(),
-            endpoint: ENDPOINT_PATH,
+            endpoint: TASKS_ENDPOINT_PATH,
           },
           null,
           2
@@ -152,7 +239,7 @@ export function portalStudioPlugin(
         { encoding: "utf8", mode: 0o600 }
       );
       console.log(
-        `[portal-studio] dev session ready: token in ${sessionPath} (endpoint ${ENDPOINT_PATH}, dev server only)`
+        `[portal-studio] dev session ready: token in ${sessionPath} (endpoint ${TASKS_ENDPOINT_PATH}, dev server only)`
       );
     }
   };
@@ -167,7 +254,8 @@ export function portalStudioPlugin(
       ensureSession();
       const config = JSON.stringify({
         token: sessionToken,
-        endpoint: ENDPOINT_PATH,
+        endpoint: TASKS_ENDPOINT_PATH,
+        screenshotsEndpoint: SCREENSHOTS_ENDPOINT_PATH,
       });
       // Inline module scripts in dev index.html are processed by Vite, so the
       // studio entry import resolves through the dev transform pipeline. The
@@ -200,7 +288,14 @@ export function portalStudioPlugin(
           response: ServerResponse,
           next: () => void
         ) => {
-          if (request.method !== "POST" || request.url !== ENDPOINT_PATH) {
+          const isTaskPost =
+            request.method === "POST" && request.url === TASKS_ENDPOINT_PATH;
+          const isScreenshotPost =
+            request.method === "POST" &&
+            request.url === SCREENSHOTS_ENDPOINT_PATH;
+          const isTaskDelete =
+            request.method === "DELETE" && request.url === TASKS_ENDPOINT_PATH;
+          if (!isTaskPost && !isScreenshotPost && !isTaskDelete) {
             next();
             return;
           }
@@ -208,9 +303,7 @@ export function portalStudioPlugin(
 
           // Loopback-only enforcement (contract §7).
           if (!isLoopbackAddress(request.socket.remoteAddress)) {
-            writeJsonResponse(response, 404, {
-              error: "not_found",
-            });
+            writeJsonResponse(response, 404, { error: "not_found" });
             return;
           }
 
@@ -226,11 +319,22 @@ export function portalStudioPlugin(
             return;
           }
 
-          const read = await readRequestBody(request);
+          if (isTaskDelete) {
+            const result = clearActiveTask(studioRoot);
+            writeJsonResponse(response, 200, { ok: true, ...result });
+            return;
+          }
+
+          const read = await readRequestBody(
+            request,
+            isScreenshotPost ? MAX_SCREENSHOT_BODY_BYTES : MAX_TASK_BODY_BYTES
+          );
           if (!read.ok) {
             writeJsonResponse(response, read.status, {
               error: "payload_too_large",
-              limit: MAX_TASK_BODY_BYTES,
+              limit: isScreenshotPost
+                ? MAX_SCREENSHOT_BODY_BYTES
+                : MAX_TASK_BODY_BYTES,
             });
             return;
           }
@@ -243,33 +347,95 @@ export function portalStudioPlugin(
             return;
           }
 
-          const task = sanitizeTask(raw);
+          if (isScreenshotPost) {
+            const payload = isRecordLike(raw) ? raw : {};
+            const base64 =
+              typeof payload.png === "string" ? payload.png : undefined;
+            const taskId =
+              typeof payload.taskId === "string" ? payload.taskId : undefined;
+            if (!base64 || !taskId) {
+              writeJsonResponse(response, 400, {
+                error: "invalid_screenshot_payload",
+              });
+              return;
+            }
+            const parsed = parseScreenshotPayload(base64);
+            if (!parsed) {
+              writeJsonResponse(response, 400, {
+                error: "invalid_png",
+              });
+              return;
+            }
+            try {
+              const file = atomicWriteScreenshot(
+                studioRoot,
+                taskId,
+                parsed.buffer
+              );
+              writeJsonResponse(response, 200, {
+                ok: true,
+                file,
+                width: parsed.width,
+                height: parsed.height,
+                bytes: parsed.buffer.length,
+              });
+            } catch {
+              writeJsonResponse(response, 400, {
+                error: "invalid_screenshot_name",
+              });
+              return;
+            }
+            return;
+          }
+
+          const task = sanitizeTask(raw, { studioRoot });
           if (!task) {
             writeJsonResponse(response, 400, { error: "invalid_task" });
             return;
           }
 
-          const sourceCandidates = resolveComponentSources(
-            server,
-            task.element.componentCandidates
+          const names = task.elements.flatMap((element) =>
+            element.componentCandidates
               .map((candidate) => candidate.name)
-              .filter((name): name is string => typeof name === "string"),
-            root
+              .filter((name): name is string => typeof name === "string")
           );
-          task.element.sourceCandidates = sourceCandidates;
+          const resolved = resolveComponentSources(server, names, root);
+          const finalized = serializeTaskArtifact(task, resolved, sessionToken);
+          if (!finalized.ok) {
+            writeJsonResponse(response, 400, {
+              error: "artifact_too_large",
+            });
+            return;
+          }
 
-          const serialized = redactSessionToken(
-            JSON.stringify(task, null, 2),
-            sessionToken
+          // Replace lifecycle, transaction-safe: only READ the superseded
+          // task's screenshot reference before the write; delete it only
+          // AFTER the new task is durably written, and only when the new
+          // task does not reuse the same screenshot path (a same-path
+          // screenshot was already overwritten by its own POST and must be
+          // kept).
+          const supersededScreenshot = readReferencedScreenshot(
+            studioRoot,
+            resolveActiveTaskPath(studioRoot)
           );
-          atomicWriteTaskFile(studioRoot, "active-task.json", serialized);
+          atomicWriteTaskFile(
+            studioRoot,
+            "active-task.json",
+            finalized.serialized
+          );
+          if (
+            supersededScreenshot &&
+            supersededScreenshot !== task.screenshot?.file
+          ) {
+            removeScreenshotFile(studioRoot, supersededScreenshot);
+          }
 
           writeJsonResponse(response, 200, {
             ok: true,
             taskId: task.taskId,
             writtenAt: new Date().toISOString(),
             file: resolveActiveTaskPath(studioRoot),
-            sourceCandidates,
+            sourceCandidates: resolved,
           });
         }
       );
@@ -277,4 +443,7 @@ export function portalStudioPlugin(
   };
 }
 
-export { ENDPOINT_PATH };
+export {
+  SCREENSHOTS_ENDPOINT_PATH,
+  TASKS_ENDPOINT_PATH,
+};

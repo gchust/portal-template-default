@@ -65,7 +65,50 @@ function readTask(studioRoot, taskId) {
 
 class TaskNotFoundError extends Error {}
 
+function formatElementLines(task, prefix) {
+  const lines = [];
+  for (const [index, element] of task.elements.entries()) {
+    const label = task.elements.length > 1 ? `Element ${index + 1}: <${element.tagName}>` : `Element: <${element.tagName}>`;
+    lines.push(`### ${label}`, "");
+    lines.push("#### Selector candidates");
+    lines.push(...element.selectorCandidates.map(
+      (candidate) => `- [${candidate.kind}] ${candidate.selector}`
+    ));
+    lines.push("", "#### Component candidates");
+    lines.push(...(element.componentCandidates.length
+      ? element.componentCandidates
+          .slice(0, 20)
+          .map((candidate) => `- ${candidate.name ?? "(unknown)"}${candidate.kind ? ` (${candidate.kind})` : ""}`)
+      : ["- (none — DOM fallback)"]));
+    lines.push("", "#### Source candidates");
+    lines.push(...(element.sourceCandidates.length
+      ? element.sourceCandidates.map((source) =>
+          `- ${source.file}${typeof source.line === "number" ? `:${source.line}` : ""}`
+        )
+      : ["- (none)"]));
+    lines.push("", "#### Snapshot");
+    lines.push(`- text: ${element.snapshot.text.slice(0, 200) || "(empty)"}`);
+    if (element.snapshot.domOutline) {
+      lines.push(`- domOutline: ${element.snapshot.domOutline}`);
+    }
+    if (element.snapshot.computedStyle) {
+      lines.push(`- computedStyle: ${JSON.stringify(element.snapshot.computedStyle)}`);
+    }
+    lines.push(`- attributes: ${JSON.stringify(element.snapshot.attributes)}`);
+    lines.push(`- childCount: ${element.snapshot.childCount}`);
+    lines.push("");
+  }
+  return lines;
+}
+
 function formatMarkdown(task) {
+  const elements = Array.isArray(task.elements)
+    ? task.elements
+    : Array.isArray(task.element)
+      ? task.element
+      : task.element
+        ? [task.element]
+        : [];
   const lines = [
     `# Task ${task.taskId}`,
     "",
@@ -73,37 +116,30 @@ function formatMarkdown(task) {
     `- url: ${task.url}`,
     `- title: ${task.title}`,
     `- capturedAt: ${task.createdAt}`,
-    "",
-    "## Instruction",
-    task.instruction || "(empty)",
-    "",
-    `## Element: <${task.element.tagName}>`,
-    "",
-    "### Selector candidates",
-    ...task.element.selectorCandidates.map(
-      (candidate) => `- [${candidate.kind}] ${candidate.selector}`
-    ),
-    "",
-    "### Component candidates",
-    ...(task.element.componentCandidates.length
-      ? task.element.componentCandidates
-          .slice(0, 20)
-          .map((candidate) => `- ${candidate.name ?? "(unknown)"}`)
-      : ["- (none — DOM fallback)"]),
-    "",
-    "### Source candidates",
-    ...(task.element.sourceCandidates.length
-      ? task.element.sourceCandidates.map((source) =>
-          `- ${source.file}${typeof source.line === "number" ? `:${source.line}` : ""}`
-        )
-      : ["- (none)"]),
-    "",
-    "### Snapshot",
-    `- text: ${task.element.snapshot.text.slice(0, 200) || "(empty)"}`,
-    `- attributes: ${JSON.stringify(task.element.snapshot.attributes)}`,
-    `- childCount: ${task.element.snapshot.childCount}`,
-    "",
   ];
+  if (task.region) {
+    lines.push(
+      `- region: ${task.region.x},${task.region.y} ${task.region.width}x${task.region.height}`
+    );
+  }
+  if (task.screenshot) {
+    lines.push(`- screenshot: ${task.screenshot.file} (${task.screenshot.width}x${task.screenshot.height})`);
+  }
+  if (task.businessContext && task.businessContext.length) {
+    lines.push("- businessContext:");
+    lines.push(...task.businessContext.slice(0, 20).map(
+      (item) => `  - [${item.type}] ${item.id ?? ""} (source: ${item.source})`
+    ));
+  }
+  if (task.redaction) {
+    lines.push(
+      `- redaction: droppedKeys=${JSON.stringify(task.redaction.droppedKeys)} redactedValues=${task.redaction.redactedValues} truncatedValues=${task.redaction.truncatedValues}`
+    );
+  }
+  lines.push("", "## Instruction", task.instruction || "(empty)", "");
+  if (elements.length) {
+    lines.push(...formatElementLines({ elements }, ""));
+  }
   return lines.join("\n");
 }
 

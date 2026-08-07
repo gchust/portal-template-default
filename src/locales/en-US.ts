@@ -133,4 +133,15 @@ export const starter = {
   "studio.savedFile": "File",
   "studio.done": "Done",
   "studio.errorSave": "Unable to save task",
+  "studio.selectRegion": "Select region",
+  "studio.marqueeHint":
+    "Drag over the page to select everything inside the region. Esc cancels.",
+  "studio.capturedCount": "Captured",
+  "studio.elements": "element(s)",
+  "studio.regionLabel": "region",
+  "studio.businessContext": "Business context",
+  "studio.clearTask": "Clear task",
+  "studio.taskCleared": "Task cleared",
+  "studio.screenshot": "Screenshot",
+  "studio.selectedCount": "Selected",
 } as const;

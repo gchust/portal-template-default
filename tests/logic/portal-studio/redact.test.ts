@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createRedactionRecorder,
   redactTextValue,
   sanitizeArtifact,
   sanitizeAttributeMap,
+  toRedactionManifest,
 } from "@/studio/redact";
 
 describe("redactTextValue", () => {
@@ -15,6 +17,7 @@ describe("redactTextValue", () => {
     ).not.toContain("xyz");
     expect(redactTextValue("?token=secret&ok=1")).not.toContain("secret");
     expect(redactTextValue("api_key=abc")).not.toContain("abc");
+    expect(redactTextValue("token=bare-secret")).not.toContain("bare-secret");
   });
 
   it("truncates long values with a marker", () => {
@@ -22,6 +25,47 @@ describe("redactTextValue", () => {
     const redacted = redactTextValue(value);
     expect(redacted.length).toBeLessThan(2100);
     expect(redacted.endsWith("[truncated]")).toBe(true);
+  });
+});
+
+describe("redaction manifest recording", () => {
+  it("records redacted and truncated values", () => {
+    const recorder = createRedactionRecorder();
+    redactTextValue("Bearer abc", {}, recorder);
+    redactTextValue("plain text", {}, recorder);
+    redactTextValue("z".repeat(3000), {}, recorder);
+    const manifest = toRedactionManifest(recorder);
+    expect(manifest.redactedValues).toBe(2);
+    expect(manifest.truncatedValues).toBe(1);
+  });
+
+  it("records dropped secret keys in nested structures", () => {
+    const recorder = createRedactionRecorder();
+    sanitizeArtifact(
+      {
+        token: "x",
+        nested: { apiKey: "y", authorization: "z", keep: "ok" },
+      },
+      {},
+      recorder
+    );
+    const manifest = toRedactionManifest(recorder);
+    expect(manifest.droppedKeys).toEqual(
+      expect.arrayContaining(["token", "apiKey", "authorization"])
+    );
+    expect(manifest.droppedKeys).not.toContain("keep");
+  });
+
+  it("records dropped keys and redactions in attribute maps", () => {
+    const recorder = createRedactionRecorder();
+    sanitizeAttributeMap(
+      { class: "row", token: "drop", title: "Bearer zz" },
+      {},
+      recorder
+    );
+    const manifest = toRedactionManifest(recorder);
+    expect(manifest.droppedKeys).toEqual(["token"]);
+    expect(manifest.redactedValues).toBe(1);
   });
 });
 
@@ -62,9 +106,10 @@ describe("sanitizeArtifact", () => {
     const e = (
       (result.a as Record<string, unknown>).b as Record<string, unknown>
     ).c as Record<string, unknown>;
-    const eRecord = e.d as Record<string, unknown>;
-    expect(eRecord.e).toBeDefined();
-    expect((eRecord.e as Record<string, unknown>).f).toBe("[truncated]");
+    expect((e.d as Record<string, unknown>).e).toBeDefined();
+    expect(
+      ((e.d as Record<string, unknown>).e as Record<string, unknown>).f
+    ).toBe("[truncated]");
     const long = { text: "z".repeat(5000) };
     const redacted = sanitizeArtifact(long) as Record<string, unknown>;
     expect(String(redacted.text)).toHaveLength(2012);

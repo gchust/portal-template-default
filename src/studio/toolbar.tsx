@@ -1,11 +1,13 @@
 /**
- * Portal Studio — Shadow DOM toolbar.
+ * Portal Studio — Shadow DOM toolbar (schema v2).
  *
  * Dev-only client UI rendered inside a shadow root (see `index.tsx`). Plain
- * semantic HTML + scoped styles (Tailwind/shadcn styles do not cross shadow
- * boundaries). Keyboard accessible: Tab reaches the floating button, the
- * panel traps focus, Esc cancels, arrow keys move between the hovered
- * element and its ancestors while picking.
+ * semantic HTML + scoped styles. Interactions: single pick (click/Enter),
+ * Shift+click or Shift+Enter multi-select, drag marquee region selection,
+ * replace (a new plain pick replaces the selection), clear task, and an
+ * annotated screenshot taken at save time. Keyboard accessible: Tab reaches
+ * the floating button, the panel traps focus, Esc cancels, arrow keys move
+ * between the hovered element and its ancestors while picking.
  */
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
@@ -13,27 +15,40 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { translate } from "@nocobase/portal-sdk/i18n";
 
 import {
-  captureElement,
+  captureSelection,
   collectTargetStack,
   isStudioElement,
   readHostComponentName,
 } from "./capture";
+import { captureViewportPng } from "./screenshot";
+import {
+  commitRegion,
+  EMPTY_SELECTION,
+  normalizeRegion,
+  replaceSelection,
+  toggleInSelection,
+  type SelectionState,
+} from "./selection";
 import {
   TASK_SCHEMA_VERSION,
+  type BusinessContextItem,
   type ElementCapture,
   type PortalStudioTask,
+  type Region,
+  type SourceCandidate,
 } from "./types";
 
 export type PortalStudioConfig = {
   token: string;
   endpoint: string;
+  screenshotsEndpoint?: string;
 };
 
 export type PortalStudioSaveResult = {
   ok: boolean;
   taskId?: string;
   file?: string;
-  sourceCandidates?: ElementCapture["sourceCandidates"];
+  sourceCandidates?: SourceCandidate[];
   error?: string;
 };
 
@@ -41,13 +56,29 @@ const t = (key: string, fallback: string) =>
   translate(key, { ns: "starter" }, fallback);
 
 const STACK_DEPTH = 4;
+const MAX_REGION_SCAN_ELEMENTS = 5000;
 
 type ToolbarMode =
   | { kind: "idle" }
   | { kind: "picking"; stack: Element[]; index: number }
-  | { kind: "draft"; capture: ElementCapture }
+  | { kind: "marquee"; start: { x: number; y: number }; current: { x: number; y: number } }
+  | {
+      kind: "draft";
+      capture: {
+        elements: ElementCapture[];
+        businessContext: BusinessContextItem[];
+        region?: Region;
+      };
+    }
   | { kind: "saving" }
-  | { kind: "saved"; taskId: string; file?: string; sources: ElementCapture["sourceCandidates"] }
+  | {
+      kind: "saved";
+      taskId: string;
+      file?: string;
+      screenshot?: string;
+      sources: SourceCandidate[];
+    }
+  | { kind: "cleared" }
   | { kind: "error"; message: string };
 
 const findFocusable = (root: HTMLElement) =>
@@ -57,7 +88,7 @@ const findFocusable = (root: HTMLElement) =>
     )
   ).filter((element) => !element.hasAttribute("disabled"));
 
-const outlineStyle = (rect: DOMRect | undefined): CSSProperties => {
+const rectStyle = (rect: DOMRect | undefined): CSSProperties => {
   if (!rect) return { display: "none" };
   return {
     display: "block",
@@ -66,6 +97,41 @@ const outlineStyle = (rect: DOMRect | undefined): CSSProperties => {
     width: rect.width,
     height: rect.height,
   };
+};
+
+const regionStyle = (region: Region | undefined): CSSProperties => {
+  if (!region) return { display: "none" };
+  return {
+    display: "block",
+    left: region.x,
+    top: region.y,
+    width: region.width,
+    height: region.height,
+  };
+};
+
+const toRegion = (mode: ToolbarMode): Region | undefined => {
+  if (mode.kind !== "marquee") return undefined;
+  return normalizeRegion(
+    {
+      x: Math.min(mode.start.x, mode.current.x),
+      y: Math.min(mode.start.y, mode.current.y),
+      width: Math.abs(mode.current.x - mode.start.x),
+      height: Math.abs(mode.current.y - mode.start.y),
+    },
+    { width: window.innerWidth, height: window.innerHeight }
+  );
+};
+
+const collectRegionCandidates = (): Element[] => {
+  const body = document.body;
+  if (!body) return [];
+  const candidates: Element[] = [];
+  for (const element of Array.from(body.querySelectorAll("*"))) {
+    if (candidates.length >= MAX_REGION_SCAN_ELEMENTS) break;
+    candidates.push(element);
+  }
+  return candidates;
 };
 
 export function StudioToolbar({
@@ -79,10 +145,22 @@ export function StudioToolbar({
   const [instruction, setInstruction] = useState("");
   const [outlineRect, setOutlineRect] = useState<DOMRect>();
   const [hoverName, setHoverName] = useState<string | null>(null);
+  const [selectionRects, setSelectionRects] = useState<DOMRect[]>([]);
+  const [selectionCount, setSelectionCount] = useState(0);
+  const selectionRef = useRef<SelectionState>(EMPTY_SELECTION);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const picking = mode.kind === "picking";
   const isIdle = mode.kind === "idle";
+  const isMarquee = mode.kind === "marquee";
+
+  const refreshSelectionRects = useCallback(() => {
+    setSelectionRects(
+      selectionRef.current.elements
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 || rect.height > 0)
+    );
+  }, []);
 
   const updateOutline = useCallback((element: Element | undefined) => {
     setOutlineRect(element?.getBoundingClientRect());
@@ -95,15 +173,39 @@ export function StudioToolbar({
     setHoverName(null);
   }, []);
 
-  const confirmCapture = useCallback((element: Element) => {
-    setMode({ kind: "draft", capture: captureElement(element) });
+  const commitDraft = useCallback((selection: SelectionState) => {
+    selectionRef.current = selection;
+    setSelectionCount(selection.elements.length);
+    const capture = captureSelection(selection.elements);
+    // The marquee region must survive into the draft so it lands in the
+    // artifact (regression: the region was dropped here).
+    setMode({
+      kind: "draft",
+      capture: {
+        ...capture,
+        ...(selection.region ? { region: selection.region } : {}),
+      },
+    });
     setOutlineRect(undefined);
     setHoverName(null);
   }, []);
 
-  // Picking listeners: pointermove builds the target stack, click confirms,
-  // keyboard moves within the stack and confirms, Esc cancels. The effect is
-  // registered once per picking session; the current mode is read from a ref.
+  const addOrReplace = useCallback(
+    (element: Element, additive: boolean) => {
+      if (additive) {
+        // Multi-select stays in picking mode so more elements can be added.
+        selectionRef.current = toggleInSelection(selectionRef.current, element);
+        setSelectionCount(selectionRef.current.elements.length);
+        refreshSelectionRects();
+        return;
+      }
+      commitDraft(replaceSelection(selectionRef.current, element));
+    },
+    [commitDraft, refreshSelectionRects]
+  );
+
+  // Picking listeners (single/multi): pointermove builds the target stack,
+  // plain click/Enter replaces, Shift+click/Shift+Enter toggles, Esc cancels.
   useEffect(() => {
     if (!picking) return;
 
@@ -117,8 +219,12 @@ export function StudioToolbar({
     };
     const handleScroll = () => {
       const current = modeRef.current;
-      if (current.kind !== "picking") return;
-      updateOutline(current.stack[current.index]);
+      if (current.kind === "picking") {
+        updateOutline(current.stack[current.index]);
+      } else {
+        return;
+      }
+      refreshSelectionRects();
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       const current = modeRef.current;
@@ -129,8 +235,8 @@ export function StudioToolbar({
         return;
       }
       if (current.kind !== "picking") return;
-      // Keyboard picking without hover: seed the stack from the focused
-      // page element so arrow keys and Enter work with no pointer input.
+      // Keyboard picking without hover: seed the stack from the focused page
+      // element so arrow keys and Enter work with no pointer input.
       const stack =
         current.stack.length > 0
           ? current.stack
@@ -143,7 +249,10 @@ export function StudioToolbar({
         event.stopPropagation();
         if (!stack.length) return;
         const direction = event.key === "ArrowDown" ? 1 : -1;
-        const next = Math.min(Math.max(current.index + direction, 0), stack.length - 1);
+        const next = Math.min(
+          Math.max(current.index + direction, 0),
+          stack.length - 1
+        );
         setMode({ kind: "picking", stack, index: next });
         updateOutline(stack[next]);
         return;
@@ -152,7 +261,7 @@ export function StudioToolbar({
         event.preventDefault();
         event.stopPropagation();
         const target = stack[current.index] ?? undefined;
-        if (target) confirmCapture(target);
+        if (target) addOrReplace(target, event.shiftKey);
       }
     };
     const handleClick = (event: MouseEvent) => {
@@ -164,7 +273,7 @@ export function StudioToolbar({
       const picked = stack[0] ?? target;
       event.preventDefault();
       event.stopPropagation();
-      confirmCapture(picked);
+      addOrReplace(picked, event.shiftKey);
     };
 
     document.addEventListener("pointermove", handlePointerMove, true);
@@ -177,7 +286,82 @@ export function StudioToolbar({
       document.removeEventListener("keydown", handleKeyDown, true);
       document.removeEventListener("click", handleClick, true);
     };
-  }, [cancelPicking, confirmCapture, picking, updateOutline]);
+  }, [addOrReplace, cancelPicking, picking, refreshSelectionRects, updateOutline]);
+
+  // Marquee listeners: pointerdown starts, pointermove updates the rect,
+  // pointerup commits the region selection.
+  useEffect(() => {
+    if (!isMarquee) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || isStudioElement(target)) return;
+      const current = modeRef.current;
+      if (current.kind !== "marquee") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMode({
+        kind: "marquee",
+        start: { x: event.clientX, y: event.clientY },
+        current: { x: event.clientX, y: event.clientY },
+      });
+    };
+    const handlePointerMove = (event: PointerEvent) => {
+      const current = modeRef.current;
+      if (current.kind !== "marquee") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMode({
+        kind: "marquee",
+        start: current.start,
+        current: { x: event.clientX, y: event.clientY },
+      });
+    };
+    const handlePointerUp = (event: PointerEvent) => {
+      const current = modeRef.current;
+      if (current.kind !== "marquee") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const region = toRegion(current);
+      if (!region || region.width < 2 || region.height < 2) {
+        setMode({ kind: "idle" });
+        return;
+      }
+      const selection = commitRegion(collectRegionCandidates(), region);
+      commitDraft(selection);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setMode({ kind: "idle" });
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("pointermove", handlePointerMove, true);
+    document.addEventListener("pointerup", handlePointerUp, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("pointermove", handlePointerMove, true);
+      document.removeEventListener("pointerup", handlePointerUp, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [commitDraft, isMarquee]);
+
+  // Refresh selection rects on scroll/resize while the panel is open.
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => refreshSelectionRects();
+    window.addEventListener("scroll", refresh, true);
+    window.addEventListener("resize", refresh);
+    refresh();
+    return () => {
+      window.removeEventListener("scroll", refresh, true);
+      window.removeEventListener("resize", refresh);
+    };
+  }, [open, refreshSelectionRects]);
 
   // Focus trap while the panel is open.
   useEffect(() => {
@@ -206,6 +390,11 @@ export function StudioToolbar({
   }, [open]);
 
   const startPicking = () => {
+    // A new capture session always starts from a clean selection; stale
+    // selections from a previous draft/save must never leak into it.
+    selectionRef.current = EMPTY_SELECTION;
+    setSelectionRects([]);
+    setSelectionCount(0);
     // Keyboard users may start picking with a focused page element.
     const active = document.activeElement;
     const initial =
@@ -221,19 +410,120 @@ export function StudioToolbar({
     }
   };
 
+  const startMarquee = () => {
+    // New session: clean selection (see startPicking).
+    selectionRef.current = EMPTY_SELECTION;
+    setSelectionRects([]);
+    setSelectionCount(0);
+    setMode({
+      kind: "marquee",
+      start: { x: 0, y: 0 },
+      current: { x: 0, y: 0 },
+    });
+    setOutlineRect(undefined);
+    setHoverName(null);
+  };
+
+  const clearTask = async () => {
+    setMode({ kind: "saving" });
+    try {
+      const response = await fetch(config.endpoint, {
+        method: "DELETE",
+        headers: { "X-Portal-Studio-Token": config.token },
+      });
+      if (!response.ok) {
+        setMode({
+          kind: "error",
+          message: `HTTP ${response.status}`,
+        });
+        return;
+      }
+      selectionRef.current = EMPTY_SELECTION;
+      setSelectionRects([]);
+      setSelectionCount(0);
+      setInstruction("");
+      setMode({ kind: "cleared" });
+    } catch (error) {
+      setMode({
+        kind: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   const saveTask = async () => {
     if (mode.kind !== "draft") return;
     setMode({ kind: "saving" });
+    const taskId = crypto.randomUUID();
     const task: PortalStudioTask = {
       schemaVersion: TASK_SCHEMA_VERSION,
-      taskId: crypto.randomUUID(),
+      taskId,
       createdAt: new Date().toISOString(),
       url: window.location.href,
       title: document.title,
       instruction,
-      element: mode.capture,
+      elements: mode.capture.elements,
+      ...(mode.capture.region ? { region: mode.capture.region } : {}),
+      businessContext: mode.capture.businessContext,
+      redaction: {
+        droppedKeys: [],
+        redactedValues: 0,
+        truncatedValues: 0,
+      },
     };
     try {
+      // Annotated screenshot first (markers over the selected elements and
+      // region); the server validates and stores the PNG atomically.
+      const annotations = [
+        ...selectionRef.current.elements
+          .map((element) => element.getBoundingClientRect())
+          .filter((rect) => rect.width > 0 && rect.height > 0)
+          .map((rect) => ({
+            x: rect.left,
+            y: rect.top,
+            width: rect.width,
+            height: rect.height,
+          })),
+        ...(mode.capture.region
+          ? [{ ...mode.capture.region }]
+          : []),
+      ];
+      const shot = await captureViewportPng(annotations);
+      if (!shot) {
+        setMode({ kind: "error", message: "screenshot capture failed" });
+        return;
+      }
+      const screenshotsEndpoint =
+        config.screenshotsEndpoint ?? "/__portal-studio/screenshots";
+      const shotResponse = await fetch(screenshotsEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Portal-Studio-Token": config.token,
+        },
+        body: JSON.stringify({
+          taskId,
+          png: shot.dataUrl.split(",")[1] ?? "",
+        }),
+      });
+      const shotPayload = (await shotResponse.json()) as {
+        ok?: boolean;
+        file?: string;
+        error?: string;
+      };
+      if (!shotResponse.ok || !shotPayload.ok || !shotPayload.file) {
+        setMode({
+          kind: "error",
+          message: shotPayload.error ?? String(shotResponse.status),
+        });
+        return;
+      }
+      task.screenshot = {
+        file: shotPayload.file,
+        width: shot.width,
+        height: shot.height,
+      };
+
       const response = await fetch(config.endpoint, {
         method: "POST",
         headers: {
@@ -254,6 +544,7 @@ export function StudioToolbar({
         kind: "saved",
         taskId: payload.taskId,
         file: payload.file,
+        screenshot: task.screenshot?.file,
         sources: payload.sourceCandidates ?? [],
       });
     } catch (error) {
@@ -265,9 +556,23 @@ export function StudioToolbar({
   };
 
   const resetAfterSave = () => {
+    selectionRef.current = EMPTY_SELECTION;
+    setSelectionRects([]);
+    setSelectionCount(0);
     setInstruction("");
     setMode({ kind: "idle" });
   };
+
+  /** Reset all capture-session state (selection, draft text, mode). */
+  const resetSession = useCallback(() => {
+    selectionRef.current = EMPTY_SELECTION;
+    setSelectionRects([]);
+    setSelectionCount(0);
+    setInstruction("");
+    setMode({ kind: "idle" });
+    setOutlineRect(undefined);
+    setHoverName(null);
+  }, []);
 
   const panelVisible = open;
 
@@ -284,9 +589,7 @@ export function StudioToolbar({
         aria-expanded={open}
         onClick={() => {
           setOpen((current) => !current);
-          setMode({ kind: "idle" });
-          setOutlineRect(undefined);
-          setHoverName(null);
+          resetSession();
         }}
       >
         🛠
@@ -306,7 +609,7 @@ export function StudioToolbar({
               aria-label={t("studio.close", "Close")}
               onClick={() => {
                 setOpen(false);
-                setMode({ kind: "idle" });
+                resetSession();
               }}
             >
               ✕
@@ -318,12 +621,18 @@ export function StudioToolbar({
               <p className="ps-hint">
                 {t(
                   "studio.pickHint",
-                  "Hover an element, then click or press Enter. Arrow keys move between the element and its ancestors. Esc cancels."
+                  "Hover an element, then click or press Enter. Arrow keys move between the element and its ancestors. Shift adds to the selection. Esc cancels."
                 )}
               </p>
               {hoverName ? (
                 <p className="ps-meta">
                   {t("studio.currentComponent", "Component")}: {hoverName}
+                </p>
+              ) : null}
+              {selectionCount > 0 ? (
+                <p className="ps-meta">
+                  {t("studio.selectedCount", "Selected")}:{" "}
+                  <strong>{selectionCount}</strong>
                 </p>
               ) : null}
               <button
@@ -336,24 +645,56 @@ export function StudioToolbar({
             </div>
           ) : null}
 
+          {mode.kind === "marquee" ? (
+            <div className="ps-section" role="status" aria-live="polite">
+              <p className="ps-hint">
+                {t(
+                  "studio.marqueeHint",
+                  "Drag over the page to select everything inside the region. Esc cancels."
+                )}
+              </p>
+              <button
+                type="button"
+                className="ps-button"
+                onClick={() => setMode({ kind: "idle" })}
+              >
+                {t("studio.cancel", "Cancel")}
+              </button>
+            </div>
+          ) : null}
+
           {mode.kind === "draft" ? (
             <div className="ps-section">
               <p className="ps-meta">
-                {t("studio.capturedTag", "Captured")}:{" "}
-                <code>{mode.capture.tagName}</code>
+                {t("studio.capturedCount", "Captured")}:{" "}
+                <strong>{mode.capture.elements.length}</strong>{" "}
+                {t("studio.elements", "element(s)")}
+                {mode.capture.region
+                  ? ` — ${t("studio.regionLabel", "region")} ${mode.capture.region.width}×${mode.capture.region.height}`
+                  : ""}
               </p>
-              <p className="ps-label">
-                {t("studio.component", "Components")}
-              </p>
+              {mode.capture.businessContext.length ? (
+                <p className="ps-meta">
+                  {t("studio.businessContext", "Business context")}:{" "}
+                  {mode.capture.businessContext.length}
+                </p>
+              ) : null}
+              <p className="ps-label">{t("studio.component", "Components")}</p>
               <ul className="ps-list">
-                {mode.capture.componentCandidates.length ? (
-                  mode.capture.componentCandidates
-                    .slice(0, 12)
-                    .map((candidate, index) => (
-                      <li key={`${candidate.name}-${index}`}>
-                        <code>{candidate.name ?? "?"}</code>
+                {mode.capture.elements.length ? (
+                  mode.capture.elements.slice(0, 10).map((capture, index) => {
+                    const component = capture.componentCandidates.find(
+                      (candidate) => candidate.name
+                    )?.name;
+                    return (
+                      <li key={index}>
+                        <code>
+                          {capture.tagName}
+                          {component ? ` · ${component}` : ""}
+                        </code>
                       </li>
-                    ))
+                    );
+                  })
                 ) : (
                   <li>
                     {t(
@@ -363,11 +704,10 @@ export function StudioToolbar({
                   </li>
                 )}
               </ul>
-              <p className="ps-label">{t("studio.source", "Source candidates")}</p>
               <p className="ps-hint">
                 {t(
                   "studio.sourcePending",
-                  "Resolved by the dev server when the task is saved."
+                  "Source candidates are resolved by the dev server when the task is saved."
                 )}
               </p>
               <label className="ps-label" htmlFor="ps-instruction">
@@ -422,6 +762,12 @@ export function StudioToolbar({
                   {t("studio.savedFile", "File")}: <code>{mode.file}</code>
                 </p>
               ) : null}
+              {mode.screenshot ? (
+                <p className="ps-meta">
+                  {t("studio.screenshot", "Screenshot")}:{" "}
+                  <code>{mode.screenshot}</code>
+                </p>
+              ) : null}
               {mode.sources.length ? (
                 <>
                   <p className="ps-label">
@@ -451,6 +797,21 @@ export function StudioToolbar({
             </div>
           ) : null}
 
+          {mode.kind === "cleared" ? (
+            <div className="ps-section" role="status" aria-live="polite">
+              <p className="ps-ok">
+                {t("studio.taskCleared", "Task cleared")}
+              </p>
+              <button
+                type="button"
+                className="ps-button ps-primary"
+                onClick={() => setMode({ kind: "idle" })}
+              >
+                {t("studio.done", "Done")}
+              </button>
+            </div>
+          ) : null}
+
           {mode.kind === "error" ? (
             <div className="ps-section" role="alert">
               <p className="ps-error">
@@ -469,12 +830,28 @@ export function StudioToolbar({
 
           {isIdle ? (
             <div className="ps-section">
+              <div className="ps-actions ps-actions-start">
+                <button
+                  type="button"
+                  className="ps-button ps-primary"
+                  onClick={startPicking}
+                >
+                  {t("studio.pick", "Pick element")}
+                </button>
+                <button
+                  type="button"
+                  className="ps-button"
+                  onClick={startMarquee}
+                >
+                  {t("studio.selectRegion", "Select region")}
+                </button>
+              </div>
               <button
                 type="button"
-                className="ps-button ps-primary"
-                onClick={startPicking}
+                className="ps-button ps-danger"
+                onClick={clearTask}
               >
-                {t("studio.pick", "Pick element")}
+                {t("studio.clearTask", "Clear task")}
               </button>
             </div>
           ) : null}
@@ -484,10 +861,27 @@ export function StudioToolbar({
       {picking ? (
         <div
           className="ps-outline"
-          style={outlineStyle(outlineRect)}
+          style={rectStyle(outlineRect)}
           aria-hidden="true"
         />
       ) : null}
+
+      {isMarquee ? (
+        <div
+          className="ps-outline ps-region"
+          style={regionStyle(toRegion(mode))}
+          aria-hidden="true"
+        />
+      ) : null}
+
+      {selectionRects.map((rect, index) => (
+        <div
+          key={index}
+          className="ps-outline ps-selected"
+          style={rectStyle(rect)}
+          aria-hidden="true"
+        />
+      ))}
     </div>
   );
 }

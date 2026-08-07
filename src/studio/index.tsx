@@ -125,6 +125,21 @@ const TOOLBAR_STYLES = `
   pointer-events: none;
   z-index: 2147483001;
 }
+.ps-outline.ps-region {
+  border: 2px dashed #22d3ee;
+  background: rgba(34, 211, 238, 0.10);
+}
+.ps-outline.ps-selected {
+  border: 1px solid #6366f1;
+  background: transparent;
+}
+.ps-actions.ps-actions-start {
+  justify-content: flex-start;
+}
+.ps-button.ps-danger {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #f87171;
+}
 `;
 
 /**
