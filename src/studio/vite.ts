@@ -9,27 +9,35 @@
  * evidence).
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 
 import type { Plugin, ViteDevServer } from "vite";
 
 import {
-  atomicWriteScreenshot,
+  atomicWriteSessionFile,
   atomicWriteTaskFile,
+  buildHeartbeatReport,
   clearActiveTask,
+  commitEvidence,
+  createServerRecorder,
   generateSessionToken,
-  readReferencedScreenshot,
-  removeScreenshotFile,
+  matchesPendingEvidence,
   MAX_ARTIFACT_BYTES,
   MAX_SCREENSHOT_BODY_BYTES,
   MAX_TASK_BODY_BYTES,
+  parseHeartbeatPayload,
   parseScreenshotPayload,
+  readActiveTask,
+  readReferencedScreenshot,
   redactSessionToken,
+  removeScreenshotFile,
   resolveActiveTaskPath,
+  sanitizeDiagnostics,
   sanitizeTask,
   SESSION_FILENAME,
+  updateActiveTaskEvidence,
   verifySessionToken,
 } from "./endpoint";
 import type {
@@ -40,7 +48,13 @@ import type {
 
 const TASKS_ENDPOINT_PATH = "/__portal-studio/tasks";
 const SCREENSHOTS_ENDPOINT_PATH = "/__portal-studio/screenshots";
+const HEARTBEAT_ENDPOINT_PATH = "/__portal-studio/heartbeat";
+const SCREENSHOT_COMMAND_ENDPOINT_PATH = "/__portal-studio/screenshot";
+const PENDING_ENDPOINT_PATH = "/__portal-studio/screenshot/pending";
 const TOKEN_HEADER = "x-portal-studio-token";
+const MAX_HEARTBEAT_BODY_BYTES = 1024;
+const MAX_SCREENSHOT_COMMAND_BODY_BYTES = 16 * 1024;
+const MAX_ANNOTATIONS = 20;
 const MAX_SOURCE_CANDIDATES_PER_NAME = 3;
 const MAX_SOURCE_CANDIDATES_PER_ELEMENT = 5;
 const MAX_TOTAL_SOURCE_CANDIDATES = 40;
@@ -219,41 +233,92 @@ export function portalStudioPlugin(
   const root = path.resolve(options.root ?? process.cwd());
   const studioRoot = path.resolve(root, ".portal-studio");
   let sessionToken = "";
+  let sessionFilePersisted = false;
+  let lastHeartbeatAtMs: number | undefined;
+  let pendingEvidence: {
+    requestId: string;
+    taskId?: string;
+    annotations?: Array<{ x: number; y: number; width: number; height: number }>;
+  } | null = null;
 
-  const ensureSession = () => {
-    mkdirSync(studioRoot, { recursive: true, mode: 0o700 });
-    const sessionPath = path.join(studioRoot, SESSION_FILENAME);
-    if (!sessionToken) {
-      sessionToken = generateSessionToken();
-      writeFileSync(
-        sessionPath,
-        JSON.stringify(
-          {
-            token: sessionToken,
-            createdAt: new Date().toISOString(),
-            endpoint: TASKS_ENDPOINT_PATH,
-          },
-          null,
-          2
-        ),
-        { encoding: "utf8", mode: 0o600 }
-      );
-      console.log(
-        `[portal-studio] dev session ready: token in ${sessionPath} (endpoint ${TASKS_ENDPOINT_PATH}, dev server only)`
-      );
+  const readActiveHeartbeat = () => {
+    try {
+      const task = readActiveTask(studioRoot);
+      return task?.heartbeat;
+    } catch {
+      return undefined;
     }
+  };
+
+  const sanitizeAnnotations = (input: unknown) => {
+    if (!isRecordLike(input) || !Array.isArray(input.annotations)) {
+      return undefined;
+    }
+    const rects: Array<{ x: number; y: number; width: number; height: number }> = [];
+    for (const raw of input.annotations.slice(0, MAX_ANNOTATIONS)) {
+      if (!isRecordLike(raw)) continue;
+      const clamp = (value: unknown, max: number) =>
+        typeof value === "number" && Number.isFinite(value)
+          ? Math.min(Math.max(0, Math.round(value)), max)
+          : undefined;
+      const x = clamp(raw.x, 1_000_000);
+      const y = clamp(raw.y, 1_000_000);
+      const width = clamp(raw.width, 1_000_000);
+      const height = clamp(raw.height, 1_000_000);
+      if (x === undefined || y === undefined || width === undefined || height === undefined) {
+        continue;
+      }
+      rects.push({ x, y, width, height });
+    }
+    return rects.length ? rects : undefined;
+  };
+
+  /** In-memory token only — never touches the session file at config time. */
+  const ensureToken = () => {
+    if (!sessionToken) sessionToken = generateSessionToken();
+    return sessionToken;
+  };
+
+  /**
+   * Persist the session file. ONLY the instance that actually succeeded in
+   * listening may write it: a second instance on the same port with
+   * `strictPort` fails to bind, its `listening` event never fires, and it
+   * must never overwrite the active instance's session file (which would
+   * invalidate the live token for shell agents). Write is atomic (tmp +
+   * rename, 0600).
+   */
+  const persistSessionFile = () => {
+    if (sessionFilePersisted) return;
+    const sessionPath = path.join(studioRoot, SESSION_FILENAME);
+    atomicWriteSessionFile(
+      sessionPath,
+      JSON.stringify(
+        {
+          token: ensureToken(),
+          createdAt: new Date().toISOString(),
+          endpoint: TASKS_ENDPOINT_PATH,
+        },
+        null,
+        2
+      )
+    );
+    sessionFilePersisted = true;
+    console.log(
+      `[portal-studio] dev session ready: token in ${sessionPath} (endpoint ${TASKS_ENDPOINT_PATH}, dev server only)`
+    );
   };
 
   return {
     name: "portal-studio",
     apply: "serve",
     configResolved() {
-      ensureSession();
+      // Deliberately no file side effects: the session file is persisted
+      // only after this instance successfully listens (see configureServer).
+      ensureToken();
     },
     transformIndexHtml() {
-      ensureSession();
       const config = JSON.stringify({
-        token: sessionToken,
+        token: ensureToken(),
         endpoint: TASKS_ENDPOINT_PATH,
         screenshotsEndpoint: SCREENSHOTS_ENDPOINT_PATH,
       });
@@ -282,6 +347,17 @@ export function portalStudioPlugin(
       ];
     },
     configureServer(server) {
+      // Persist the session file only once this instance is actually
+      // listening: a strictPort bind failure (port taken) means the
+      // `listening` event never fires and the failed instance leaves the
+      // active instance's session file untouched.
+      if (server.httpServer?.listening) {
+        persistSessionFile();
+      } else {
+        server.httpServer?.once("listening", () => {
+          persistSessionFile();
+        });
+      }
       server.middlewares.use(
         async (
           request: IncomingMessage,
@@ -295,11 +371,31 @@ export function portalStudioPlugin(
             request.url === SCREENSHOTS_ENDPOINT_PATH;
           const isTaskDelete =
             request.method === "DELETE" && request.url === TASKS_ENDPOINT_PATH;
-          if (!isTaskPost && !isScreenshotPost && !isTaskDelete) {
+          const isHeartbeatPost =
+            request.method === "POST" &&
+            request.url === HEARTBEAT_ENDPOINT_PATH;
+          const isScreenshotCommandPost =
+            request.method === "POST" &&
+            request.url === SCREENSHOT_COMMAND_ENDPOINT_PATH;
+          const isPendingGet =
+            request.method === "GET" &&
+            request.url === PENDING_ENDPOINT_PATH;
+          if (
+            !isTaskPost &&
+            !isScreenshotPost &&
+            !isTaskDelete &&
+            !isHeartbeatPost &&
+            !isScreenshotCommandPost &&
+            !isPendingGet
+          ) {
             next();
             return;
           }
-          ensureSession();
+          // A serving instance is by definition the successful listener, so
+          // self-healing the file here is safe (it owns the port).
+          if (!sessionFilePersisted && server.httpServer?.listening) {
+            persistSessionFile();
+          }
 
           // Loopback-only enforcement (contract §7).
           if (!isLoopbackAddress(request.socket.remoteAddress)) {
@@ -325,16 +421,27 @@ export function portalStudioPlugin(
             return;
           }
 
-          const read = await readRequestBody(
-            request,
-            isScreenshotPost ? MAX_SCREENSHOT_BODY_BYTES : MAX_TASK_BODY_BYTES
-          );
+          // GET routes carry no body and must not enter the JSON parser.
+          if (isPendingGet) {
+            writeJsonResponse(response, 200, {
+              pending: pendingEvidence !== null,
+              ...(pendingEvidence ? { request: pendingEvidence } : {}),
+            });
+            return;
+          }
+
+          const bodyLimit = isScreenshotPost
+            ? MAX_SCREENSHOT_BODY_BYTES
+            : isHeartbeatPost
+              ? MAX_HEARTBEAT_BODY_BYTES
+              : isScreenshotCommandPost
+                ? MAX_SCREENSHOT_COMMAND_BODY_BYTES
+                : MAX_TASK_BODY_BYTES;
+          const read = await readRequestBody(request, bodyLimit);
           if (!read.ok) {
             writeJsonResponse(response, read.status, {
               error: "payload_too_large",
-              limit: isScreenshotPost
-                ? MAX_SCREENSHOT_BODY_BYTES
-                : MAX_TASK_BODY_BYTES,
+              limit: bodyLimit,
             });
             return;
           }
@@ -344,6 +451,50 @@ export function portalStudioPlugin(
             raw = JSON.parse(read.body);
           } catch {
             writeJsonResponse(response, 400, { error: "invalid_json" });
+            return;
+          }
+
+          if (isHeartbeatPost) {
+            // D-016: only the server receipt time is authoritative; the
+            // client payload.ts is ignored (validated only as an object).
+            const receipt = parseHeartbeatPayload(raw, Date.now());
+            if (!receipt.ok) {
+              writeJsonResponse(response, 400, { error: "invalid_heartbeat" });
+              return;
+            }
+            lastHeartbeatAtMs = receipt.receivedAtMs;
+            writeJsonResponse(response, 200, { ok: true });
+            return;
+          }
+
+          if (isScreenshotCommandPost) {
+            // Evidence refresh command: recompute the authoritative
+            // heartbeat NOW (even when the page is gone) and queue the
+            // browser-side capture for the fresh PNG + diagnostics.
+            const nowMs = Date.now();
+            const heartbeat = buildHeartbeatReport(
+              lastHeartbeatAtMs,
+              nowMs,
+              readActiveHeartbeat()
+            );
+            const update = updateActiveTaskEvidence(studioRoot, { heartbeat });
+            if (!update.ok) {
+              writeJsonResponse(response, 400, {
+                error: update.error === "no_active_task" ? "no_active_task" : "write_failed",
+              });
+              return;
+            }
+            const activeTask = readActiveTask(studioRoot);
+            pendingEvidence = {
+              requestId: randomBytes(16).toString("hex"),
+              taskId: activeTask?.taskId,
+              annotations: sanitizeAnnotations(raw),
+            };
+            writeJsonResponse(response, 200, {
+              ok: true,
+              requestId: pendingEvidence.requestId,
+              heartbeat,
+            });
             return;
           }
 
@@ -366,25 +517,56 @@ export function portalStudioPlugin(
               });
               return;
             }
-            try {
-              const file = atomicWriteScreenshot(
-                studioRoot,
-                taskId,
-                parsed.buffer
-              );
-              writeJsonResponse(response, 200, {
-                ok: true,
-                file,
-                width: parsed.width,
-                height: parsed.height,
-                bytes: parsed.buffer.length,
-              });
-            } catch {
+            // Strict diagnostics: provided-but-invalid/over-budget payloads
+            // are rejected up front (before any file is written), never
+            // silently degraded to an empty array.
+            const recorder = createServerRecorder();
+            const diagnostics = sanitizeDiagnostics(
+              payload.diagnostics,
+              recorder
+            );
+            if (diagnostics === null) {
               writeJsonResponse(response, 400, {
-                error: "invalid_screenshot_name",
+                error: "invalid_diagnostics",
               });
               return;
             }
+            const committed = commitEvidence(studioRoot, {
+              taskId,
+              pngBuffer: parsed.buffer,
+              width: parsed.width,
+              height: parsed.height,
+              diagnostics,
+              heartbeat: buildHeartbeatReport(
+                lastHeartbeatAtMs,
+                Date.now(),
+                readActiveHeartbeat()
+              ),
+            });
+            if (!committed.ok) {
+              writeJsonResponse(response, 400, {
+                error:
+                  committed.error === "artifact_too_large"
+                    ? "artifact_too_large"
+                    : "evidence_update_failed",
+              });
+              return;
+            }
+            // Pending is cleared ONLY after the evidence update succeeded
+            // AND requestId + taskId both match exactly.
+            if (
+              matchesPendingEvidence(pendingEvidence, payload.requestId, taskId)
+            ) {
+              pendingEvidence = null;
+            }
+            writeJsonResponse(response, 200, {
+              ok: true,
+              file: committed.file,
+              width: committed.width,
+              height: committed.height,
+              bytes: parsed.buffer.length,
+              capturedAt: committed.capturedAt,
+            });
             return;
           }
 

@@ -98,15 +98,8 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     const row = makePageElement("Alice", "row-a");
     const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        file: "screenshots/task-1.png",
-        width: 100,
-        height: 50,
-      }),
-    });
+    // Task POST first, screenshot POST second (the task must exist before
+    // the evidence merge).
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -116,6 +109,15 @@ describe("StudioToolbar", () => {
         sourceCandidates: [
           { kind: "module", file: "/repo/registry/users/list.tsx", line: 42 },
         ],
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        file: "screenshots/task-1.png",
+        width: 100,
+        height: 50,
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -138,23 +140,26 @@ describe("StudioToolbar", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    const [shotUrl, shotInit] = fetchMock.mock.calls[0] as [
-      string,
-      { headers: Record<string, string>; body: string }
-    ];
-    expect(shotUrl).toBe("/__portal-studio/screenshots");
-    expect(shotInit.headers["X-Portal-Studio-Token"]).toBe("test-token");
-    expect(JSON.parse(shotInit.body).taskId).toBeTruthy();
-
-    const [taskUrl, taskInit] = fetchMock.mock.calls[1] as [
+    const [taskUrl, taskInit] = fetchMock.mock.calls[0] as [
       string,
       { headers: Record<string, string>; body: string }
     ];
     expect(taskUrl).toBe("/__portal-studio/tasks");
+    expect(taskInit.headers["X-Portal-Studio-Token"]).toBe("test-token");
+    const taskPayload = JSON.parse(taskInit.body);
+    expect(taskPayload.taskId).toBeTruthy();
+
+    const [shotUrl, shotInit] = fetchMock.mock.calls[1] as [
+      string,
+      { headers: Record<string, string>; body: string }
+    ];
+    expect(shotUrl).toBe("/__portal-studio/screenshots");
+    expect(JSON.parse(shotInit.body).taskId).toBeTruthy();
     const payload = JSON.parse(taskInit.body);
-    expect(payload.schemaVersion).toBe(2);
+    expect(payload.schemaVersion).toBe(3);
     expect(payload.instruction).toBe("Increase padding");
     expect(payload.elements).toHaveLength(1);
+    expect(payload.diagnostics).toEqual([]);
     expect(payload.elements[0].tagName).toBe("tr");
     expect(payload.elements[0].snapshot.domOutline).toContain("tr");
     expect(payload.elements[0].snapshot.computedStyle).toBeDefined();
@@ -164,11 +169,8 @@ describe("StudioToolbar", () => {
       redactedValues: 0,
       truncatedValues: 0,
     });
-    expect(payload.screenshot).toEqual({
-      file: "screenshots/task-1.png",
-      width: 100,
-      height: 50,
-    });
+    // The screenshot ref is merged by the evidence POST, not the task POST.
+    expect(payload.screenshot).toBeUndefined();
     expect(JSON.stringify(payload)).not.toContain("test-token");
   });
 
@@ -202,17 +204,17 @@ describe("StudioToolbar", () => {
       ok: true,
       json: async () => ({
         ok: true,
-        file: "screenshots/task-1.png",
-        width: 100,
-        height: 50,
+        taskId: "task-1",
+        sourceCandidates: [],
       }),
     });
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         ok: true,
-        taskId: "task-1",
-        sourceCandidates: [],
+        file: "screenshots/task-1.png",
+        width: 100,
+        height: 50,
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -267,17 +269,17 @@ describe("StudioToolbar", () => {
       ok: true,
       json: async () => ({
         ok: true,
-        file: "screenshots/task-1.png",
-        width: 100,
-        height: 50,
+        taskId: "task-1",
+        sourceCandidates: [],
       }),
     });
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         ok: true,
-        taskId: "task-1",
-        sourceCandidates: [],
+        file: "screenshots/task-1.png",
+        width: 100,
+        height: 50,
       }),
     });
     vi.stubGlobal("fetch", fetchMock);

@@ -20,6 +20,7 @@ import {
   isStudioElement,
   readHostComponentName,
 } from "./capture";
+import { sharedDiagnosticsBuffer, snapshotDiagnostics } from "./diagnostics";
 import { captureViewportPng } from "./screenshot";
 import {
   commitRegion,
@@ -465,6 +466,7 @@ export function StudioToolbar({
       elements: mode.capture.elements,
       ...(mode.capture.region ? { region: mode.capture.region } : {}),
       businessContext: mode.capture.businessContext,
+      diagnostics: snapshotDiagnostics(sharedDiagnosticsBuffer),
       redaction: {
         droppedKeys: [],
         redactedValues: 0,
@@ -472,8 +474,29 @@ export function StudioToolbar({
       },
     };
     try {
-      // Annotated screenshot first (markers over the selected elements and
-      // region); the server validates and stores the PNG atomically.
+      // Order matters: the task POST creates the active task FIRST; the
+      // screenshot POST then merges the fresh PNG ref + capturedAt into the
+      // just-created task (commitEvidence requires an existing active task).
+      const response = await fetch(config.endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Portal-Studio-Token": config.token,
+        },
+        body: JSON.stringify(task),
+      });
+      const payload = (await response.json()) as PortalStudioSaveResult;
+      if (!response.ok || !payload.ok || !payload.taskId) {
+        setMode({
+          kind: "error",
+          message: payload.error ?? String(response.status),
+        });
+        return;
+      }
+
+      // Annotated screenshot (markers over the selected elements and the
+      // region); the server validates, stores the PNG atomically, and
+      // updates the active task's screenshot ref + capturedAt.
       const annotations = [
         ...selectionRef.current.elements
           .map((element) => element.getBoundingClientRect())
@@ -484,9 +507,7 @@ export function StudioToolbar({
             width: rect.width,
             height: rect.height,
           })),
-        ...(mode.capture.region
-          ? [{ ...mode.capture.region }]
-          : []),
+        ...(mode.capture.region ? [{ ...mode.capture.region }] : []),
       ];
       const shot = await captureViewportPng(annotations);
       if (!shot) {
@@ -518,33 +539,12 @@ export function StudioToolbar({
         });
         return;
       }
-      task.screenshot = {
-        file: shotPayload.file,
-        width: shot.width,
-        height: shot.height,
-      };
 
-      const response = await fetch(config.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Portal-Studio-Token": config.token,
-        },
-        body: JSON.stringify(task),
-      });
-      const payload = (await response.json()) as PortalStudioSaveResult;
-      if (!response.ok || !payload.ok || !payload.taskId) {
-        setMode({
-          kind: "error",
-          message: payload.error ?? String(response.status),
-        });
-        return;
-      }
       setMode({
         kind: "saved",
         taskId: payload.taskId,
         file: payload.file,
-        screenshot: task.screenshot?.file,
+        screenshot: shotPayload.file,
         sources: payload.sourceCandidates ?? [],
       });
     } catch (error) {

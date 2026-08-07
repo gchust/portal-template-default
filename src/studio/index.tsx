@@ -10,6 +10,11 @@
 
 import { createRoot } from "react-dom/client";
 
+import {
+  installDiagnosticsCapture,
+  sharedDiagnosticsBuffer,
+} from "./diagnostics";
+import { startEvidenceLoop } from "./evidence-loop";
 import { StudioToolbar, type PortalStudioConfig } from "./toolbar";
 
 const HOST_ID = "portal-studio-root";
@@ -167,6 +172,9 @@ export function mountPortalStudio(config?: PortalStudioConfig): boolean {
   shadow.appendChild(container);
 
   createRoot(container).render(<StudioToolbar config={config} />);
+  // Runtime diagnostics + heartbeat/evidence loop (idempotent across HMR).
+  installDiagnosticsCapture(sharedDiagnosticsBuffer);
+  startEvidenceLoop(config, sharedDiagnosticsBuffer);
   (window as Window & { __PORTAL_STUDIO_MOUNTED__?: boolean }).__PORTAL_STUDIO_MOUNTED__ = true;
   return true;
 }

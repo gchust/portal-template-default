@@ -28,8 +28,13 @@ import {
   TASK_FILENAME,
   TASK_SCHEMA_VERSION,
   TASK_SCHEMA_VERSION_V1,
+  TASK_SCHEMA_VERSION_V2,
   type BusinessContextItem,
+  type DiagnosticEntry,
+  type DiagnosticSource,
   type ElementCapture,
+  type HeartbeatReport,
+  type HeartbeatState,
   type PortalStudioTask,
   type PortalStudioTaskV1,
   type RedactionManifest,
@@ -46,6 +51,32 @@ export const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024;
 export const TASKS_DIRECTORY = "tasks";
 export const SCREENSHOTS_DIRECTORY = "screenshots";
 export const SESSION_FILENAME = "session.json";
+
+// Diagnostics caps (schema v3): ring buffer bounds, per-entry limits, dedup
+// window, and total serialized budget (Decision Log D-014).
+export const MAX_DIAGNOSTIC_ENTRIES = 100;
+export const MAX_DIAGNOSTICS_BYTES = 64 * 1024;
+export const MAX_DIAGNOSTIC_MESSAGE = 2000;
+export const MAX_DIAGNOSTIC_STACK = 4000;
+export const MAX_DIAGNOSTIC_URL = 2000;
+export const MAX_OCCURRENCE_COUNT = 1_000_000;
+
+// Heartbeat thresholds (Decision Log D-015): the server derives the state
+// from the last client report time and never trusts the browser's self
+// report alone.
+export const ONLINE_WINDOW_MS = 10_000;
+export const STALE_WINDOW_MS = 30_000;
+
+export const DIAGNOSTIC_SOURCES = new Set<string>([
+  "console",
+  "window",
+  "promise",
+  "fetch",
+  "xhr",
+]);
+
+const isDiagnosticSource = (value: string): value is DiagnosticSource =>
+  DIAGNOSTIC_SOURCES.has(value);
 
 const TASK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const SCREENSHOT_FILE_PATTERN = /^screenshots\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.png$/;
@@ -130,13 +161,13 @@ const MAX_SERVER_STRING = 2000;
 const MAX_SERVER_ATTRIBUTE = 200;
 const MAX_SERVER_DEPTH = 6;
 
-type ServerRecorder = {
+export type ServerRecorder = {
   droppedKeys: Set<string>;
   redactedValues: number;
   truncatedValues: number;
 };
 
-const createServerRecorder = (): ServerRecorder => ({
+export const createServerRecorder = (): ServerRecorder => ({
   droppedKeys: new Set<string>(),
   redactedValues: 0,
   truncatedValues: 0,
@@ -396,15 +427,199 @@ const sanitizeScreenshotRef = (
   return { file, width, height };
 };
 
-/** Validate and normalize a raw v1/v2 task payload into a safe v2 task. */
+/**
+ * Sanitize a diagnostics array (server-authoritative): shape whitelist (no
+ * request/response body fields can exist), per-entry redaction + caps, ≤100
+ * entries, and a total serialized budget. Returns null when over budget.
+ */
+export function sanitizeDiagnostics(
+  input: unknown,
+  recorder: ServerRecorder
+): DiagnosticEntry[] | null {
+  if (!Array.isArray(input)) return input === undefined ? [] : null;
+  if (input.length > MAX_DIAGNOSTIC_ENTRIES) return null;
+  const entries: DiagnosticEntry[] = [];
+  for (const raw of input) {
+    // Strict: any malformed entry rejects the WHOLE payload (4xx at the
+    // caller) instead of being silently dropped or downgraded to [].
+    if (!isRecord(raw)) return null;
+    const source = readString(raw.source, 16);
+    if (!source || !isDiagnosticSource(source)) return null;
+    const message = serverRedactText(
+      readString(raw.message, MAX_DIAGNOSTIC_MESSAGE) ?? "",
+      MAX_DIAGNOSTIC_MESSAGE,
+      recorder
+    );
+    if (!message.trim()) return null;
+    const stack = readString(raw.stack, MAX_DIAGNOSTIC_STACK)
+      ? serverRedactText(
+          readString(raw.stack, MAX_DIAGNOSTIC_STACK) as string,
+          MAX_DIAGNOSTIC_STACK,
+          recorder
+        )
+      : undefined;
+    const url = readString(raw.url, MAX_DIAGNOSTIC_URL)
+      ? serverRedactText(
+          readString(raw.url, MAX_DIAGNOSTIC_URL) as string,
+          MAX_DIAGNOSTIC_URL,
+          recorder
+        )
+      : undefined;
+    const timestamp = readString(raw.timestamp, 64);
+    if (!timestamp || Number.isNaN(Date.parse(timestamp))) return null;
+    if (
+      raw.occurrenceCount !== undefined &&
+      (typeof raw.occurrenceCount !== "number" ||
+        !Number.isInteger(raw.occurrenceCount) ||
+        raw.occurrenceCount < 1)
+    ) {
+      return null;
+    }
+    const occurrenceCount =
+      raw.occurrenceCount === undefined
+        ? 1
+        : Math.min(raw.occurrenceCount, MAX_OCCURRENCE_COUNT);
+    entries.push({
+      source,
+      message,
+      ...(stack ? { stack } : {}),
+      ...(url ? { url } : {}),
+      timestamp,
+      occurrenceCount,
+    });
+  }
+  if (Buffer.byteLength(JSON.stringify(entries), "utf8") > MAX_DIAGNOSTICS_BYTES) {
+    return null;
+  }
+  return entries;
+}
+
+/**
+ * Heartbeat receipt (D-016): the server receipt time is the ONLY
+ * authoritative clock for liveness. The client-supplied `ts` is ignored
+ * entirely — a future/old/invalid client timestamp must never influence
+ * online/stale/offline derivation, otherwise a forged future ts could keep a
+ * disconnected tab falsely online.
+ */
+export function parseHeartbeatPayload(
+  payload: unknown,
+  receivedAtMs: number
+): { ok: boolean; receivedAtMs: number } {
+  if (!isRecord(payload)) return { ok: false, receivedAtMs };
+  return { ok: true, receivedAtMs };
+}
+
+/** Server-authoritative heartbeat state derivation (contract §10, D-015). */
+export function deriveHeartbeatState(
+  lastReportAtMs: number | undefined,
+  nowMs: number
+): HeartbeatState {
+  if (lastReportAtMs === undefined) return "offline";
+  const age = nowMs - lastReportAtMs;
+  if (age <= ONLINE_WINDOW_MS) return "online";
+  if (age <= STALE_WINDOW_MS) return "stale";
+  return "offline";
+}
+
+export function buildHeartbeatReport(
+  lastReportAtMs: number | undefined,
+  nowMs: number,
+  previous?: HeartbeatReport
+): HeartbeatReport {
+  const state = deriveHeartbeatState(lastReportAtMs, nowMs);
+  const lastOnlineAt =
+    state === "online"
+      ? new Date(nowMs).toISOString()
+      : previous?.lastOnlineAt;
+  return {
+    state,
+    reportedAt:
+      lastReportAtMs === undefined
+        ? previous?.reportedAt ?? new Date(nowMs).toISOString()
+        : new Date(lastReportAtMs).toISOString(),
+    checkedAt: new Date(nowMs).toISOString(),
+    ...(lastOnlineAt ? { lastOnlineAt } : {}),
+  };
+}
+
+/**
+ * Atomically refresh the active task's evidence: screenshot ref (with
+ * capturedAt), diagnostics, and heartbeat. Transaction-safe replace of the
+ * superseded screenshot: read the old ref before the write, delete only
+ * after the write succeeds, and only when the path differs.
+ */
+export function updateActiveTaskEvidence(
+  studioRoot: string,
+  patch: {
+    screenshot?: ScreenshotRef;
+    diagnostics?: DiagnosticEntry[];
+    heartbeat?: HeartbeatReport;
+  },
+  options: { writeTaskFile?: (serialized: string) => void } = {}
+): {
+  ok: boolean;
+  error?: "no_active_task" | "artifact_too_large" | "write_failed";
+} {
+  const taskPath = resolveActiveTaskPath(studioRoot);
+  if (!existsSync(taskPath)) return { ok: false, error: "no_active_task" };
+  let task: PortalStudioTask;
+  try {
+    task = JSON.parse(readFileSync(taskPath, "utf8")) as PortalStudioTask;
+  } catch {
+    return { ok: false, error: "no_active_task" };
+  }
+
+  const supersededScreenshot = readReferencedScreenshot(studioRoot, taskPath);
+  if (patch.screenshot) {
+    task.screenshot = patch.screenshot;
+  }
+  if (patch.diagnostics) {
+    task.diagnostics = patch.diagnostics;
+  }
+  if (patch.heartbeat) {
+    task.heartbeat = patch.heartbeat;
+  }
+
+  // Final artifact cap: the merged task (screenshot + diagnostics +
+  // heartbeat) must stay within the 256 KB budget — limiting only the
+  // diagnostics subset is not enough.
+  const serialized = JSON.stringify(task, null, 2);
+  if (Buffer.byteLength(serialized, "utf8") > MAX_ARTIFACT_BYTES) {
+    return { ok: false, error: "artifact_too_large" };
+  }
+
+  try {
+    if (options.writeTaskFile) {
+      // Injectable failure seam (tests): simulates the atomic task write
+      // failing AFTER the PNG was already persisted.
+      options.writeTaskFile(serialized);
+    } else {
+      atomicWriteTaskFile(studioRoot, "active-task.json", serialized);
+    }
+  } catch {
+    return { ok: false, error: "write_failed" };
+  }
+
+  if (
+    supersededScreenshot &&
+    patch.screenshot &&
+    supersededScreenshot !== patch.screenshot.file
+  ) {
+    removeScreenshotFile(studioRoot, supersededScreenshot);
+  }
+  return { ok: true };
+}
+
+/** Validate and normalize a raw v1/v2/v3 task payload into a safe v3 task. */
 export function sanitizeTask(
   input: unknown,
   options: { studioRoot?: string } = {}
 ): PortalStudioTask | null {
   if (!isRecord(input)) return null;
   const isV1 = input.schemaVersion === TASK_SCHEMA_VERSION_V1;
-  const isV2 = input.schemaVersion === TASK_SCHEMA_VERSION;
-  if (!isV1 && !isV2) return null;
+  const isV2 = input.schemaVersion === TASK_SCHEMA_VERSION_V2;
+  const isV3 = input.schemaVersion === TASK_SCHEMA_VERSION;
+  if (!isV1 && !isV2 && !isV3) return null;
 
   const recorder = createServerRecorder();
   const taskId = readString(input.taskId, 64);
@@ -435,6 +650,14 @@ export function sanitizeTask(
   } else {
     elementsInput = input.elements;
   }
+  let diagnostics: DiagnosticEntry[] = [];
+  if (!isV1 && !isV2) {
+    // Diagnostics present but invalid/over-budget must reject the task, not
+    // silently degrade to an empty array.
+    const sanitized = sanitizeDiagnostics(input.diagnostics, recorder);
+    if (sanitized === null) return null;
+    diagnostics = sanitized;
+  }
   if (!Array.isArray(elementsInput) || elementsInput.length < 1) return null;
 
   const elements: ElementCapture[] = [];
@@ -464,6 +687,7 @@ export function sanitizeTask(
     businessContext,
     redaction: toServerManifest(recorder),
     ...(screenshot ? { screenshot } : {}),
+    ...(diagnostics.length ? { diagnostics } : {}),
   };
 
   const serialized = JSON.stringify(task);
@@ -471,6 +695,22 @@ export function sanitizeTask(
     return null;
   }
   return task;
+}
+
+/**
+ * Atomically write the session file (tmp + rename, mode 0600): every token
+ * rotation lands a complete, readable session file — never a torn one that
+ * could be read by shell agents as the live token while matching no server.
+ */
+export function atomicWriteSessionFile(target: string, content: string): string {
+  mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  const temporary = path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.tmp-${randomBytes(6).toString("hex")}`
+  );
+  writeFileSync(temporary, content, { encoding: "utf8", mode: 0o600 });
+  renameSync(temporary, target);
+  return target;
 }
 
 /** Atomically write a task file: temp file + rename, mode 0600. */
@@ -496,6 +736,19 @@ export function atomicWriteTaskFile(
 /** Default active-task path relative to a studio root. */
 export function resolveActiveTaskPath(studioRoot: string): string {
   return path.join(studioRoot, TASKS_DIRECTORY, TASK_FILENAME);
+}
+
+/** Read the active task as parsed JSON, or null when missing/unreadable. */
+export function readActiveTask(
+  studioRoot: string
+): PortalStudioTask | null {
+  const taskPath = resolveActiveTaskPath(studioRoot);
+  try {
+    if (!existsSync(taskPath)) return null;
+    return JSON.parse(readFileSync(taskPath, "utf8")) as PortalStudioTask;
+  } catch {
+    return null;
+  }
 }
 
 /** Validate a base64 PNG payload and extract IHDR dimensions. */
@@ -589,6 +842,90 @@ export function removeReferencedScreenshot(
 ): boolean {
   const file = readReferencedScreenshot(studioRoot, taskPath);
   return file ? removeScreenshotFile(studioRoot, file) : false;
+}
+
+/**
+ * Commit evidence atomically as a unit: write the fresh PNG, merge
+ * screenshot/diagnostics/heartbeat into the active task (with the final
+ * 256 KB re-check), and — when the task update fails for ANY reason —
+ * remove the just-written PNG so no orphan file is left behind.
+ */
+export function commitEvidence(
+  studioRoot: string,
+  input: {
+    taskId: string;
+    pngBuffer: Buffer;
+    width: number;
+    height: number;
+    diagnostics: DiagnosticEntry[];
+    heartbeat: HeartbeatReport;
+  },
+  options: { writeTaskFile?: (serialized: string) => void } = {}
+):
+  | {
+      ok: true;
+      file: string;
+      width: number;
+      height: number;
+      capturedAt: string;
+    }
+  | {
+      ok: false;
+      error: "invalid_task_id" | "no_active_task" | "artifact_too_large" | "write_failed";
+    } {
+  if (!isSafeTaskFileName(input.taskId)) {
+    return { ok: false, error: "invalid_task_id" };
+  }
+  let file: string;
+  try {
+    file = atomicWriteScreenshot(studioRoot, input.taskId, input.pngBuffer);
+  } catch {
+    return { ok: false, error: "invalid_task_id" };
+  }
+  const capturedAt = new Date().toISOString();
+  const update = updateActiveTaskEvidence(
+    studioRoot,
+    {
+      screenshot: {
+        file,
+        width: input.width,
+        height: input.height,
+        capturedAt,
+      },
+      diagnostics: input.diagnostics,
+      heartbeat: input.heartbeat,
+    },
+    options
+  );
+  if (!update.ok) {
+    // No orphans: the PNG we just wrote must not outlive a failed update.
+    removeScreenshotFile(studioRoot, file);
+    return { ok: false, error: update.error ?? "write_failed" };
+  }
+  return { ok: true, file, width: input.width, height: input.height, capturedAt };
+}
+
+export type PendingEvidenceRequest = {
+  requestId: string;
+  taskId?: string;
+};
+
+/**
+ * A pending evidence command is cleared ONLY when the incoming POST matches
+ * the pending requestId AND taskId exactly; any mismatch keeps the pending
+ * slot so the browser retries (or the agent re-issues).
+ */
+export function matchesPendingEvidence(
+  pending: PendingEvidenceRequest | null,
+  requestId: unknown,
+  taskId: unknown
+): boolean {
+  if (pending === null) return false;
+  if (typeof requestId !== "string" || requestId !== pending.requestId) {
+    return false;
+  }
+  if (pending.taskId === undefined) return true;
+  return typeof taskId === "string" && taskId === pending.taskId;
 }
 
 /** Clear the active task and its referenced screenshot (best effort). */

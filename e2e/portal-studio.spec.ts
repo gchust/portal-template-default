@@ -58,6 +58,16 @@ const PNG_MAGIC = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
 
+/** Minimal structurally-valid PNG (magic + IHDR) so PNG validation passes. */
+const minimalPngBase64 = () => {
+  const png = Buffer.alloc(26);
+  PNG_MAGIC.copy(png, 0);
+  png.write("IHDR", 12, "latin1");
+  png.writeUInt32BE(1, 16);
+  png.writeUInt32BE(1, 20);
+  return png.toString("base64");
+};
+
 const signIn = async (page: import("@playwright/test").Page) => {
   await page.goto(resolvePortalTestURL(environment, "/login"));
   await page
@@ -146,7 +156,7 @@ test("users page: single, shift-multi, marquee, replace, screenshot (3 rounds)",
   await saveTask(page, "E2E single: increase row padding");
 
   let task = readActiveTask();
-  expect(task.schemaVersion).toBe(2);
+  expect(task.schemaVersion).toBe(3);
   expect(task.elements).toHaveLength(1);
   const names = task.elements[0].componentCandidates
     .map((candidate) => candidate.name)
@@ -348,7 +358,7 @@ test("dev page: keyboard single and Shift+Enter multi, agent-side writes, guards
   );
   expect(typeof token).toBe("string");
   const agentTask = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     taskId: "agent-task-2",
     createdAt: new Date().toISOString(),
     url: single.url,
@@ -421,6 +431,45 @@ test("dev page: keyboard single and Shift+Enter multi, agent-side writes, guards
     }
   );
   expect(screenshotGuard.status()).toBe(404);
+  // Malformed/over-limit diagnostics are explicitly rejected (never
+  // silently downgraded to an empty array). The PNG is structurally VALID so
+  // the 400 can only come from the diagnostics validation.
+  const validPng = minimalPngBase64();
+  const badDiagnostics = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/screenshots"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: {
+        taskId: "agent-task-2",
+        png: validPng,
+        diagnostics: [{ source: "evil", message: "x" }],
+      },
+    }
+  );
+  expect(badDiagnostics.status()).toBe(400);
+  expect(((await badDiagnostics.json()) as { error?: string }).error).toBe(
+    "invalid_diagnostics"
+  );
+  const oversizedDiagnostics = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/screenshots"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: {
+        taskId: "agent-task-2",
+        png: validPng,
+        diagnostics: Array.from({ length: 101 }, () => ({
+          source: "console",
+          message: "x",
+          timestamp: new Date().toISOString(),
+          occurrenceCount: 1,
+        })),
+      },
+    }
+  );
+  expect(oversizedDiagnostics.status()).toBe(400);
+  expect(
+    ((await oversizedDiagnostics.json()) as { error?: string }).error
+  ).toBe("invalid_diagnostics");
   const clearWithoutToken = await page.request.delete(
     resolvePortalTestURL(environment, "__portal-studio/tasks")
   );
@@ -430,4 +479,112 @@ test("dev page: keyboard single and Shift+Enter multi, agent-side writes, guards
   expect(readdirSync(path.join(studioDir, "tasks"))).toEqual([
     "active-task.json",
   ]);
+});
+
+test("runtime diagnostics: console.error read-back, heartbeat authority, screenshot command", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+
+  // Baseline: capture a real element so an active task exists.
+  await page.locator("#portal-studio-root .ps-toggle").click();
+  await page
+    .locator("#portal-studio-root [role='toolbar'] button", {
+      hasText: "Pick element",
+    })
+    .click();
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+  await page
+    .locator("#portal-studio-root textarea")
+    .fill("diagnostics baseline");
+  await page
+    .locator("#portal-studio-root button", { hasText: "Save task" })
+    .click();
+  await expect(
+    page.locator("#portal-studio-root [role='toolbar']", {
+      hasText: "Task saved",
+    })
+  ).toBeVisible();
+
+  // 1) Induce a REAL console.error on the page with a seeded secret.
+  const seeded = "E2E-SECRET-TOKEN-abc123";
+  await page.evaluate((secret) => {
+    console.error(`E2E induced failure with Authorization: Bearer ${secret}`);
+  }, seeded);
+
+  // 2) Agent-side evidence command (token-protected JSON endpoint).
+  const token = await page.evaluate(
+    () => window.__PORTAL_STUDIO_CONFIG__?.token
+  );
+  const command = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/screenshot"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: { annotations: [{ x: 0, y: 0, width: 100, height: 100 }] },
+    }
+  );
+  expect(command.status()).toBe(200);
+  const commandPayload = (await command.json()) as { heartbeat?: { state?: string } };
+  expect(commandPayload.heartbeat?.state).toBe("online");
+
+  // The baseline save already carries the page's pre-existing console noise
+  // (Base UI warnings), so the poll must wait for the INDUCED entry, which
+  // only arrives after the browser fulfills the command (~1s poll + capture).
+  const baselineCapturedAt = readActiveTask().screenshot?.capturedAt;
+  await expect
+    .poll(
+      () =>
+        readActiveTask().diagnostics?.some((entry) =>
+          entry.message.includes("E2E induced failure")
+        ) ?? false,
+      { timeout: 15_000 }
+    )
+    .toBe(true);
+
+  const refreshed = readActiveTask();
+  // The page emits its own pre-existing console noise (Base UI warnings),
+  // so locate the INDUCED entry by its redaction-preserved prefix.
+  const consoleEntry = refreshed.diagnostics?.find(
+    (entry) =>
+      entry.source === "console" &&
+      entry.message.includes("E2E induced failure")
+  );
+  expect(consoleEntry).toBeDefined();
+  expect(consoleEntry!.occurrenceCount).toBeGreaterThanOrEqual(1);
+  // Redaction: the seeded secret never reaches the artifact.
+  const serialized = JSON.stringify(refreshed);
+  expect(serialized).not.toContain(seeded);
+  expect(consoleEntry!.message).toContain("[REDACTED]");
+  expect(consoleEntry!.message).not.toContain(seeded);
+  // Fresh screenshot evidence: capturedAt updated by the command flow.
+  expect(refreshed.screenshot?.capturedAt).toBeDefined();
+  expect(refreshed.screenshot?.capturedAt).not.toBe(baselineCapturedAt);
+  const screenshotPath = path.join(studioDir, refreshed.screenshot!.file);
+  const png = readFileSync(screenshotPath);
+  expect(png.subarray(0, 8).equals(PNG_MAGIC)).toBe(true);
+
+  // Heartbeat is server-derived and online while the page is alive.
+  expect(refreshed.heartbeat?.state).toBe("online");
+
+  // 4) Heartbeat authority: after the page is gone and the online window
+  //    expires, the server must NOT report online from a stale report.
+  await page.close();
+  const waitMs =
+    (10_000 + 1_500); // ONLINE_WINDOW_MS + margin (constant parity)
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+  const lateCommand = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/screenshot"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: {},
+    }
+  );
+  expect(lateCommand.status()).toBe(200);
+  const latePayload = (await lateCommand.json()) as { heartbeat?: { state?: string } };
+  expect(latePayload.heartbeat?.state).not.toBe("online");
+  expect(["stale", "offline"]).toContain(latePayload.heartbeat?.state);
 });

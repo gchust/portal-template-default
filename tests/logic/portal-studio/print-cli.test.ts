@@ -5,7 +5,11 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { TASK_SCHEMA_VERSION, TASK_SCHEMA_VERSION_V1 } from "@/studio/types";
+import {
+  TASK_SCHEMA_VERSION,
+  TASK_SCHEMA_VERSION_V1,
+  TASK_SCHEMA_VERSION_V2,
+} from "@/studio/types";
 
 const SCRIPT = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -13,7 +17,7 @@ const SCRIPT = path.resolve(
 );
 
 const sampleV2Task = {
-  schemaVersion: TASK_SCHEMA_VERSION,
+  schemaVersion: TASK_SCHEMA_VERSION_V2,
   taskId: "task-print-2",
   createdAt: "2026-08-07T12:00:00.000Z",
   url: "http://127.0.0.1:5176/users",
@@ -48,6 +52,59 @@ const sampleV2Task = {
     file: "screenshots/task-print-2.png",
     width: 1200,
     height: 800,
+  },
+};
+
+const sampleV3Task = {
+  schemaVersion: TASK_SCHEMA_VERSION,
+  taskId: "task-print-3",
+  createdAt: "2026-08-07T12:00:00.000Z",
+  url: "http://127.0.0.1:5176/users",
+  title: "Users",
+  instruction: "Increase padding.",
+  elements: [
+    {
+      tagName: "tr",
+      selectorCandidates: [{ kind: "path", selector: "tbody > tr" }],
+      componentCandidates: [{ name: "TableRow", key: "1", kind: "fiber" }],
+      sourceCandidates: [
+        { kind: "module", file: "/repo/registry/users/list.tsx", line: 42 },
+      ],
+      snapshot: {
+        text: "Alice",
+        attributes: { class: "row" },
+        childCount: 4,
+      },
+    },
+  ],
+  businessContext: [],
+  redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+  screenshot: {
+    file: "screenshots/task-print-3.png",
+    width: 1200,
+    height: 800,
+    capturedAt: "2026-08-07T12:00:05.000Z",
+  },
+  diagnostics: [
+    {
+      source: "console",
+      message: "boom",
+      timestamp: "2026-08-07T12:00:04.000Z",
+      occurrenceCount: 3,
+    },
+    {
+      source: "fetch",
+      message: "HTTP 500",
+      url: "http://x/api",
+      timestamp: "2026-08-07T12:00:04.500Z",
+      occurrenceCount: 1,
+    },
+  ],
+  heartbeat: {
+    state: "stale",
+    reportedAt: "2026-08-07T12:00:05.000Z",
+    checkedAt: "2026-08-07T12:00:20.000Z",
+    lastOnlineAt: "2026-08-07T12:00:05.000Z",
   },
 };
 
@@ -140,6 +197,37 @@ describe("portal-studio-print CLI", () => {
     expect(result.stdout).toContain("page-element");
     expect(result.stdout).toContain("redaction:");
     expect(result.stdout).toContain("domOutline: tr#row-1.row");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("renders v3 diagnostics, heartbeat, and capturedAt in markdown", () => {
+    const dir = makeStudioDir(sampleV3Task);
+    const json = run(["--json"], dir);
+    expect(json.status).toBe(0);
+    const parsed = JSON.parse(json.stdout);
+    expect(parsed.schemaVersion).toBe(3);
+    expect(parsed.diagnostics).toHaveLength(2);
+    expect(parsed.heartbeat.state).toBe("stale");
+    expect(parsed.screenshot.capturedAt).toBe("2026-08-07T12:00:05.000Z");
+
+    const markdown = run(["--markdown"], dir);
+    expect(markdown.status).toBe(0);
+    expect(markdown.stdout).toContain("heartbeat: stale");
+    expect(markdown.stdout).toContain("[console] x3");
+    expect(markdown.stdout).toContain("[fetch] x1");
+    expect(markdown.stdout).toContain("capturedAt=2026-08-07T12:00:05.000Z");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("renders v2 artifacts without diagnostics sections", () => {
+    const v2Task = {
+      ...sampleV2Task,
+      schemaVersion: TASK_SCHEMA_VERSION_V2,
+    };
+    const dir = makeStudioDir(v2Task);
+    const json = run(["--json"], dir);
+    expect(JSON.parse(json.stdout).schemaVersion).toBe(2);
+    expect(run(["--markdown"], dir).stdout).not.toContain("heartbeat:");
     rmSync(dir, { recursive: true, force: true });
   });
 

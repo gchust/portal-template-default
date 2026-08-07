@@ -2,14 +2,16 @@
  * Portal Studio — task artifact schema (shared client/server contract).
  *
  * Contract: docs/exec-plans/portal-studio/00-shared-contract.md §6.
- * Version 2 (Goal 02): additive evolution over v1 — `element` is kept for
- * backward compatibility (v1 payloads) while the canonical shape uses
- * `elements[]`, plus region, business context, redaction manifest, and
- * screenshot refs. The server normalizes v1 payloads into the v2 shape.
+ * Version 3 (Goal 03): additive over v2 — `diagnostics` (bounded ring
+ * buffer of redacted runtime errors), `heartbeat` (server-derived page
+ * state), and `screenshot.capturedAt`. v1 payloads (single `element`) and
+ * v2 payloads remain accepted and normalized by the server; the print CLI
+ * renders all three versions.
  */
 
-export const TASK_SCHEMA_VERSION = 2 as const;
+export const TASK_SCHEMA_VERSION = 3 as const;
 export const TASK_SCHEMA_VERSION_V1 = 1 as const;
+export const TASK_SCHEMA_VERSION_V2 = 2 as const;
 
 export const TASK_FILENAME = "active-task.json";
 export const SCREENSHOTS_DIRECTORY = "screenshots";
@@ -84,6 +86,39 @@ export type ScreenshotRef = {
   file: string;
   width: number;
   height: number;
+  /** When the browser captured this PNG (schema v3). */
+  capturedAt?: string;
+};
+
+/** Runtime error sources captured by the diagnostics ring buffer. */
+export type DiagnosticSource = "console" | "window" | "promise" | "fetch" | "xhr";
+
+export type DiagnosticEntry = {
+  source: DiagnosticSource;
+  /** Redacted at ingestion; never contains secrets. */
+  message: string;
+  stack?: string;
+  url?: string;
+  /** ISO timestamp of the first occurrence in the dedup window. */
+  timestamp: string;
+  /** Deduped occurrences within the window (≥ 1). */
+  occurrenceCount: number;
+};
+
+export type HeartbeatState = "online" | "stale" | "offline";
+
+/**
+ * Server-derived page state (never trusted from the browser alone — the
+ * server computes the state from the last client report time).
+ */
+export type HeartbeatReport = {
+  state: HeartbeatState;
+  /** Last client heartbeat report observed by the server. */
+  reportedAt: string;
+  /** When the server derived this state. */
+  checkedAt: string;
+  /** Last time the state was derived as online. */
+  lastOnlineAt?: string;
 };
 
 export type PortalStudioTask = {
@@ -98,9 +133,13 @@ export type PortalStudioTask = {
   businessContext: BusinessContextItem[];
   redaction: RedactionManifest;
   screenshot?: ScreenshotRef;
+  /** Bounded ring buffer of runtime errors (schema v3). */
+  diagnostics?: DiagnosticEntry[];
+  /** Server-derived page state (schema v3). */
+  heartbeat?: HeartbeatReport;
 };
 
-/** v1 payload shape (accepted by the server, normalized to v2). */
+/** v1 payload shape (accepted by the server, normalized to v2+). */
 export type PortalStudioTaskV1 = {
   schemaVersion: typeof TASK_SCHEMA_VERSION_V1;
   taskId: string;

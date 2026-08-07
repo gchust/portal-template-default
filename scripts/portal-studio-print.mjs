@@ -123,7 +123,26 @@ function formatMarkdown(task) {
     );
   }
   if (task.screenshot) {
-    lines.push(`- screenshot: ${task.screenshot.file} (${task.screenshot.width}x${task.screenshot.height})`);
+    const capturedAt = task.screenshot.capturedAt ? ` capturedAt=${task.screenshot.capturedAt}` : "";
+    lines.push(`- screenshot: ${task.screenshot.file} (${task.screenshot.width}x${task.screenshot.height}${capturedAt})`);
+  }
+  if (task.heartbeat) {
+    lines.push(
+      `- heartbeat: ${task.heartbeat.state} reportedAt=${task.heartbeat.reportedAt} checkedAt=${task.heartbeat.checkedAt}` +
+        (task.heartbeat.lastOnlineAt ? ` lastOnlineAt=${task.heartbeat.lastOnlineAt}` : "")
+    );
+  }
+  if (Array.isArray(task.diagnostics) && task.diagnostics.length) {
+    lines.push("- diagnostics:");
+    for (const entry of task.diagnostics.slice(0, 20)) {
+      const urlPart = entry.url ? ` url=${entry.url}` : "";
+      lines.push(
+        `  - [${entry.source}] x${entry.occurrenceCount} @ ${entry.timestamp}: ${entry.message.slice(0, 160)}${urlPart}`
+      );
+    }
+    if (task.diagnostics.length > 20) {
+      lines.push(`  - … ${task.diagnostics.length - 20} more`);
+    }
   }
   if (task.businessContext && task.businessContext.length) {
     lines.push("- businessContext:");

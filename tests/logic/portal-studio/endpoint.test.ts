@@ -14,10 +14,19 @@ import { describe, expect, it } from "vitest";
 
 import {
   atomicWriteScreenshot,
+  atomicWriteSessionFile,
   atomicWriteTaskFile,
   clearActiveTask,
+  commitEvidence,
+  createServerRecorder,
+  deriveHeartbeatState,
+  matchesPendingEvidence,
+  parseHeartbeatPayload,
+  readActiveTask,
   readReferencedScreenshot,
   removeScreenshotFile,
+  sanitizeDiagnostics,
+  updateActiveTaskEvidence,
   generateSessionToken,
   isSafeTaskFileName,
   parseScreenshotPayload,
@@ -181,7 +190,7 @@ describe("task sanitization", () => {
   });
 
   it("rejects wrong schema, missing fields, and unsafe ids", () => {
-    expect(sanitizeTask({ ...v2Task, schemaVersion: 3 })).toBeNull();
+    expect(sanitizeTask({ ...v2Task, schemaVersion: 4 })).toBeNull();
     expect(sanitizeTask({ ...v2Task, taskId: "../evil" })).toBeNull();
     expect(sanitizeTask({ ...v2Task, url: "" })).toBeNull();
     expect(
@@ -345,6 +354,29 @@ describe("atomic task writes", () => {
   });
 });
 
+describe("session file writes", () => {
+  it("writes the session file atomically with mode 0600", () => {
+    const root = makeTempStudioRoot();
+    const sessionPath = path.join(root, "session.json");
+    atomicWriteSessionFile(
+      sessionPath,
+      JSON.stringify({ token: "abc", createdAt: "2026-08-07T12:00:00.000Z" })
+    );
+    expect(JSON.parse(readFileSync(sessionPath, "utf8")).token).toBe("abc");
+    expect(statSync(sessionPath).mode & 0o777).toBe(0o600);
+    // No leftover temp files (a torn file must never be readable as live).
+    expect(readdirSync(root)).toEqual(["session.json"]);
+    // Rotations overwrite atomically and stay consistent.
+    atomicWriteSessionFile(
+      sessionPath,
+      JSON.stringify({ token: "def", createdAt: "2026-08-07T12:00:01.000Z" })
+    );
+    expect(JSON.parse(readFileSync(sessionPath, "utf8")).token).toBe("def");
+    expect(readdirSync(root)).toEqual(["session.json"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe("screenshot payloads and writes", () => {
   const PNG_MAGIC = Buffer.from([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -408,6 +440,500 @@ describe("screenshot payloads and writes", () => {
       atomicWriteScreenshot(root, "../evil", Buffer.from("x"))
     ).toThrow(/Unsafe screenshot task id/);
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("diagnostics sanitization (server-authoritative)", () => {
+  it("accepts a bounded diagnostics array with whitelisted fields", () => {
+    const recorder = createServerRecorder();
+    const entries = sanitizeDiagnostics(
+      [
+        {
+          source: "console",
+          message: "boom",
+          timestamp: "2026-08-07T12:00:00.000Z",
+          occurrenceCount: 3,
+        },
+        {
+          source: "fetch",
+          message: "HTTP 500",
+          url: "http://x/api",
+          timestamp: "2026-08-07T12:00:01.000Z",
+          occurrenceCount: 1,
+        },
+      ],
+      recorder
+    );
+    expect(entries).toHaveLength(2);
+    expect(entries?.[0].occurrenceCount).toBe(3);
+  });
+
+  it("drops unknown keys including body fields (shape whitelist)", () => {
+    const recorder = createServerRecorder();
+    const entries = sanitizeDiagnostics(
+      [
+        {
+          source: "fetch",
+          message: "HTTP 500",
+          timestamp: "2026-08-07T12:00:00.000Z",
+          occurrenceCount: 1,
+          requestBody: { secret: "x" },
+          responseBody: { token: "y" },
+          body: "leak",
+          evil: "drop",
+        },
+      ],
+      recorder
+    );
+    const serialized = JSON.stringify(entries);
+    expect(serialized).not.toContain("requestBody");
+    expect(serialized).not.toContain("responseBody");
+    expect(serialized).not.toContain("leak");
+    expect(serialized).not.toContain("drop");
+  });
+
+  it("redacts secrets and enforces per-entry caps", () => {
+    const recorder = createServerRecorder();
+    const entries = sanitizeDiagnostics(
+      [
+        {
+          source: "window",
+          message: "Bearer server-secret",
+          stack: "at fn (https://x/a.js?token=stack-secret)",
+          url: "https://x/api?token=url-secret",
+          timestamp: "2026-08-07T12:00:00.000Z",
+          occurrenceCount: 1,
+        },
+      ],
+      recorder
+    );
+    const serialized = JSON.stringify(entries);
+    expect(serialized).not.toContain("server-secret");
+    expect(serialized).not.toContain("stack-secret");
+    expect(serialized).not.toContain("url-secret");
+    expect(recorder.redactedValues).toBeGreaterThan(0);
+  });
+
+  it("rejects over-limit and oversized-budget payloads (strict 4xx, no silent cap)", () => {
+    const recorder = createServerRecorder();
+    // More than 100 entries: the WHOLE payload is rejected (not truncated).
+    const many = Array.from({ length: 300 }, (_, i) => ({
+      source: "console",
+      message: `m-${i}`,
+      timestamp: "2026-08-07T12:00:00.000Z",
+      occurrenceCount: 1,
+    }));
+    expect(sanitizeDiagnostics(many, recorder)).toBeNull();
+    // Exactly 100 entries are accepted.
+    const exact = many.slice(0, 100);
+    expect(sanitizeDiagnostics(exact, recorder)).toHaveLength(100);
+
+    const huge = [
+      {
+        source: "console",
+        message: "z".repeat(2000),
+        timestamp: "2026-08-07T12:00:00.000Z",
+        occurrenceCount: 1,
+      },
+      ...Array.from({ length: 99 }, () => ({
+        source: "console",
+        message: "y".repeat(2000),
+        timestamp: "2026-08-07T12:00:00.000Z",
+        occurrenceCount: 1,
+      })),
+    ];
+    expect(sanitizeDiagnostics(huge, recorder)).toBeNull();
+  });
+
+  it("rejects malformed entries instead of silently dropping them", () => {
+    const recorder = createServerRecorder();
+    const valid = {
+      source: "console",
+      message: "ok",
+      timestamp: "2026-08-07T12:00:00.000Z",
+      occurrenceCount: 1,
+    };
+    // Unknown source, bad timestamp, non-object entry, missing message,
+    // invalid occurrenceCount: each rejects the WHOLE payload.
+    expect(
+      sanitizeDiagnostics([valid, { ...valid, source: "evil" }], recorder)
+    ).toBeNull();
+    expect(
+      sanitizeDiagnostics([valid, { ...valid, timestamp: "nope" }], recorder)
+    ).toBeNull();
+    expect(sanitizeDiagnostics([valid, 42], recorder)).toBeNull();
+    expect(
+      sanitizeDiagnostics([valid, { ...valid, message: "   " }], recorder)
+    ).toBeNull();
+    expect(
+      sanitizeDiagnostics([valid, { ...valid, occurrenceCount: 0 }], recorder)
+    ).toBeNull();
+    // Absent diagnostics are fine; provided-but-malformed are not.
+    expect(sanitizeDiagnostics(undefined, recorder)).toEqual([]);
+  });
+});
+
+describe("updateActiveTaskEvidence", () => {
+  const writeTask = (root: string, taskId: string, screenshot?: string) => {
+    const taskPath = resolveActiveTaskPath(root);
+    mkdirSync(path.dirname(taskPath), { recursive: true });
+    writeFileSync(
+      taskPath,
+      JSON.stringify({
+        schemaVersion: 3,
+        taskId,
+        createdAt: "2026-08-07T12:00:00.000Z",
+        url: "http://x/users",
+        title: "t",
+        instruction: "i",
+        elements: [],
+        businessContext: [],
+        redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+        ...(screenshot ? { screenshot: { file: screenshot } } : {}),
+      })
+    );
+  };
+
+  it("returns no_active_task when nothing was captured yet", () => {
+    const root = makeTempStudioRoot();
+    expect(updateActiveTaskEvidence(root, {})).toEqual({
+      ok: false,
+      error: "no_active_task",
+    });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("atomically updates screenshot ref, capturedAt, diagnostics, heartbeat", () => {
+    const root = makeTempStudioRoot();
+    writeTask(root, "task-ev-1");
+    const result = updateActiveTaskEvidence(root, {
+      screenshot: {
+        file: "screenshots/task-ev-1.png",
+        width: 640,
+        height: 480,
+        capturedAt: "2026-08-07T12:00:05.000Z",
+      },
+      diagnostics: [
+        {
+          source: "console",
+          message: "boom",
+          timestamp: "2026-08-07T12:00:04.000Z",
+          occurrenceCount: 1,
+        },
+      ],
+      heartbeat: {
+        state: "online",
+        reportedAt: "2026-08-07T12:00:05.000Z",
+        checkedAt: "2026-08-07T12:00:05.000Z",
+        lastOnlineAt: "2026-08-07T12:00:05.000Z",
+      },
+    });
+    expect(result).toEqual({ ok: true });
+    const task = readActiveTask(root);
+    expect(task?.screenshot).toEqual({
+      file: "screenshots/task-ev-1.png",
+      width: 640,
+      height: 480,
+      capturedAt: "2026-08-07T12:00:05.000Z",
+    });
+    expect(task?.diagnostics).toHaveLength(1);
+    expect(task?.heartbeat?.state).toBe("online");
+    // No leftover temp files.
+    expect(readdirSync(path.dirname(resolveActiveTaskPath(root)))).toEqual([
+      "active-task.json",
+    ]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("keeps a same-path screenshot and prunes a different superseded one", () => {
+    const root = makeTempStudioRoot();
+    writeTask(root, "task-ev-2", "screenshots/task-ev-2.png");
+    atomicWriteScreenshot(root, "task-ev-2", Buffer.from("old"));
+
+    // Same path (fresh POST already overwrote the file): kept.
+    const same = updateActiveTaskEvidence(root, {
+      screenshot: {
+        file: "screenshots/task-ev-2.png",
+        width: 10,
+        height: 10,
+        capturedAt: "2026-08-07T12:00:06.000Z",
+      },
+    });
+    expect(same).toEqual({ ok: true });
+    expect(readdirSync(path.join(root, "screenshots"))).toEqual([
+      "task-ev-2.png",
+    ]);
+
+    // Different path: the superseded file is pruned after the write.
+    atomicWriteScreenshot(root, "task-ev-3", Buffer.from("new"));
+    const diff = updateActiveTaskEvidence(root, {
+      screenshot: {
+        file: "screenshots/task-ev-3.png",
+        width: 10,
+        height: 10,
+        capturedAt: "2026-08-07T12:00:07.000Z",
+      },
+    });
+    expect(diff).toEqual({ ok: true });
+    expect(readdirSync(path.join(root, "screenshots")).sort()).toEqual([
+      "task-ev-3.png",
+    ]);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("evidence commit (no-orphan + final artifact cap)", () => {
+  const PNG = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+    0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  ]);
+  const heartbeat = {
+    state: "online" as const,
+    reportedAt: "2026-08-07T12:00:00.000Z",
+    checkedAt: "2026-08-07T12:00:00.000Z",
+  };
+
+  it("leaves no orphan PNG when the active task update fails (no_active_task)", () => {
+    const root = makeTempStudioRoot();
+    const result = commitEvidence(root, {
+      taskId: "task-orphan-1",
+      pngBuffer: PNG,
+      width: 1,
+      height: 1,
+      diagnostics: [],
+      heartbeat,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("no_active_task");
+    }
+    // The PNG must NOT be left behind.
+    expect(readdirSync(path.join(root, "screenshots"))).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("rejects evidence that pushes the final artifact over 256 KB and leaves no orphan", () => {
+    const root = makeTempStudioRoot();
+    // Fixture discipline: the ORIGINAL artifact must be under the cap and
+    // the MERGED artifact must exceed it — not a pre-overflowing fixture.
+    const bigTask = {
+      schemaVersion: 3,
+      taskId: "task-big",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://x/users",
+      title: "t",
+      // 256 KB = 262144 bytes; the instruction is sized so the ORIGINAL
+      // artifact sits just under the cap while the merged one exceeds it.
+      instruction: "z".repeat(256 * 1024 - 2048),
+      elements: [],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    };
+    const originalBytes = Buffer.byteLength(JSON.stringify(bigTask), "utf8");
+    expect(originalBytes).toBeLessThan(256 * 1024);
+    const merged = {
+      ...bigTask,
+      screenshot: {
+        file: "screenshots/task-big.png",
+        width: 1,
+        height: 1,
+        capturedAt: "2026-08-07T12:00:00.000Z",
+      },
+      diagnostics: [
+        {
+          source: "console",
+          message: "x".repeat(2000),
+          timestamp: "2026-08-07T12:00:00.000Z",
+          occurrenceCount: 1,
+        },
+      ],
+    };
+    expect(Buffer.byteLength(JSON.stringify(merged), "utf8")).toBeGreaterThan(
+      256 * 1024
+    );
+
+    const taskPath = resolveActiveTaskPath(root);
+    mkdirSync(path.dirname(taskPath), { recursive: true });
+    writeFileSync(taskPath, JSON.stringify(bigTask));
+
+    const result = commitEvidence(root, {
+      taskId: "task-big",
+      pngBuffer: PNG,
+      width: 1,
+      height: 1,
+      diagnostics: merged.diagnostics as never,
+      heartbeat,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("artifact_too_large");
+    }
+    // The task file is unchanged AND no orphan PNG remains.
+    expect(JSON.parse(readFileSync(taskPath, "utf8")).screenshot).toBeUndefined();
+    expect(readdirSync(path.join(root, "screenshots"))).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("returns write_failed and deletes the fresh PNG when the atomic task write fails AFTER the PNG was persisted", () => {
+    const root = makeTempStudioRoot();
+    const taskPath = resolveActiveTaskPath(root);
+    mkdirSync(path.dirname(taskPath), { recursive: true });
+    const oldTask = {
+      schemaVersion: 3,
+      taskId: "task-wf",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://x/users",
+      title: "t",
+      instruction: "i",
+      elements: [],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+      screenshot: { file: "screenshots/task-wf-old.png", width: 1, height: 1 },
+    };
+    writeFileSync(taskPath, JSON.stringify(oldTask));
+    atomicWriteScreenshot(root, "task-wf-old", Buffer.from("old-png"));
+    const oldTaskContent = readFileSync(taskPath, "utf8");
+
+    const result = commitEvidence(
+      root,
+      {
+        taskId: "task-wf",
+        pngBuffer: PNG,
+        width: 1,
+        height: 1,
+        diagnostics: [],
+        heartbeat,
+      },
+      {
+        // The seam simulates the atomic task write failing after the PNG
+        // was already written to disk.
+        writeTaskFile: () => {
+          throw new Error("simulated write failure");
+        },
+      }
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("write_failed");
+    }
+    // The freshly written PNG must be removed (no orphan)…
+    expect(readdirSync(path.join(root, "screenshots"))).toEqual([
+      "task-wf-old.png",
+    ]);
+    // …and the old task + old screenshot are untouched.
+    expect(readFileSync(taskPath, "utf8")).toBe(oldTaskContent);
+    expect(readFileSync(path.join(root, "screenshots", "task-wf-old.png"), "utf8")).toBe("old-png");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("commits evidence atomically on success (ref, diagnostics, heartbeat)", () => {
+    const root = makeTempStudioRoot();
+    const taskPath = resolveActiveTaskPath(root);
+    mkdirSync(path.dirname(taskPath), { recursive: true });
+    writeFileSync(
+      taskPath,
+      JSON.stringify({
+        schemaVersion: 3,
+        taskId: "task-ev",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        url: "http://x/users",
+        title: "t",
+        instruction: "i",
+        elements: [],
+        businessContext: [],
+        redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+      })
+    );
+    const result = commitEvidence(root, {
+      taskId: "task-ev",
+      pngBuffer: PNG,
+      width: 1,
+      height: 1,
+      diagnostics: [
+        {
+          source: "console",
+          message: "boom",
+          timestamp: "2026-08-07T12:00:00.000Z",
+          occurrenceCount: 2,
+        },
+      ],
+      heartbeat,
+    });
+    expect(result.ok).toBe(true);
+    const task = readActiveTask(root);
+    expect(task?.screenshot).toMatchObject({ file: "screenshots/task-ev.png" });
+    expect(task?.screenshot?.capturedAt).toBeDefined();
+    expect(task?.diagnostics?.[0].occurrenceCount).toBe(2);
+    expect(task?.heartbeat?.state).toBe("online");
+    expect(readdirSync(path.join(root, "screenshots"))).toEqual([
+      "task-ev.png",
+    ]);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("pending evidence matching (exact requestId + taskId)", () => {
+  const pending = { requestId: "req-1", taskId: "task-1" };
+
+  it("clears only on an exact requestId AND taskId match", () => {
+    expect(matchesPendingEvidence(pending, "req-1", "task-1")).toBe(true);
+    expect(matchesPendingEvidence(pending, "req-1", "task-2")).toBe(false);
+    expect(matchesPendingEvidence(pending, "req-2", "task-1")).toBe(false);
+    expect(matchesPendingEvidence(pending, "req-1", undefined)).toBe(false);
+    expect(matchesPendingEvidence(null, "req-1", "task-1")).toBe(false);
+  });
+
+  it("matches on requestId alone when the pending slot has no taskId", () => {
+    expect(matchesPendingEvidence({ requestId: "req-1" }, "req-1", "anything")).toBe(true);
+    expect(matchesPendingEvidence({ requestId: "req-1" }, "req-2", "task-1")).toBe(false);
+  });
+});
+
+describe("heartbeat authority (D-016)", () => {
+  it("ignores future, old, and invalid client timestamps — receipt time wins", () => {
+    const receivedAtMs = 1_700_000_000_000;
+    // Any JSON object payload is accepted; the ts field is ignored entirely.
+    for (const payload of [
+      { ts: receivedAtMs + 86_400_000 }, // future: would fake liveness
+      { ts: receivedAtMs - 86_400_000 }, // old: would fake death
+      { ts: "not-a-timestamp" },
+      { ts: 42 },
+      {},
+      { ts: null },
+    ]) {
+      const result = parseHeartbeatPayload(payload, receivedAtMs);
+      expect(result).toEqual({ ok: true, receivedAtMs });
+    }
+    // Non-object payloads are invalid bodies (400), independent of ts.
+    expect(parseHeartbeatPayload(null, receivedAtMs).ok).toBe(false);
+    expect(parseHeartbeatPayload("garbage", receivedAtMs).ok).toBe(false);
+  });
+
+  it("derives state only from server receipt time, never client ts", () => {
+    // A forged future ts must not extend liveness: receipt at t=0, state
+    // checked at t=15s must be stale regardless of the client ts.
+    const receiptAtMs = 1_700_000_000_000;
+    const futurePayload = { ts: receiptAtMs + 3_600_000 };
+    const receipt = parseHeartbeatPayload(futurePayload, receiptAtMs);
+    const nowMs = receiptAtMs + 15_000;
+    expect(deriveHeartbeatState(receipt.receivedAtMs, nowMs)).toBe("stale");
+    // No heartbeat at all → offline.
+    expect(deriveHeartbeatState(undefined, nowMs)).toBe("offline");
+    // Fresh receipt → online.
+    expect(deriveHeartbeatState(receiptAtMs, receiptAtMs + 5_000)).toBe("online");
+  });
+
+  it("derives the full heartbeat report with lastOnlineAt", async () => {
+    const { buildHeartbeatReport } = await import("@/studio/endpoint");
+    const receiptAtMs = 1_700_000_000_000;
+    const online = buildHeartbeatReport(receiptAtMs, receiptAtMs + 2_000);
+    expect(online.state).toBe("online");
+    expect(online.lastOnlineAt).toBe(new Date(receiptAtMs + 2_000).toISOString());
+    const stale = buildHeartbeatReport(receiptAtMs, receiptAtMs + 15_000, online);
+    expect(stale.state).toBe("stale");
+    expect(stale.lastOnlineAt).toBe(online.lastOnlineAt);
+    const offline = buildHeartbeatReport(receiptAtMs, receiptAtMs + 60_000, stale);
+    expect(offline.state).toBe("offline");
   });
 });
 
