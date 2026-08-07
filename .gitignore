@@ -27,6 +27,9 @@ dist-ssr
 .env.e2e
 .env.e2e.local
 
+# Portal Studio dev runtime (session token + task files)
+/.portal-studio/
+
 # Editor directories and files
 
 .vscode/_

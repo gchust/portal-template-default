@@ -7,6 +7,7 @@ import {
   portalRawIndexHtmlPlugin,
   portalSdkCompatibilityPlugin,
 } from "@nocobase/portal-sdk/vite";
+import { portalStudioPlugin } from "./src/studio/vite";
 
 const portalTemplate = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "package.json"), "utf8")
@@ -71,6 +72,9 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
       portalRawIndexHtmlPlugin({ root: __dirname, base: portalBase }),
+      // Dev-only Portal Studio: session token, task endpoint, and dev
+      // bootstrap injection. apply: "serve" keeps it out of production builds.
+      portalStudioPlugin({ root: __dirname }),
     ],
     resolve: {
       alias: {

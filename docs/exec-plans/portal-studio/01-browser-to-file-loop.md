@@ -111,11 +111,74 @@ git diff --check
 
 ## Running log (maintain during execution)
 
-- **Progress:** (milestone-by-milestone status + evidence file paths)
-- **Surprises & Discoveries:** (e.g. React 19.1 fiber key shape, DevTools hook
-  availability, Vite middleware ordering)
-- **Decisions:** (append to contract §13 with new IDs)
-- **Outcomes & Retrospective:** (filled at Goal end, before review)
+### Progress
+
+- M1 React Grab spike: **DONE** — evidence below; decision: **promote with adapter**
+  (contract §8 criteria evaluated item by item in Surprises/Decisions).
+- M2 Dev-only injection + Shadow DOM toolbar: **DONE** — `src/studio/` + serve-only
+  plugin; `pnpm dev` shows the toolbar on real pages; keyboard operable; absent
+  from `pnpm build` output (grep evidence in this log).
+- M3 Single-element pick + candidates: **DONE** — hover preview, component list,
+  source candidates resolved server-side, instruction input.
+- M4 Token-protected endpoint + atomic task file: **DONE** — curl/E2E evidence
+  (404 wrong/missing token, 400 traversal, atomic write, 0600 file, token never
+  in artifact).
+- M5 Print command + E2E smoke: **DONE** — `node scripts/portal-studio-print.mjs`
+  exit 0; E2E 3× on /users + 2× keyboard on /dev/ai-chat; `pnpm typecheck &&
+  pnpm test && pnpm build && pnpm test:e2e` green.
+
+### Surprises & Discoveries
+
+1. `__REACT_DEVTOOLS_GLOBAL_HOOK__` IS present in the dev Portal, but **inert**: it
+   is installed by the react-refresh preamble (`injectIntoGlobalHook`), its
+   `renderers` Map is empty and `getFiberRoots` is absent — React never
+   registered. Not usable for tree access.
+2. `fiber._debugSource` and JSX `__source` are **null/absent** in this Vite dev
+   setup (plugin-react does not inject `__source`; React 19.1 dev fibers carry no
+   source info). So file/line candidates cannot come from the browser.
+3. DOM nodes do carry `__reactFiber$<id>` keys; walking `fiber.return` yields
+   stable, correct component names (tr → TableRow → TableBody → DataTable →
+   ListView → UserList → UserListRoute → …) with zero probe-induced errors.
+4. `react-refresh` runtime does not expose its type→module map (`/@react-refresh`
+   exports only the preamble helpers), so component→file mapping cannot be read
+   from the page; the dev server's **module graph** (transformed code, unminified)
+   provides exact file:line matches via `function Name` regex.
+5. `vite.config.ts` is bundled **without** the project's `@/` alias at config-load
+   time — a node-only chain must not import via aliases (forced the
+   self-contained server redaction, D-008).
+6. Virtual modules (`/@portal-studio/init.js`) failed to resolve root-relative
+   imports even with `this.resolve`; inline module scripts in `transformIndexHtml`
+   (appended after the react-refresh preamble) work reliably.
+7. jsdom: expando props on elements are non-enumerable via `Object.defineProperty`
+   (default) — tests must pass `enumerable: true`; `<tr>` is not focusable — the
+   keyboard pick path seeds from `document.activeElement`.
+
+### Decisions
+
+- See contract Decision Log D-006 … D-009 (appended during Goal 01).
+
+### Outcomes & Retrospective (filled at Goal end)
+
+- End-state reached: a real Portal element stably becomes a printable local task
+  JSON (schema v1) via a dev-only, token-protected Studio. All ACs verified (see
+  the AC checklist below).
+- Retro: the spike-first order paid off (DevTools-hook dead end and missing
+  `_debugSource` were discovered before any UI code existed). The server-side
+  source resolution via module graph is the single most valuable piece for agents.
+- Known trade-off (documented, not a defect): element-level file:line mapping is
+  only available for modules already loaded in the dev module graph; component
+  names + DOM/selector candidates always remain in the artifact as fallback.
+
+### AC checklist (Goal 01)
+
+| AC | Evidence |
+| --- | --- |
+| 1. Real element → printable task JSON, ≥3 reps, ≥2 pages | E2E: 3× mouse on /users, 2× keyboard on /dev/ai-chat (all passed); `portal-studio-print.mjs --json --task <id>` output equals the artifact (asserted in E2E) |
+| 2. Keyboard-accessible + i18n | `tests/components/portal-studio/toolbar.test.tsx` (pick/cancel/save/error/close via keyboard); arrow/Enter/Esc handled in `toolbar.tsx`; `studio.*` keys in en-US + zh-CN |
+| 3. Token/traversal/size guards tested; no token in artifact | `tests/logic/portal-studio/endpoint.test.ts` (constant-time, safe names, sanitize, atomic write, secret hygiene incl. session-token redaction); E2E: 404/404/400 live checks; artifact asserted token-free |
+| 4. Prod build contains no Studio marker | `pnpm build` + `grep -rlE "PortalStudio|portal-studio|portalStudio|__PORTAL_STUDIO|ps-toggle|mountPortalStudio" dist/` → CLEAN; `dist/index.html` has 0 matches; no studio-named assets |
+| 5. Print works from plain shell | CLI runs with `node` only (tests spawn it with `PORTAL_STUDIO_DIR`); exit codes 0/1/2 covered |
+| 6. `git diff --check` clean; no lockfile/dependency changes | exit 0; `git status` shows only intended files (no `package.json`/lockfile diff) |
 
 ## Handoff to Goal 02
 
