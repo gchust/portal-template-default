@@ -3,6 +3,115 @@
 Status: PLAN ONLY (this goal produces this document + review + checkpoint;
 the five goals below are implemented sequentially by later goals).
 
+## Revision 1 — Authoritative product decision (D-033)
+
+The following product decision is AUTHORITATIVE and supersedes any
+conflicting detail in the goal sections below (recorded in the contract
+Decision Log as D-033):
+
+1. Replace the fixed emoji toggle + large idle panel + top-level single
+   `instruction` model with **Annotation-first**.
+2. The collapsed/expanded dock is **draggable**; its position **persists**
+   (G01).
+3. Collapsed state is a **compact icon toolbar** (no large idle panel).
+4. **Single-element continuous annotation**: consecutive plain picks each
+   create a new annotation (no replace-of-previous semantics).
+5. **True multi-select**: a distinct mode that adds/removes elements as one
+   group (not additive picks of a single capture).
+6. **Area annotation**: marquee produces an area annotation (region rect).
+7. **Each annotation owns its comment** (no top-level instruction).
+8. **Numbered markers** (1, 2, 3…) persist across collapse / refresh /
+   route changes and **follow their targets** (re-resolved against the live
+   DOM on render/navigation).
+9. **Unresolved targets are retained**: when a marker's target is not
+   present in the DOM, the marker stays (unresolved state), never dropped.
+10. **Per-marker edit/delete**.
+11. **Markers can be hidden without deletion** (visibility toggle).
+12. **Copy is first-class and does NOT clear** the session.
+13. **Explicit Complete is the only normal clear path** (replaces the
+    old Clear-task discard as the normal way to finish an annotation).
+14. **schemaVersion 5 with `annotations[]`** (per-comment model).
+15. **Browser and CLI share one Markdown formatter** (single source of
+    truth for Copy, `print --markdown`, and MCP `print_task`).
+16. **MCP only stays non-crashing; no scope expansion** (tools keep their
+    current contracts; v5 artifacts must render through existing tools).
+17. **No large migration framework for unpublished v4 intermediates**:
+    v4 artifacts are dev-only intermediates; support them with a simple
+    reader (normalize-on-read), not a migration subsystem.
+
+Goal deltas from this decision: G02 adds items 4, 7, 8, 9, 14, 17 (simple
+v4 reader instead of a migration framework); G03 adds items 5, 10, 11;
+G04 adds items 12, 13, 15, 16; G01 keeps items 2, 3.
+
+## Revision 2 — Interaction details (D-034)
+
+Authoritative interaction contract (recorded as contract D-034), layered on
+Revision 1:
+
+1. **Enter = newline, Ctrl/Cmd+Enter = save** in every annotation comment
+   editor (no Enter-to-save; no Shift+Enter special case).
+2. **Capture failure never loses an annotation**: annotation persistence
+   (task write) is decoupled from evidence capture (screenshot); a capture
+   failure keeps the annotation and shows a non-blocking notice — never
+   rolls back or clears the draft.
+3. **Studio UI cannot annotate itself**: picking, marquee, marker
+   re-resolution, and numbered-marker hit-testing exclude the Studio's own
+   DOM (existing `isStudioElement` contract extends to all annotation
+   paths; the overlay is already outside the screenshot DOM clone).
+4. **Deleting item N renumbers the displayed markers**: display numbers are
+   the live order index (1-based) of `annotations[]`, never stored per
+   marker — deletion shifts the labels while stable `annotationId`s remain
+   unchanged.
+5. **Toolbar uses lucide-react, no emoji**: replace the 🛠/✕ glyphs with
+   lucide icons (lucide-react ^0.487.0 is already a project dependency);
+   icons used consistently in dock, marker labels, and menus.
+6. **Global destructive actions live under "More" (⋯)**: the compact
+   toolbar hosts a More menu for global destructive operations (e.g. clear
+   all annotations, reset dock position); per-marker destruction stays on
+   the marker itself.
+7. **Clipboard fallback = manual copy**: when the async Clipboard API is
+   unavailable/denied, show the artifact in a selectable textarea so the
+   user copies manually (non-secure-context safe, D-031-style).
+8. **Acceptance concerns for the whole feature**: route changes (markers
+   follow targets), scroll/resize (marker positioning re-clamps), HMR
+   (mount idempotence + no duplicate markers), a11y (keyboard, ARIA, focus
+   containment), security (dev-only, token, redaction, no secrets), and
+   production exclusion (dist grep 0) are all acceptance criteria, not
+   optional extras.
+
+## Revision 3 — Licensing constraints (D-035)
+
+Authoritative licensing rule (contract D-035) for the Annotation-first
+implementation:
+
+- **Instruckt (MIT)**: its code MAY be selectively adapted WITH attribution,
+  and only when code is actually copied. Any adapted/copied file carries the
+  MIT license notice + copyright line in the file header and a provenance
+  note in the D-log/evidence. Design-only inspiration without code copying
+  needs no attribution.
+- **Agentation (PolyForm Shield)**: DESIGN REFERENCE ONLY. Its source code
+  MUST NOT be copied, adapted, or reimplemented line-for-line; only the
+  observable interaction/UX patterns may inform our design. No Agentation
+  code, comments, or file structure enters this repository.
+- Both constraints apply to every goal (G01–G05); provenance of any
+  borrowed design is recorded in the goal log and the Decision Log.
+
+## Revision 4 — Out-of-scope boundary (D-036)
+
+Authoritative out-of-scope list (contract D-036) for the Annotation-first
+implementation — these are NOT part of G01–G05 and must not be pulled in:
+
+1. Hosted AI employees (AI-employee hosting/management features).
+2. Browser source editing (editing application source from inside the
+   browser/Studio).
+3. Backend data mutation (no writes to NocoBase collections/data from the
+   Studio; the dev-only task artifacts in `.portal-studio/` are the only
+   persistence).
+4. New MCP features (MCP tools keep their current five contracts; only
+   non-crashing v5 rendering through existing tools is allowed — D-033 #16).
+5. Unrelated refactors (changes to files/areas not required by G01–G05;
+   AGENTS.md "keep changes focused" applies).
+
 Baseline (repository-grounded, see /root/work/dogfood-crm/evidence-reconcile/):
 
 - portal-template-default branch `feat-agent-feedback` HEAD
