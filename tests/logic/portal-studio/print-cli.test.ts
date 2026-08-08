@@ -253,6 +253,60 @@ describe("portal-studio-print CLI", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("renders v5 per-annotation markdown (D-033 #17 dual reader)", () => {
+    const v5Task = {
+      schemaVersion: 5,
+      taskId: "v5-markdown-1",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations: [
+        {
+          annotationId: "ann-1",
+          kind: "element",
+          comment: "Bold the header",
+          createdAt: "2026-08-07T12:00:00.000Z",
+          status: "open",
+          elements: [
+            {
+              tagName: "h1",
+              selectorCandidates: [{ kind: "path", selector: "main > h1" }],
+              componentCandidates: [{ name: "PageHeader", key: null }],
+              sourceCandidates: [
+                { kind: "module", file: "/repo/src/pages/users.tsx", line: 12 },
+              ],
+              snapshot: { text: "Users", attributes: {}, childCount: 0 },
+            },
+          ],
+        },
+        {
+          annotationId: "ann-2",
+          kind: "region",
+          comment: "Highlight the table",
+          createdAt: "2026-08-07T12:00:00.000Z",
+          status: "open",
+          elements: [],
+          region: { x: 1, y: 2, width: 100, height: 40 },
+        },
+      ],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    };
+    const dir = makeStudioDir(v5Task);
+    const json = run(["--json"], dir);
+    expect(JSON.parse(json.stdout).schemaVersion).toBe(5);
+    const markdown = run(["--markdown"], dir);
+    expect(markdown.status).toBe(0);
+    expect(markdown.stdout).toContain("## Annotations (2)");
+    expect(markdown.stdout).toContain("### Annotation 1: [element] ann-1");
+    expect(markdown.stdout).toContain("Comment: Bold the header");
+    expect(markdown.stdout).toContain("/repo/src/pages/users.tsx:12");
+    expect(markdown.stdout).toContain("### Annotation 2: [region] ann-2");
+    expect(markdown.stdout).toContain("Comment: Highlight the table");
+    expect(markdown.stdout).toContain("- region: 1,2 100x40");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("renders v1 artifacts through the same markdown path", () => {
     const dir = makeStudioDir(sampleV1Task);
     const json = run(["--json"], dir);

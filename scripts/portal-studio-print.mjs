@@ -65,10 +65,10 @@ function readTask(studioRoot, taskId) {
 
 class TaskNotFoundError extends Error {}
 
-function formatElementLines(task, prefix) {
+function formatElementLines(elements, prefix) {
   const lines = [];
-  for (const [index, element] of task.elements.entries()) {
-    const label = task.elements.length > 1 ? `Element ${index + 1}: <${element.tagName}>` : `Element: <${element.tagName}>`;
+  for (const [index, element] of elements.entries()) {
+    const label = elements.length > 1 ? `Element ${index + 1}: <${element.tagName}>` : `Element: <${element.tagName}>`;
     lines.push(`### ${label}`, "");
     lines.push("#### Selector candidates");
     lines.push(...element.selectorCandidates.map(
@@ -102,13 +102,19 @@ function formatElementLines(task, prefix) {
 }
 
 function formatMarkdown(task) {
-  const elements = Array.isArray(task.elements)
-    ? task.elements
-    : Array.isArray(task.element)
-      ? task.element
-      : task.element
-        ? [task.element]
-        : [];
+  // Annotation-first (schema v5): per-annotation comments with their own
+  // elements/regions. Legacy v1–v4 payloads keep the single-instruction
+  // rendering (dual reader, D-033 #17).
+  const isV5 = task.schemaVersion === 5 && Array.isArray(task.annotations);
+  const elements = isV5
+    ? task.annotations.flatMap((annotation) => annotation.elements)
+    : Array.isArray(task.elements)
+      ? task.elements
+      : Array.isArray(task.element)
+        ? task.element
+        : task.element
+          ? [task.element]
+          : [];
   const lines = [
     `# Task ${task.taskId}`,
     "",
@@ -117,7 +123,7 @@ function formatMarkdown(task) {
     `- title: ${task.title}`,
     `- capturedAt: ${task.createdAt}`,
   ];
-  if (task.region) {
+  if (!isV5 && task.region) {
     lines.push(
       `- region: ${task.region.x},${task.region.y} ${task.region.width}x${task.region.height}`
     );
@@ -163,9 +169,32 @@ function formatMarkdown(task) {
       `- redaction: droppedKeys=${JSON.stringify(task.redaction.droppedKeys)} redactedValues=${task.redaction.redactedValues} truncatedValues=${task.redaction.truncatedValues}`
     );
   }
-  lines.push("", "## Instruction", task.instruction || "(empty)", "");
-  if (elements.length) {
-    lines.push(...formatElementLines({ elements }, ""));
+  if (isV5) {
+    lines.push("", `## Annotations (${task.annotations.length})`, "");
+    for (const [index, annotation] of task.annotations.entries()) {
+      lines.push(
+        `### Annotation ${index + 1}: [${annotation.kind}] ${annotation.annotationId}`,
+        ""
+      );
+      lines.push(`Comment: ${annotation.comment || "(empty)"}`, "");
+      if (annotation.region) {
+        lines.push(
+          `- region: ${annotation.region.x},${annotation.region.y} ${annotation.region.width}x${annotation.region.height}`
+        );
+      }
+      if (annotation.status === "completed") {
+        lines.push(`- status: completed${annotation.completedAt ? ` @ ${annotation.completedAt}` : ""}`);
+      }
+      if (annotation.elements && annotation.elements.length) {
+        lines.push(...formatElementLines(annotation.elements, ""));
+      }
+      lines.push("");
+    }
+  } else {
+    lines.push("", "## Instruction", task.instruction || "(empty)", "");
+    if (elements.length) {
+      lines.push(...formatElementLines(elements, ""));
+    }
   }
   return lines.join("\n");
 }

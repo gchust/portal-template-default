@@ -229,6 +229,72 @@ const TOOLBAR_STYLES = `
   border-color: rgba(248, 113, 113, 0.5);
   color: #f87171;
 }
+/* Annotation-first marker overlay + list (G02, D-033 #8/#9). */
+.ps-marker-anchor {
+  position: fixed;
+  z-index: 2147483002;
+  pointer-events: none;
+}
+.ps-marker-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: var(--ps-accent, #6366f1);
+  color: var(--ps-primary-foreground, #ffffff);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.ps-marker-chip-onpage {
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.ps-annotation-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.ps-annotation-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.ps-annotation-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ps-annotation-comment {
+  font-size: 12px;
+  color: inherit;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.ps-unresolved {
+  font-size: 10px;
+  color: #a1a1aa;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+:host-context([data-ps-theme="light"]) .ps-annotation-item {
+  background: rgba(0, 0, 0, 0.05);
+}
+:host-context([data-ps-theme="light"]) .ps-unresolved {
+  color: #71717a;
+}
 
 /* Light host (D-031): mirror the host palette so the toolbar looks native
    on light portals (the AI portal is white with a near-black primary). */

@@ -244,9 +244,23 @@ export function serializeTaskArtifact(
 ):
   | { ok: true; serialized: string }
   | { ok: false; error: "artifact_too_large" } {
-  const elements = assignSourceCandidates(task.elements, resolved);
+  const elements = assignSourceCandidates(
+    task.annotations.flatMap((annotation) => annotation.elements),
+    resolved
+  );
+  // Re-assign the resolved candidates back into the per-annotation lists
+  // (they were flattened only for resolution; order is preserved).
+  let elementIndex = 0;
+  const annotations = task.annotations.map((annotation) => ({
+    ...annotation,
+    elements: annotation.elements.map((element) => {
+      const assigned = elements[elementIndex];
+      elementIndex += 1;
+      return assigned ?? element;
+    }),
+  }));
   const serialized = redactSessionToken(
-    JSON.stringify({ ...task, elements }, null, 2),
+    JSON.stringify({ ...task, annotations }, null, 2),
     sessionToken
   );
   if (Buffer.byteLength(serialized, "utf8") > MAX_ARTIFACT_BYTES) {
@@ -316,20 +330,22 @@ export function portalStudioPlugin(
    * and deletions both change the revision.
    */
   const computeTaskSourceRevision = (task: {
-    elements: Array<{ sourceCandidates: SourceCandidate[] }>;
+    annotations: Array<{ elements: Array<{ sourceCandidates: SourceCandidate[] }> }>;
   }): string => {
     const files = new Map<string, string>();
-    for (const element of task.elements) {
-      for (const candidate of element.sourceCandidates) {
-        if (files.size >= 20) break;
-        if (files.has(candidate.file)) continue;
-        let content = "";
-        try {
-          content = readFileSync(candidate.file, "utf8");
-        } catch {
-          content = "<missing>";
+    for (const annotation of task.annotations) {
+      for (const element of annotation.elements) {
+        for (const candidate of element.sourceCandidates) {
+          if (files.size >= 20) break;
+          if (files.has(candidate.file)) continue;
+          let content = "";
+          try {
+            content = readFileSync(candidate.file, "utf8");
+          } catch {
+            content = "<missing>";
+          }
+          files.set(candidate.file, content);
         }
-        files.set(candidate.file, content);
       }
     }
     return computeSourceRevision(
@@ -783,10 +799,12 @@ export function portalStudioPlugin(
             return;
           }
 
-          const names = task.elements.flatMap((element) =>
-            element.componentCandidates
-              .map((candidate) => candidate.name)
-              .filter((name): name is string => typeof name === "string")
+          const names = task.annotations.flatMap((annotation) =>
+            annotation.elements.flatMap((element) =>
+              element.componentCandidates
+                .map((candidate) => candidate.name)
+                .filter((name): name is string => typeof name === "string")
+            )
           );
           const resolved = resolveComponentSources(server, names, root);
           const finalized = serializeTaskArtifact(task, resolved, sessionToken);

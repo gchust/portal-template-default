@@ -29,6 +29,8 @@ import {
   TASK_SCHEMA_VERSION,
   TASK_SCHEMA_VERSION_V1,
   TASK_SCHEMA_VERSION_V2,
+  TASK_SCHEMA_VERSION_V4,
+  type Annotation,
   type BusinessContextItem,
   type DiagnosticEntry,
   type DiagnosticSource,
@@ -44,6 +46,7 @@ import {
   type ScreenshotRef,
   type SelectorCandidateKind,
 } from "./types";
+import { MAX_ANNOTATIONS } from "./task-model";
 
 export const SESSION_TOKEN_BYTES = 32;
 export const MAX_TASK_BODY_BYTES = 256 * 1024;
@@ -707,7 +710,13 @@ export function buildRevisionInfo(
   };
 }
 
-/** Validate and normalize a raw v1–v4 task payload into a safe v4 task. */
+/**
+ * Validate and normalize a raw v1–v5 task payload into a safe v5 task
+ * (schema evolution, D-033 #14/#17): v1–v4 payloads are accepted and
+ * normalized into a single v5 annotation; v5 payloads validate their
+ * `annotations[]` in place. The server never trusts client redaction —
+ * every field is re-sanitized with the authoritative recorder.
+ */
 export function sanitizeTask(
   input: unknown,
   options: { studioRoot?: string } = {}
@@ -716,10 +725,9 @@ export function sanitizeTask(
   const isV1 = input.schemaVersion === TASK_SCHEMA_VERSION_V1;
   const isV2 = input.schemaVersion === TASK_SCHEMA_VERSION_V2;
   const isV3 = input.schemaVersion === 3;
-  const isV4 = input.schemaVersion === TASK_SCHEMA_VERSION;
-  if (!isV1 && !isV2 && !isV3 && !isV4) return null;
-  void isV3;
-  void isV4;
+  const isV4 = input.schemaVersion === TASK_SCHEMA_VERSION_V4;
+  const isV5 = input.schemaVersion === TASK_SCHEMA_VERSION;
+  if (!isV1 && !isV2 && !isV3 && !isV4 && !isV5) return null;
 
   const recorder = createServerRecorder();
   const taskId = readString(input.taskId, 64);
@@ -737,19 +745,12 @@ export function sanitizeTask(
     MAX_TITLE_LENGTH,
     recorder
   );
-  const instruction = serverRedactText(
-    readString(input.instruction, MAX_INSTRUCTION_LENGTH) ?? "",
-    MAX_INSTRUCTION_LENGTH,
-    recorder
-  );
-
-  let elementsInput: unknown;
-  if (isV1) {
-    const v1 = input as unknown as PortalStudioTaskV1;
-    elementsInput = [v1.element];
-  } else {
-    elementsInput = input.elements;
-  }
+  const businessContext = sanitizeBusinessContext(input.businessContext);
+  const screenshot = isV1
+    ? undefined
+    : options.studioRoot
+      ? sanitizeScreenshotRef(input.screenshot, options.studioRoot)
+      : undefined;
   let diagnostics: DiagnosticEntry[] = [];
   if (!isV1 && !isV2) {
     // Diagnostics present but invalid/over-budget must reject the task, not
@@ -758,22 +759,58 @@ export function sanitizeTask(
     if (sanitized === null) return null;
     diagnostics = sanitized;
   }
-  if (!Array.isArray(elementsInput) || elementsInput.length < 1) return null;
 
-  const elements: ElementCapture[] = [];
-  for (const rawElement of elementsInput.slice(0, MAX_ELEMENTS)) {
-    const element = sanitizeElementCapture(rawElement, recorder);
-    if (!element) return null;
-    elements.push(element);
+  let annotations: Annotation[];
+  if (isV5) {
+    if (!Array.isArray(input.annotations) || input.annotations.length < 1) {
+      return null;
+    }
+    if (input.annotations.length > MAX_ANNOTATIONS) return null;
+    annotations = [];
+    for (const rawAnnotation of input.annotations.slice(0, MAX_ANNOTATIONS)) {
+      const annotation = sanitizeAnnotation(rawAnnotation, recorder);
+      if (!annotation) return null;
+      annotations.push(annotation);
+    }
+    // Per-annotation element cap (MAX_ELEMENTS) bounds each capture; the
+    // total is bounded by the 256 KB artifact cap below (per-annotation
+    // caps cannot be summed across accumulated annotations).
+  } else {
+    // v1–v4 → a single v5 annotation (normalize-on-read, D-033 #17).
+    const instruction = serverRedactText(
+      readString(input.instruction, MAX_INSTRUCTION_LENGTH) ?? "",
+      MAX_INSTRUCTION_LENGTH,
+      recorder
+    );
+    let elementsInput: unknown;
+    if (isV1) {
+      const v1 = input as unknown as PortalStudioTaskV1;
+      elementsInput = [v1.element];
+    } else {
+      elementsInput = input.elements;
+    }
+    if (!Array.isArray(elementsInput) || elementsInput.length < 1) {
+      return null;
+    }
+    const elements: ElementCapture[] = [];
+    for (const rawElement of elementsInput.slice(0, MAX_ELEMENTS)) {
+      const element = sanitizeElementCapture(rawElement, recorder);
+      if (!element) return null;
+      elements.push(element);
+    }
+    const region = isV1 ? undefined : sanitizeRegion(input.region);
+    annotations = [
+      {
+        annotationId: `${taskId}-v4`,
+        kind: elements.length > 0 ? "element" : "region",
+        comment: instruction,
+        createdAt,
+        status: "open",
+        elements,
+        ...(region ? { region } : {}),
+      },
+    ];
   }
-
-  const businessContext = sanitizeBusinessContext(input.businessContext);
-  const region = isV1 ? undefined : sanitizeRegion(input.region);
-  const screenshot = isV1
-    ? undefined
-    : options.studioRoot
-      ? sanitizeScreenshotRef(input.screenshot, options.studioRoot)
-      : undefined;
 
   const task: PortalStudioTask = {
     schemaVersion: TASK_SCHEMA_VERSION,
@@ -781,9 +818,7 @@ export function sanitizeTask(
     createdAt,
     url,
     title,
-    instruction,
-    elements,
-    ...(region ? { region } : {}),
+    annotations,
     businessContext,
     redaction: toServerManifest(recorder),
     ...(screenshot ? { screenshot } : {}),
@@ -795,6 +830,54 @@ export function sanitizeTask(
     return null;
   }
   return task;
+}
+
+/** Validate a single v5 annotation (server-authoritative). */
+function sanitizeAnnotation(
+  input: unknown,
+  recorder: ServerRecorder
+): Annotation | null {
+  if (!isRecord(input)) return null;
+  const annotationId = readString(input.annotationId, 64);
+  if (!annotationId || !isSafeTaskFileName(annotationId)) return null;
+  const kind = readString(input.kind, 16);
+  if (kind !== "element" && kind !== "multi" && kind !== "region") {
+    return null;
+  }
+  const comment = serverRedactText(
+    readString(input.comment, MAX_INSTRUCTION_LENGTH) ?? "",
+    MAX_INSTRUCTION_LENGTH,
+    recorder
+  );
+  const createdAt = readString(input.createdAt, 64);
+  if (!createdAt || Number.isNaN(Date.parse(createdAt))) return null;
+  const status = readString(input.status, 16) ?? "open";
+  if (status !== "open" && status !== "completed") return null;
+  const completedAt = readString(input.completedAt, 64);
+  if (completedAt !== undefined && Number.isNaN(Date.parse(completedAt))) {
+    return null;
+  }
+  const hidden =
+    typeof input.hidden === "boolean" ? (input.hidden as boolean) : undefined;
+  if (!Array.isArray(input.elements)) return null;
+  const elements: ElementCapture[] = [];
+  for (const rawElement of input.elements.slice(0, MAX_ELEMENTS)) {
+    const element = sanitizeElementCapture(rawElement, recorder);
+    if (!element) return null;
+    elements.push(element);
+  }
+  const region = sanitizeRegion(input.region);
+  return {
+    annotationId,
+    kind,
+    comment,
+    createdAt,
+    status,
+    ...(completedAt ? { completedAt } : {}),
+    ...(hidden !== undefined ? { hidden } : {}),
+    elements,
+    ...(region ? { region } : {}),
+  };
 }
 
 /**

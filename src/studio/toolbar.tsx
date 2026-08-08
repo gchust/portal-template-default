@@ -40,7 +40,9 @@ import {
 } from "./capture";
 import { sharedDiagnosticsBuffer, snapshotDiagnostics } from "./diagnostics";
 import { captureViewportPng } from "./screenshot";
+import { isAnnotationUnresolved, resolveAnnotationTarget } from "./markers";
 import { newTaskId } from "./task-id";
+import { annotationDisplayNumber, normalizeTask } from "./task-model";
 import {
   commitRegion,
   EMPTY_SELECTION,
@@ -51,9 +53,11 @@ import {
 } from "./selection";
 import {
   TASK_SCHEMA_VERSION,
+  type Annotation,
   type BusinessContextItem,
   type ElementCapture,
   type PortalStudioTask,
+  type PortalStudioTaskV4,
   type Region,
   type SourceCandidate,
 } from "./types";
@@ -126,6 +130,8 @@ type ToolbarMode =
       file?: string;
       screenshot?: string;
       sources: SourceCandidate[];
+      /** Non-blocking evidence warning (D-034 #2): the annotation is safe. */
+      notice?: string;
     }
   | { kind: "cleared" }
   | { kind: "error"; message: string };
@@ -213,7 +219,14 @@ export function StudioToolbar({
   } | null>(null);
   const didDragRef = useRef(false);
   const [mode, setMode] = useState<ToolbarMode>({ kind: "idle" });
-  const [instruction, setInstruction] = useState("");
+  // Annotation-first (D-033 #4/#7): the draft comment of the annotation
+  // being created, and the persisted annotation list of the active task
+  // (loaded on panel open, appended on save, cleared with the task).
+  const [draftComment, setDraftComment] = useState("");
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  // Re-resolution tick for the numbered marker overlay (route/scroll/
+  // resize, D-033 #8).
+  const [markerTick, setMarkerTick] = useState(0);
   const [outlineRect, setOutlineRect] = useState<DOMRect>();
   const [hoverName, setHoverName] = useState<string | null>(null);
   const [selectionRects, setSelectionRects] = useState<DOMRect[]>([]);
@@ -581,27 +594,42 @@ export function StudioToolbar({
     };
   }, [commitDraft, isMarquee]);
 
-  // Load the revision/ack/state status into the panel when it opens.
+  // Load the persisted annotations + revision status (schema v4/v5 dual
+  // read, D-033 #17). Runs on mount (the dock badge shows the live count
+  // without opening the panel) and refreshes when the panel opens.
   useEffect(() => {
-    if (!open || typeof fetch !== "function") return;
+    if (typeof fetch !== "function") return;
     let cancelled = false;
     fetch(config.endpoint, {
       headers: { "X-Portal-Studio-Token": config.token },
     })
       .then((response) => (response.ok ? response.json() : null))
-      .then((payload: { task?: { revision?: unknown } } | null) => {
-        if (cancelled || !payload?.task?.revision) return;
-        const revision = payload.task.revision as {
-          sourceRevision?: string;
-          browserRevision?: number;
-          state?: string;
-        };
-        setRevisionStatus({
-          sourceRevision: revision.sourceRevision,
-          browserRevision: revision.browserRevision,
-          state: revision.state,
-        });
-      })
+      .then(
+        (
+          payload: {
+            task?: PortalStudioTask | PortalStudioTaskV4 | null;
+          } | null
+        ) => {
+          if (cancelled || !payload?.task) return;
+          const normalized = normalizeTask(payload.task);
+          if (!normalized) return;
+          setAnnotations(normalized.annotations);
+          const revision = normalized.revision as
+            | {
+                sourceRevision?: string;
+                browserRevision?: number;
+                state?: string;
+              }
+            | undefined;
+          if (revision) {
+            setRevisionStatus({
+              sourceRevision: revision.sourceRevision,
+              browserRevision: revision.browserRevision,
+              state: revision.state,
+            });
+          }
+        }
+      )
       .catch(() => {
         // Dev server restarting; status stays hidden.
       });
@@ -609,6 +637,36 @@ export function StudioToolbar({
       cancelled = true;
     };
   }, [config.endpoint, config.token, open]);
+
+  // Marker re-resolution (D-033 #8): re-query the live DOM on route
+  // changes (body child mutations), scroll, and resize — markers follow
+  // their targets; unresolved ones stay retained in the list.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setMarkerTick((tick) => tick + 1), 80);
+    };
+    window.addEventListener("scroll", refresh, true);
+    window.addEventListener("resize", refresh);
+    // Any body-subtree mutation (async table loads, route swaps, HMR)
+    // re-resolves the markers — debounced. Route navigation mutates the
+    // subtree too, so no pathname special-casing is needed (G02 e2e found
+    // the pathname-only observer missed async content renders).
+    const observer = new MutationObserver(() => {
+      refresh();
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("scroll", refresh, true);
+      window.removeEventListener("resize", refresh);
+      observer.disconnect();
+    };
+  }, []);
 
   // Refresh selection rects on scroll/resize while the panel is open.
   useEffect(() => {
@@ -701,7 +759,8 @@ export function StudioToolbar({
       selectionRef.current = EMPTY_SELECTION;
       setSelectionRects([]);
       setSelectionCount(0);
-      setInstruction("");
+      setDraftComment("");
+      setAnnotations([]);
       setMode({ kind: "cleared" });
     } catch (error) {
       setMode({
@@ -715,15 +774,32 @@ export function StudioToolbar({
     if (mode.kind !== "draft") return;
     setMode({ kind: "saving" });
     const taskId = newTaskId();
+    // Annotation-first (D-033 #4/#7): the new annotation carries its own
+    // comment; the task is the ordered list of annotations.
+    // A marquee is an AREA annotation (D-033 #6) even when intersecting
+    // elements were captured; element/multi kinds come from picks (the
+    // true multi-select mode lands in G03).
+    const kind: Annotation["kind"] = mode.capture.region
+      ? "region"
+      : mode.capture.elements.length > 1
+        ? "multi"
+        : "element";
+    const annotation: Annotation = {
+      annotationId: newTaskId(),
+      kind,
+      comment: draftComment,
+      createdAt: new Date().toISOString(),
+      status: "open",
+      elements: mode.capture.elements,
+      ...(mode.capture.region ? { region: mode.capture.region } : {}),
+    };
     const task: PortalStudioTask = {
       schemaVersion: TASK_SCHEMA_VERSION,
       taskId,
       createdAt: new Date().toISOString(),
       url: window.location.href,
       title: document.title,
-      instruction,
-      elements: mode.capture.elements,
-      ...(mode.capture.region ? { region: mode.capture.region } : {}),
+      annotations: [...annotations, annotation],
       businessContext: mode.capture.businessContext,
       diagnostics: snapshotDiagnostics(sharedDiagnosticsBuffer),
       redaction: {
@@ -733,9 +809,12 @@ export function StudioToolbar({
       },
     };
     try {
-      // Order matters: the task POST creates the active task FIRST; the
-      // screenshot POST then merges the fresh PNG ref + capturedAt into the
-      // just-created task (commitEvidence requires an existing active task).
+      // Order matters (D-034 #2): the task POST persists the annotation
+      // FIRST, atomically; the screenshot POST then merges the fresh PNG
+      // ref + capturedAt into the just-created task (commitEvidence
+      // requires an existing active task). A capture failure therefore
+      // NEVER loses or rolls back the annotation — it surfaces as a
+      // non-blocking notice.
       const response = await fetch(config.endpoint, {
         method: "POST",
         headers: {
@@ -752,11 +831,14 @@ export function StudioToolbar({
         });
         return;
       }
+      // The annotation is durably persisted — reflect it in the overlay
+      // and the dock badge immediately.
+      setAnnotations((current) => [...current, annotation]);
 
       // Annotated screenshot (markers over the selected elements and the
       // region); the server validates, stores the PNG atomically, and
       // updates the active task's screenshot ref + capturedAt.
-      const annotations = [
+      const markerRects = [
         ...selectionRef.current.elements
           .map((element) => element.getBoundingClientRect())
           .filter((rect) => rect.width > 0 && rect.height > 0)
@@ -768,9 +850,19 @@ export function StudioToolbar({
           })),
         ...(mode.capture.region ? [{ ...mode.capture.region }] : []),
       ];
-      const shot = await captureViewportPng(annotations);
+      const shot = await captureViewportPng(markerRects);
       if (!shot) {
-        setMode({ kind: "error", message: "screenshot capture failed" });
+        // D-034 #2: annotation already persisted — non-blocking notice.
+        setMode({
+          kind: "saved",
+          taskId: payload.taskId,
+          file: payload.file,
+          sources: payload.sourceCandidates ?? [],
+          notice: t(
+            "studio.captureFailed",
+            "Annotation saved; the screenshot capture failed."
+          ),
+        });
         return;
       }
       const screenshotsEndpoint =
@@ -792,11 +884,15 @@ export function StudioToolbar({
         error?: string;
       };
       if (!shotResponse.ok || !shotPayload.ok || !shotPayload.file) {
+        // D-034 #2: same non-blocking semantics as a capture failure.
         setMode({
-          kind: "error",
-          message: sessionErrorMessage(
-            shotResponse.status,
-            shotPayload.error
+          kind: "saved",
+          taskId: payload.taskId,
+          file: payload.file,
+          sources: payload.sourceCandidates ?? [],
+          notice: t(
+            "studio.captureFailed",
+            "Annotation saved; the screenshot capture failed."
           ),
         });
         return;
@@ -821,7 +917,7 @@ export function StudioToolbar({
     selectionRef.current = EMPTY_SELECTION;
     setSelectionRects([]);
     setSelectionCount(0);
-    setInstruction("");
+    setDraftComment("");
     setMode({ kind: "idle" });
   };
 
@@ -830,7 +926,7 @@ export function StudioToolbar({
     selectionRef.current = EMPTY_SELECTION;
     setSelectionRects([]);
     setSelectionCount(0);
-    setInstruction("");
+    setDraftComment("");
     setMode({ kind: "idle" });
     setOutlineRect(undefined);
     setHoverName(null);
@@ -873,8 +969,7 @@ export function StudioToolbar({
           role="status"
           aria-label={t("studio.annotations", "Annotations")}
         >
-          {/* G01 placeholder count; G02 wires the live annotation count. */}
-          0
+          {annotations.length}
         </span>
         <button
           ref={moreButtonRef}
@@ -938,6 +1033,40 @@ export function StudioToolbar({
               <X size={14} aria-hidden="true" />
             </button>
           </div>
+
+          {annotations.length > 0 ? (
+            <div className="ps-section">
+              <p className="ps-label">
+                {t("studio.annotationsList", "Annotations")} (
+                {annotations.length})
+              </p>
+              <ul className="ps-annotation-list">
+                {annotations.map((annotation) => {
+                  const number = annotationDisplayNumber(
+                    annotations,
+                    annotation.annotationId
+                  );
+                  const unresolved = isAnnotationUnresolved(annotation);
+                  return (
+                    <li key={annotation.annotationId} className="ps-annotation-item">
+                      <span className="ps-marker-chip">{number ?? "?"}</span>
+                      <span className="ps-annotation-body">
+                        <span className="ps-annotation-comment">
+                          {annotation.comment.slice(0, 120) ||
+                            t("studio.emptyComment", "(empty)")}
+                        </span>
+                        {unresolved ? (
+                          <span className="ps-unresolved">
+                            {t("studio.unresolved", "Target not found")}
+                          </span>
+                        ) : null}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
 
           {mode.kind === "picking" ? (
             <div className="ps-section" role="status" aria-live="polite">
@@ -1034,17 +1163,25 @@ export function StudioToolbar({
                 )}
               </p>
               <label className="ps-label" htmlFor="ps-instruction">
-                {t("studio.instruction", "Modification instruction")}
+                {t("studio.instruction", "Annotation comment")}
               </label>
               <textarea
                 id="ps-instruction"
                 className="ps-textarea"
                 rows={3}
-                value={instruction}
-                onChange={(event) => setInstruction(event.target.value)}
+                value={draftComment}
+                onChange={(event) => setDraftComment(event.target.value)}
+                onKeyDown={(event) => {
+                  // D-034 #1: plain Enter inserts a newline; Ctrl/Cmd+Enter
+                  // saves the annotation.
+                  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault();
+                    saveTask();
+                  }
+                }}
                 placeholder={t(
                   "studio.instructionPlaceholder",
-                  "Describe the change the agent should make…"
+                  "Describe the change the agent should make… Ctrl+Enter saves."
                 )}
               />
               <div className="ps-actions">
@@ -1080,6 +1217,11 @@ export function StudioToolbar({
                 {t("studio.saved", "Task saved")} —{" "}
                 <code>{mode.taskId}</code>
               </p>
+              {mode.notice ? (
+                <p className="ps-hint" role="alert">
+                  {mode.notice}
+                </p>
+              ) : null}
               {mode.file ? (
                 <p className="ps-meta">
                   {t("studio.savedFile", "File")}: <code>{mode.file}</code>
@@ -1216,6 +1358,53 @@ export function StudioToolbar({
           aria-hidden="true"
         />
       ))}
+
+      {/* Annotation-first marker overlay (G02, D-033 #8/#9): numbered
+          badges over resolved live targets; region rects with dashed
+          outlines. Rendered INSIDE the shadow host (D-034 #3 mounting
+          rule) so markers never pollute evidence screenshots and can
+          never be annotated by Studio itself. Unresolved targets stay in
+          the list (grey chip) with no page anchor. */}
+      {annotations.map((annotation) => {
+        const number = annotationDisplayNumber(
+          annotations,
+          annotation.annotationId
+        );
+        if (annotation.kind === "region" && annotation.region) {
+          return (
+            <div
+              key={annotation.annotationId}
+              className="ps-outline ps-region"
+              style={regionStyle(annotation.region)}
+              aria-hidden="true"
+            >
+              <span className="ps-marker-chip ps-marker-chip-onpage">
+                {number ?? "?"}
+              </span>
+            </div>
+          );
+        }
+        const target = resolveAnnotationTarget(annotation);
+        if (!target) return null;
+        const rect = target.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) return null;
+        void markerTick;
+        return (
+          <div
+            key={annotation.annotationId}
+            className="ps-marker-anchor"
+            style={{
+              left: rect.left - 6,
+              top: rect.top - 6,
+            }}
+            aria-hidden="true"
+          >
+            <span className="ps-marker-chip ps-marker-chip-onpage">
+              {number ?? "?"}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }

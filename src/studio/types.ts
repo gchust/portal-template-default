@@ -9,7 +9,8 @@
  * renders all three versions.
  */
 
-export const TASK_SCHEMA_VERSION = 4 as const;
+export const TASK_SCHEMA_VERSION = 5 as const;
+export const TASK_SCHEMA_VERSION_V4 = 4 as const;
 export const TASK_SCHEMA_VERSION_V1 = 1 as const;
 export const TASK_SCHEMA_VERSION_V2 = 2 as const;
 
@@ -141,15 +142,42 @@ export type HeartbeatReport = {
   lastOnlineAt?: string;
 };
 
+/**
+ * Annotation-first (D-033 #14, schema v5): the task carries an ordered list
+ * of per-comment annotations. The display number of a marker is its LIVE
+ * order index + 1 (D-034 #4) — never stored; `annotationId` is the stable
+ * identity that survives renumbering.
+ */
+export type AnnotationKind = "element" | "multi" | "region";
+
+export type Annotation = {
+  /** Stable identity (newTaskId); never renumbered (D-034 #4). */
+  annotationId: string;
+  kind: AnnotationKind;
+  /** Per-annotation modification comment (D-033 #7). */
+  comment: string;
+  createdAt: string;
+  status: "open" | "completed";
+  completedAt?: string;
+  /** Hidden without deletion (D-033 #11; used by G03). */
+  hidden?: boolean;
+  /** Element captures for element/multi kinds (schema-v2-shaped). */
+  elements: ElementCapture[];
+  /** Viewport rect for the region kind (marquee). */
+  region?: Region;
+};
+
+/**
+ * Canonical (v5) task artifact. Top-level v4 bookkeeping fields are kept;
+ * `instruction`/`elements`/`region` are replaced by `annotations[]`.
+ */
 export type PortalStudioTask = {
   schemaVersion: typeof TASK_SCHEMA_VERSION;
   taskId: string;
   createdAt: string;
   url: string;
   title: string;
-  instruction: string;
-  elements: ElementCapture[];
-  region?: Region;
+  annotations: Annotation[];
   businessContext: BusinessContextItem[];
   redaction: RedactionManifest;
   screenshot?: ScreenshotRef;
@@ -159,6 +187,20 @@ export type PortalStudioTask = {
   heartbeat?: HeartbeatReport;
   /** Update-verification bookkeeping (schema v4). */
   revision?: RevisionInfo;
+};
+
+/**
+ * v4 payload shape (unpublished dev-only intermediate, D-033 #17): kept
+ * for the simple normalize-on-read path — never a migration framework.
+ */
+export type PortalStudioTaskV4 = Omit<
+  PortalStudioTask,
+  "schemaVersion" | "annotations"
+> & {
+  schemaVersion: typeof TASK_SCHEMA_VERSION_V4;
+  instruction: string;
+  elements: ElementCapture[];
+  region?: Region;
 };
 
 /** v1 payload shape (accepted by the server, normalized to v2+). */

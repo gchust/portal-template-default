@@ -120,6 +120,23 @@ describe("StudioToolbar", () => {
       ok: true,
       json: async () => ({
         task: {
+          schemaVersion: 5,
+          taskId: "task-rev-1",
+          createdAt: "2026-08-07T12:00:00.000Z",
+          url: "http://127.0.0.1:4173/users",
+          title: "Users",
+          annotations: [
+            {
+              annotationId: "ann-1",
+              kind: "element",
+              comment: "c",
+              createdAt: "2026-08-07T12:00:00.000Z",
+              status: "open",
+              elements: [],
+            },
+          ],
+          businessContext: [],
+          redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
           revision: {
             sourceRevision: "ab".repeat(32),
             browserRevision: 7,
@@ -201,7 +218,7 @@ describe("StudioToolbar", () => {
     expect(screen.getByText("tr")).toBeInTheDocument();
 
     await user.type(
-      screen.getByLabelText("Modification instruction"),
+      screen.getByLabelText("Annotation comment"),
       "Increase padding"
     );
     await user.click(screen.getByRole("button", { name: "Save task" }));
@@ -230,13 +247,17 @@ describe("StudioToolbar", () => {
     expect(shotUrl).toBe("/__portal-studio/screenshots");
     expect(JSON.parse(shotInit.body).taskId).toBeTruthy();
     const payload = JSON.parse(taskInit.body);
-    expect(payload.schemaVersion).toBe(4);
-    expect(payload.instruction).toBe("Increase padding");
-    expect(payload.elements).toHaveLength(1);
+    expect(payload.schemaVersion).toBe(5);
+    expect(payload.annotations).toHaveLength(1);
+    expect(payload.annotations[0].comment).toBe("Increase padding");
+    expect(payload.annotations[0].kind).toBe("element");
+    expect(payload.annotations[0].elements).toHaveLength(1);
     expect(payload.diagnostics).toEqual([]);
-    expect(payload.elements[0].tagName).toBe("tr");
-    expect(payload.elements[0].snapshot.domOutline).toContain("tr");
-    expect(payload.elements[0].snapshot.computedStyle).toBeDefined();
+    expect(payload.annotations[0].elements[0].tagName).toBe("tr");
+    expect(payload.annotations[0].elements[0].snapshot.domOutline).toContain("tr");
+    expect(
+      payload.annotations[0].elements[0].snapshot.computedStyle
+    ).toBeDefined();
     expect(payload.businessContext).toEqual([]);
     expect(payload.redaction).toEqual({
       droppedKeys: [],
@@ -296,7 +317,7 @@ describe("StudioToolbar", () => {
     await openAndPick(user, row);
     await user.keyboard("{Enter}");
     await user.type(
-      screen.getByLabelText("Modification instruction"),
+      screen.getByLabelText("Annotation comment"),
       "do it"
     );
     await user.click(screen.getByRole("button", { name: "Save task" }));
@@ -361,7 +382,7 @@ describe("StudioToolbar", () => {
     await openAndPick(user, row);
     await user.keyboard("{Enter}");
     await user.type(
-      screen.getByLabelText("Modification instruction"),
+      screen.getByLabelText("Annotation comment"),
       "do it"
     );
     await user.click(screen.getByRole("button", { name: "Save task" }));
@@ -424,6 +445,141 @@ describe("StudioToolbar", () => {
     expect(screen.getByRole("alert").textContent).toContain(
       "Unable to save task"
     );
+  });
+
+  // ---- Goal 02 annotations (D-033 #4/#7, D-034 #1/#2) ----
+
+  it("renders the loaded annotation list with live numbers", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        task: {
+          schemaVersion: 5,
+          taskId: "task-list-1",
+          createdAt: "2026-08-07T12:00:00.000Z",
+          url: "http://127.0.0.1:4173/users",
+          title: "Users",
+          annotations: [
+            {
+              annotationId: "ann-a",
+              kind: "element",
+              comment: "Bold the header",
+              createdAt: "2026-08-07T12:00:00.000Z",
+              status: "open",
+              elements: [],
+            },
+            {
+              annotationId: "ann-b",
+              kind: "region",
+              comment: "Highlight the table",
+              createdAt: "2026-08-07T12:00:00.000Z",
+              status: "open",
+              elements: [],
+              region: { x: 1, y: 2, width: 10, height: 10 },
+            },
+          ],
+          businessContext: [],
+          redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    });
+    const list = screen.getByText("Annotations (2)");
+    expect(list).toBeInTheDocument();
+    expect(screen.getByText("Bold the header")).toBeInTheDocument();
+    expect(screen.getByText("Highlight the table")).toBeInTheDocument();
+  });
+
+  it("Enter inserts a newline; Ctrl+Enter saves (D-034 #1)", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Row", "row-enter");
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({
+            ok: true,
+            taskId: "task-enter-1",
+            file: "/repo/.portal-studio/tasks/active-task.json",
+          }),
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({ ok: true, file: "screenshots/task-enter-1.png" }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await openAndPick(user, row);
+    await user.keyboard("{Enter}");
+    const textarea = screen.getByLabelText("Annotation comment");
+    await user.type(textarea, "line one");
+    await user.keyboard("{Enter}");
+    expect((textarea as HTMLTextAreaElement).value).toBe("line one\n");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => {
+      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+    });
+    const taskPost = fetchMock.mock.calls.find(
+      (call) =>
+        (call[1] as { method?: string } | undefined)?.method === "POST" &&
+        String(call[0]).includes("/tasks")
+    );
+    const payload = JSON.parse((taskPost![1] as { body: string }).body);
+    expect(payload.annotations[0].comment).toBe("line one\n");
+  });
+
+  it("capture failure keeps the annotation with a non-blocking notice (D-034 #2)", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Row", "row-capture");
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({
+            ok: true,
+            taskId: "task-cap-1",
+            file: "/repo/.portal-studio/tasks/active-task.json",
+          }),
+      },
+    ]);
+    vi.mocked(
+      (await import("@/studio/screenshot")).captureViewportPng
+    ).mockResolvedValueOnce(null);
+    render(<StudioToolbar config={config} />);
+    await openAndPick(user, row);
+    await user.keyboard("{Enter}");
+    await user.type(
+      screen.getByLabelText("Annotation comment"),
+      "keep me"
+    );
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+    });
+    // The notice is non-blocking; the annotation is NOT rolled back.
+    expect(
+      screen.getByRole("alert").textContent
+    ).toContain("screenshot capture failed");
+    expect(
+      screen.getByText("keep me")
+    ).toBeInTheDocument();
+    const taskPost = fetchMock.mock.calls.find(
+      (call) =>
+        (call[1] as { method?: string } | undefined)?.method === "POST"
+    );
+    expect(taskPost).toBeDefined();
   });
 
   it("closes the panel from the toolbar header", async () => {

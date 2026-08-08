@@ -72,8 +72,14 @@ describe("serializeTaskArtifact size re-check after source backfill", () => {
     createdAt: "2026-08-07T12:00:00.000Z",
     url: "http://127.0.0.1:5176/users",
     title: "t",
-    instruction: "i",
-    elements: names.map((name) => ({
+    annotations: [
+      {
+        annotationId: "ann-size-1",
+        kind: "element",
+        comment: "i",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: names.map((name) => ({
       tagName: "div",
       selectorCandidates: [],
       componentCandidates: [{ name, key: null, kind: "fiber" }],
@@ -85,7 +91,9 @@ describe("serializeTaskArtifact size re-check after source backfill", () => {
         domOutline: "div",
         computedStyle: { display: "block" },
       },
-    })),
+        })),
+      },
+    ],
     businessContext: [],
     redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
   });
@@ -104,8 +112,10 @@ describe("serializeTaskArtifact size re-check after source backfill", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       const parsed = JSON.parse(result.serialized) as PortalStudioTask;
-      expect(parsed.elements[0].sourceCandidates).toHaveLength(1);
-      expect(parsed.elements[0].sourceCandidates[0].file).toContain("table.tsx");
+      expect(parsed.annotations[0].elements[0].sourceCandidates).toHaveLength(1);
+      expect(
+        parsed.annotations[0].elements[0].sourceCandidates[0].file
+      ).toContain("table.tsx");
       // The session token is redacted even inside the serialized artifact.
       expect(result.serialized).not.toContain("session-token");
     }

@@ -29,11 +29,11 @@ const credentials = requirePortalE2ECredentials(environment);
 const studioDir = path.resolve(".portal-studio");
 const taskFile = path.join(studioDir, "tasks", "active-task.json");
 
-type TaskArtifact = {
-  schemaVersion: number;
-  taskId: string;
-  url: string;
-  instruction: string;
+type TaskAnnotation = {
+  annotationId: string;
+  kind: "element" | "multi" | "region";
+  comment: string;
+  status: "open" | "completed";
   elements: Array<{
     tagName: string;
     componentCandidates: Array<{ name: string | null; kind?: string }>;
@@ -46,6 +46,13 @@ type TaskArtifact = {
     };
   }>;
   region?: { x: number; y: number; width: number; height: number };
+};
+
+type TaskArtifact = {
+  schemaVersion: number;
+  taskId: string;
+  url: string;
+  annotations: TaskAnnotation[];
   businessContext: Array<{ type: string; id?: string; source: string }>;
   redaction: { droppedKeys: string[]; redactedValues: number };
   screenshot?: { file: string; width: number; height: number };
@@ -121,7 +128,7 @@ const saveTask = async (
     })
   ).toBeVisible();
   await expect
-    .poll(() => readActiveTask().instruction)
+    .poll(() => readActiveTask().annotations.at(-1)?.comment)
     .toBe(instruction);
 };
 
@@ -160,6 +167,7 @@ test.afterAll(() => {
 test("users page: single, shift-multi, marquee, replace, screenshot (3 rounds)", async ({
   page,
 }) => {
+
   await signIn(page);
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
@@ -178,13 +186,16 @@ test("users page: single, shift-multi, marquee, replace, screenshot (3 rounds)",
   await saveTask(page, "E2E single: increase row padding");
 
   let task = readActiveTask();
-  expect(task.schemaVersion).toBe(4);
-  expect(task.elements).toHaveLength(1);
-  const names = task.elements[0].componentCandidates
+  expect(task.schemaVersion).toBe(5);
+  expect(task.annotations).toHaveLength(1);
+  const firstAnnotation = task.annotations[0];
+  expect(firstAnnotation.kind).toBe("element");
+  expect(firstAnnotation.elements).toHaveLength(1);
+  const names = firstAnnotation.elements[0].componentCandidates
     .map((candidate) => candidate.name)
     .filter((name): name is string => typeof name === "string");
   expect(names).toContain("TableRow");
-  const sources = task.elements[0].sourceCandidates.map((s) => s.file);
+  const sources = firstAnnotation.elements[0].sourceCandidates.map((s) => s.file);
   expect(
     sources.some((file) => file.includes("users-example") || file.includes("src/"))
   ).toBe(true);
@@ -238,9 +249,14 @@ test("users page: single, shift-multi, marquee, replace, screenshot (3 rounds)",
       hasText: "Captured",
     })
   ).toBeVisible();
-  await saveTask(page, "E2E replace: single again after shift-multi");
+  await saveTask(page, "E2E continuous: plain click appends annotation 2");
   task = readActiveTask();
-  expect(task.elements).toHaveLength(1);
+  expect(task.annotations).toHaveLength(2);
+  // The plain click replaced the pick-session selection with a single
+  // element (the true multi-select mode lands in G03); the CONTINUOUS
+  // part is that annotation 1 is retained and annotation 2 appended.
+  expect(task.annotations[1].kind).toBe("element");
+  expect(task.annotations[1].elements).toHaveLength(1);
   await closeStudio(page);
 
   // Round 3 — marquee region over the table body.
@@ -271,9 +287,11 @@ test("users page: single, shift-multi, marquee, replace, screenshot (3 rounds)",
   ).toBeVisible();
   await saveTask(page, "E2E marquee: select the whole table body");
   task = readActiveTask();
-  expect(task.elements.length).toBeGreaterThanOrEqual(3);
-  expect(task.region).toBeDefined();
-  expect(task.region!.width).toBeGreaterThan(0);
+  expect(task.annotations).toHaveLength(3);
+  const regionAnnotation = task.annotations[2];
+  expect(regionAnnotation.kind).toBe("region");
+  expect(regionAnnotation.region).toBeDefined();
+  expect(regionAnnotation.region!.width).toBeGreaterThan(0);
   expect(task.screenshot).toBeDefined();
   // No secrets/tokens in any artifact.
   const serialized = JSON.stringify(task);
@@ -344,7 +362,8 @@ test("dev page: keyboard single and Shift+Enter multi, agent-side writes, guards
   await saveTask(page, "E2E keyboard single on /dev/ai-chat");
   const single = readActiveTask();
   expect(single.url).toContain("/dev/ai-chat");
-  expect(single.elements).toHaveLength(1);
+  expect(single.annotations).toHaveLength(1);
+  expect(single.annotations[0].elements).toHaveLength(1);
   expect(single.screenshot).toBeDefined();
   await closeStudio(page);
 
@@ -369,9 +388,13 @@ test("dev page: keyboard single and Shift+Enter multi, agent-side writes, guards
       hasText: "Captured",
     })
   ).toBeVisible();
-  await saveTask(page, "E2E keyboard: shift multi then replace");
+  await saveTask(page, "E2E keyboard: shift multi then plain Enter");
   const multi = readActiveTask();
-  expect(multi.elements).toHaveLength(1);
+  expect(multi.annotations).toHaveLength(2);
+  // Plain Enter replaced the pick-session selection (multi-select mode
+  // lands in G03); the CONTINUOUS annotation semantics retain #1 + append.
+  expect(multi.annotations[1].kind).toBe("element");
+  expect(multi.annotations[1].elements).toHaveLength(1);
   await closeStudio(page);
 
   // Agent-side write through the token-protected endpoint.
@@ -385,7 +408,7 @@ test("dev page: keyboard single and Shift+Enter multi, agent-side writes, guards
     createdAt: new Date().toISOString(),
     url: single.url,
     title: "Agent write",
-    instruction: "Agent-side v2 task",
+    instruction: "Agent-side v4 task (normalized to v5 on write)",
     elements: [
       {
         tagName: "div",
@@ -938,4 +961,70 @@ test("dock: compact toolbar, drag persists across reload, More menu (G01)", asyn
     "aria-expanded",
     "true"
   );
+});
+
+test("annotations: continuous picks, Ctrl+Enter, markers persist across reload and routes (G02)", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+
+  // Continuous annotation 1: pick the first table row, Ctrl+Enter saves.
+  await startPicking(page);
+  const row1 = page.locator("tbody tr").first();
+  await row1.hover();
+  await row1.click();
+  await page.locator("#portal-studio-root textarea").fill("First annotation");
+  await page.keyboard.press("Control+Enter");
+  await expect(
+    page.locator("#portal-studio-root [role='toolbar']", {
+      hasText: "Task saved",
+    })
+  ).toBeVisible();
+  // Dock badge reflects the persisted count; list + page marker exist.
+  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
+  await expect(root.locator(".ps-marker-anchor")).toHaveCount(1);
+  // Marker is INSIDE the shadow host: never in the page DOM.
+  expect(await page.locator("body > .ps-marker-anchor").count()).toBe(0);
+  await page
+    .locator("#portal-studio-root [role='toolbar'] button", {
+      hasText: "Done",
+    })
+    .click();
+
+  // Continuous annotation 2: every plain pick appends a NEW annotation
+  // (the sandbox users table has a single row — pick a second cell).
+  await startPicking(page);
+  const row2 = page.locator("tbody tr").first().locator("td").nth(1);
+  await row2.hover();
+  await row2.click();
+  await page
+    .locator("#portal-studio-root textarea")
+    .fill("Second annotation");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-badge")).toHaveText("2");
+  const task = readActiveTask();
+  expect(task.schemaVersion).toBe(5);
+  expect(task.annotations).toHaveLength(2);
+  expect(task.annotations[1].comment).toBe("Second annotation");
+  expect(task.annotations[1].annotationId).not.toBe(
+    task.annotations[0].annotationId
+  );
+
+  // Reload → markers persist and re-resolve against the live DOM.
+  await page.reload();
+  await expect(root.locator(".ps-badge")).toHaveText("2");
+  await openStudio(page);
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(2);
+  await expect(root.locator(".ps-marker-anchor")).toHaveCount(2);
+  await closeStudio(page);
+
+  // Route change → targets gone → annotations RETAINED as unresolved.
+  await page.goto(resolvePortalTestURL(environment, "/dev/ai-chat"));
+  await openStudio(page);
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(2);
+  await expect(root.locator(".ps-unresolved")).toHaveCount(2);
+  await expect(root.locator(".ps-marker-anchor")).toHaveCount(0);
 });

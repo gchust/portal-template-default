@@ -36,13 +36,18 @@ import {
   sanitizeTask,
   verifySessionToken,
 } from "@/studio/endpoint";
-import { TASK_SCHEMA_VERSION, TASK_SCHEMA_VERSION_V1 } from "@/studio/types";
+import {
+  TASK_SCHEMA_VERSION,
+  TASK_SCHEMA_VERSION_V1,
+  TASK_SCHEMA_VERSION_V2,
+  TASK_SCHEMA_VERSION_V4,
+} from "@/studio/types";
 
 const makeTempStudioRoot = () =>
   mkdtempSync(path.join(tmpdir(), "portal-studio-test-"));
 
 const v2Task = {
-  schemaVersion: TASK_SCHEMA_VERSION,
+  schemaVersion: TASK_SCHEMA_VERSION_V2,
   taskId: "task-abc-123",
   createdAt: "2026-08-07T12:00:00.000Z",
   url: "http://127.0.0.1:5176/users",
@@ -80,6 +85,26 @@ const v2Task = {
     { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
   ],
   screenshot: { file: "screenshots/task-abc-123.png", width: 1200, height: 800 },
+};
+
+const v4Task = {
+  schemaVersion: TASK_SCHEMA_VERSION_V4,
+  taskId: "task-v4-1",
+  createdAt: "2026-08-07T12:00:00.000Z",
+  url: "http://127.0.0.1:5176/users",
+  title: "Users",
+  instruction: "legacy v4 instruction",
+  elements: [
+    {
+      tagName: "tr",
+      selectorCandidates: [{ kind: "path", selector: "tbody > tr" }],
+      componentCandidates: [{ name: "TableRow", key: "1" }],
+      snapshot: { text: "Alice", attributes: { class: "row" }, childCount: 4 },
+    },
+  ],
+  region: { x: 1, y: 2, width: 50, height: 20 },
+  businessContext: [],
+  redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
 };
 
 const v1Task = {
@@ -143,17 +168,21 @@ describe("task sanitization", () => {
     const task = sanitizeTask(v2Task, { studioRoot: root });
     expect(task).not.toBeNull();
     expect(task?.schemaVersion).toBe(TASK_SCHEMA_VERSION);
-    expect(task?.elements).toHaveLength(2);
-    expect(task?.elements[0].componentCandidates[0]).toMatchObject({
+    expect(task?.annotations).toHaveLength(1);
+    const annotation = task!.annotations[0];
+    expect(annotation.kind).toBe("element");
+    expect(annotation.comment).toBe("Make the row text larger.");
+    expect(annotation.elements).toHaveLength(2);
+    expect(annotation.elements[0].componentCandidates[0]).toMatchObject({
       name: "TableRow",
       kind: "fiber",
     });
-    expect(task?.elements[0].snapshot.domOutline).toBe("tr#row-1.row");
-    expect(task?.elements[0].snapshot.computedStyle).toEqual({
+    expect(annotation.elements[0].snapshot.domOutline).toBe("tr#row-1.row");
+    expect(annotation.elements[0].snapshot.computedStyle).toEqual({
       display: "table-row",
       color: "rgb(0, 0, 0)",
     });
-    expect(task?.region).toEqual({ x: 10, y: 20, width: 300, height: 120 });
+    expect(annotation.region).toEqual({ x: 10, y: 20, width: 300, height: 120 });
     expect(task?.businessContext).toEqual([
       { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
     ]);
@@ -167,14 +196,28 @@ describe("task sanitization", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("normalizes a v1 payload into the v2 shape", () => {
+  it("normalizes a v1 payload into the v5 shape (single annotation)", () => {
     const task = sanitizeTask(v1Task);
     expect(task).not.toBeNull();
     expect(task?.schemaVersion).toBe(TASK_SCHEMA_VERSION);
-    expect(task?.elements).toHaveLength(1);
-    expect(task?.elements[0].tagName).toBe("tr");
+    expect(task?.annotations).toHaveLength(1);
+    expect(task?.annotations[0].elements).toHaveLength(1);
+    expect(task?.annotations[0].elements[0].tagName).toBe("tr");
+    expect(task?.annotations[0].region).toBeUndefined();
     expect(task?.businessContext).toEqual([]);
-    expect(task?.region).toBeUndefined();
+  });
+
+  it("normalizes a v4 payload into v5 (normalize-on-read, D-033 #17)", () => {
+    const task = sanitizeTask(v4Task);
+    expect(task).not.toBeNull();
+    expect(task?.schemaVersion).toBe(TASK_SCHEMA_VERSION);
+    expect(task?.annotations).toHaveLength(1);
+    const annotation = task!.annotations[0];
+    expect(annotation.comment).toBe("legacy v4 instruction");
+    expect(annotation.kind).toBe("element");
+    expect(annotation.elements[0].tagName).toBe("tr");
+    expect(annotation.region).toEqual({ x: 1, y: 2, width: 50, height: 20 });
+    expect(annotation.annotationId).toBe("task-v4-1-v4");
   });
 
   it("accepts a screenshot ref when the file exists", () => {
@@ -190,7 +233,7 @@ describe("task sanitization", () => {
   });
 
   it("rejects wrong schema, missing fields, and unsafe ids", () => {
-    expect(sanitizeTask({ ...v2Task, schemaVersion: 5 })).toBeNull();
+    expect(sanitizeTask({ ...v2Task, schemaVersion: 6 })).toBeNull();
     expect(sanitizeTask({ ...v2Task, taskId: "../evil" })).toBeNull();
     expect(sanitizeTask({ ...v2Task, url: "" })).toBeNull();
     expect(
@@ -221,8 +264,8 @@ describe("task sanitization", () => {
     };
     const task = sanitizeTask(huge);
     expect(task).not.toBeNull();
-    expect(task?.instruction).toHaveLength(2000);
-    expect(task?.elements).toHaveLength(50);
+    expect(task?.annotations[0].comment).toHaveLength(2000);
+    expect(task?.annotations[0].elements).toHaveLength(50);
     expect(task?.businessContext).toHaveLength(20);
   });
 
@@ -259,7 +302,7 @@ describe("task sanitization", () => {
       ],
     };
     const task = sanitizeTask(withSources);
-    expect(task?.elements[0].sourceCandidates).toEqual([]);
+    expect(task?.annotations[0].elements[0].sourceCandidates).toEqual([]);
   });
 });
 
@@ -290,22 +333,23 @@ describe("secret hygiene in task sanitization", () => {
     };
     const task = sanitizeTask(leaky);
     expect(task).not.toBeNull();
-    expect(task?.instruction).toContain("[REDACTED]");
-    expect(task?.instruction).not.toContain("abc123");
-    expect(task?.elements[0].snapshot.text).not.toContain("supersecret");
+    const annotation = task!.annotations[0];
+    expect(annotation.comment).toContain("[REDACTED]");
+    expect(annotation.comment).not.toContain("abc123");
+    expect(annotation.elements[0].snapshot.text).not.toContain("supersecret");
     expect(
-      task?.elements[0].snapshot.attributes.token
+      annotation.elements[0].snapshot.attributes.token
     ).toBeUndefined();
     expect(
-      task?.elements[0].snapshot.attributes["data-api-key"]
+      annotation.elements[0].snapshot.attributes["data-api-key"]
     ).toBeUndefined();
-    expect(task?.elements[0].snapshot.attributes.title).toContain("[REDACTED]");
+    expect(annotation.elements[0].snapshot.attributes.title).toContain("[REDACTED]");
     expect(
-      task?.elements[0].snapshot.attributes.title
+      annotation.elements[0].snapshot.attributes.title
     ).not.toContain("live-secret");
-    expect(task?.elements[0].snapshot.computedStyle?.backgroundImage).not.toContain(
-      "style-secret"
-    );
+    expect(
+      annotation.elements[0].snapshot.computedStyle?.backgroundImage
+    ).not.toContain("style-secret");
     // The server-authoritative manifest records what was stripped.
     expect(task?.redaction.droppedKeys).toEqual(
       expect.arrayContaining(["token", "data-api-key"])

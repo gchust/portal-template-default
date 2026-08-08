@@ -40,8 +40,10 @@ Enter/Ctrl+Enter comment editing with capture-failure-safe saves.
   evidence screenshots — the host element sits inside the cloned
   documentElement tree (D-034 #3 review finding F3).
 - `src/studio/endpoint.ts` — v5 sanitization (annotations validation:
-  ≤50 element captures total, comment ≤2000, annotationId safe-name
-  pattern, region bounds, status/hidden whitelist); v4 read normalized.
+  ≤50 element captures PER ANNOTATION (existing MAX_ELEMENTS; totals are
+  bounded by the 256 KB artifact cap so accumulated annotations keep
+  working), comment ≤2000, annotationId safe-name pattern, region bounds,
+  status/hidden whitelist); v4 read normalized.
 - `src/studio/vite.ts` — GET/POST unchanged surface; v5 passes through
   sanitize; no new endpoints.
 - `scripts/portal-studio-print.mjs`, `scripts/portal-studio-mcp.mjs` —
