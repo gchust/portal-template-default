@@ -961,8 +961,18 @@ export function StudioToolbar({
    *  NOTE: keepalive bodies are limited to 64 KB by the browser vs the
    *  256 KB artifact cap — a mutation flush beyond 64 KB may fail silently
    *  on unload (F-5; realistic annotation payloads stay far below). */
+  /**
+   * Send one mutation POST (keepalive so reload flushes survive) and
+   * RESOLVE with the server response. Callers chain their follow-ups
+   * (e.g. refreshTask) AFTER this promise settles — the atomic POST write
+   * completes before the response, so a refresh can never observe stale
+   * pre-mutation state (audit-found race, G04).
+   * NOTE: keepalive bodies are limited to 64 KB by the browser vs the
+   * 256 KB artifact cap — a mutation flush beyond 64 KB may fail silently
+   * on unload (F-5; realistic annotation payloads stay far below).
+   */
   const sendMutation = useCallback(
-    (payload: PortalStudioTask) => {
+    (payload: PortalStudioTask): Promise<void> =>
       fetch(config.endpoint, {
         method: "POST",
         headers: {
@@ -983,8 +993,7 @@ export function StudioToolbar({
         })
         .catch(() => {
           // Dev server restarting; the next mutation retries.
-        });
-    },
+        }),
     [config.endpoint, config.token]
   );
 
@@ -1001,8 +1010,9 @@ export function StudioToolbar({
     if (payload) {
       pendingPayloadRef.current = null;
       taskRef.current = payload;
-      sendMutation(payload);
-      refreshTask();
+      // Same ordering as the debounced path: refresh after the POST
+      // settles (audit race fix).
+      void sendMutation(payload).then(() => refreshTask());
     }
   }, [refreshTask, sendMutation]);
 
@@ -1014,16 +1024,17 @@ export function StudioToolbar({
       const payload: PortalStudioTask = { ...base, annotations: next };
       pendingPayloadRef.current = payload;
       if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
-      persistTimerRef.current = setTimeout(() => {
+      persistTimerRef.current = setTimeout(async () => {
         pendingPayloadRef.current = null;
         taskRef.current = payload;
-        sendMutation(payload);
-        // Re-sync with the server artifact so a subsequent Copy matches
-        // the CLI byte-for-byte (F-3).
+        // Re-sync ONLY after the mutation POST settles — refreshing
+        // earlier could revert the optimistic UI to stale state (audit
+        // race), and refreshing later could make Copy stale (F-3).
+        await sendMutation(payload);
         refreshTask();
       }, 300);
     },
-    [sendMutation]
+    [refreshTask, sendMutation]
   );
 
   // Flush pending mutations on unmount AND on beforeunload (reloads) —
