@@ -22,7 +22,7 @@ Portal Studio on `gchust/portal-template-default` branch
 
 | Doc | Goal | Title |
 | --- | --- | --- |
-| ~~`01-draggable-dock.md`~~ | G01 ✅ | Draggable dock, persisted position, compact icon toolbar, More menu — DONE (checkpoint pending) |
+| ~~`01-draggable-dock.md`~~ | G01 ✅ | Draggable dock, persisted position, compact icon toolbar, More menu — DONE (checkpoint d908e1f) |
 | `00-annotation-first-design-and-shared-contract.md` | — | Design model, schema v5, invariants, test matrix, gates, DoD |
 | `01-draggable-dock.md` | G01 | Draggable dock, persisted position, compact icon toolbar, More menu |
 | `02-persistent-annotations.md` | G02 | schemaVersion 5 `annotations[]`, per-comment, numbered persistent markers |
