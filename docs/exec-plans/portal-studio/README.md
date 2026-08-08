@@ -96,6 +96,15 @@ attribute reality (`data-nb-hidden-menu-item` only, in admin layout);
 - Implementation repo on `feat-agent-feedback` with a clean tree.
 - `.gitignore` entries for `.portal-studio/` are added as part of Goal 01.
 
+## Dogfood acceptance (Goal 06)
+
+The real code-agent dogfood acceptance log lives in
+`06-dogfood-acceptance.md` (evidence under /root/work/dogfood-crm/): an
+independent non-Pi agent + NocoBase skills built a CRM AI Portal on the real
+23000 backend, and the Portal Studio loop was exercised end to end with real
+Chromium, real task JSON/MCP artifacts, and a real source fix verified by
+HMR/reload. Found and fixed: D-025 (base-aware Studio bootstrap).
+
 ## Release evidence (Goal 05)
 
 The series closes with the final DoD evidence checklist (contract §12) in

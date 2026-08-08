@@ -137,3 +137,24 @@ describe("serializeTaskArtifact size re-check after source backfill", () => {
     expect(result).toEqual({ ok: false, error: "artifact_too_large" });
   });
 });
+
+describe("buildStudioInitScript (D-025: base-aware injection)", () => {
+  it("imports the studio entry root-relative for the root base", async () => {
+    const { buildStudioInitScript } = await import("@/studio/vite");
+    const script = buildStudioInitScript("/");
+    expect(script).toContain('import { mountPortalStudio } from "/src/studio/index.tsx"');
+    expect(script).toContain("mountPortalStudio(window.__PORTAL_STUDIO_CONFIG__)");
+  });
+
+  it("imports the studio entry under a non-root base (portal deployment)", async () => {
+    const { buildStudioInitScript } = await import("@/studio/vite");
+    const script = buildStudioInitScript("/x/dogfood-crm-a808/");
+    expect(script).toContain(
+      'import { mountPortalStudio } from "/x/dogfood-crm-a808/src/studio/index.tsx"'
+    );
+    // Missing trailing slash is normalized.
+    expect(buildStudioInitScript("/x/portal")).toContain(
+      '"/x/portal/src/studio/index.tsx"'
+    );
+  });
+});

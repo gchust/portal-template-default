@@ -1,4 +1,20 @@
 /**
+ * Build the inline bootstrap module for the dev HTML. The import specifier
+ * must be BASE-AWARE: portals deployed under a non-root base (e.g.
+ * /x/<portal>/) serve dev modules under that base, so a root-relative
+ * "/src/studio/index.tsx" import would 404 (D-025, found by the Goal 06
+ * dogfood acceptance).
+ */
+export function buildStudioInitScript(base: string): string {
+  const normalizedBase = /\/$/.test(base) ? base : `${base}/`;
+  const entry = `${normalizedBase}src/studio/index.tsx`;
+  return [
+    `import { mountPortalStudio } from ${JSON.stringify(entry)};`,
+    `mountPortalStudio(window.__PORTAL_STUDIO_CONFIG__);`,
+  ].join("\n");
+}
+
+/**
  * Portal Studio — serve-only Vite plugin.
  *
  * Dev-only (apply: "serve"): owns the session token, the local task endpoint,
@@ -244,6 +260,7 @@ export function portalStudioPlugin(
   let sessionToken = "";
   let sessionFilePersisted = false;
   const sessionPath = path.join(studioRoot, SESSION_FILENAME);
+  let resolvedBase = "/";
   let lastHeartbeatAtMs: number | undefined;
   let lastIssuedBrowserRevision = 0;
   let lastHotUpdateAtMs = 0;
@@ -349,9 +366,10 @@ export function portalStudioPlugin(
   return {
     name: "portal-studio",
     apply: "serve",
-    configResolved() {
+    configResolved(config) {
       // Deliberately no file side effects: the session file is persisted
       // only after this instance successfully listens (see configureServer).
+      resolvedBase = config.base ?? "/";
       ensureToken();
     },
     transformIndexHtml() {
@@ -363,7 +381,8 @@ export function portalStudioPlugin(
       // Inline module scripts in dev index.html are processed by Vite, so the
       // studio entry import resolves through the dev transform pipeline. The
       // script only exists in the dev-served HTML (apply: "serve"), so
-      // production builds contain neither the script nor the import.
+      // production builds contain neither the script nor the import. The
+      // entry specifier is base-aware (D-025).
       return [
         {
           tag: "script",
@@ -374,10 +393,7 @@ export function portalStudioPlugin(
         {
           tag: "script",
           attrs: { type: "module" },
-          children: [
-            `import { mountPortalStudio } from "/src/studio/index.tsx";`,
-            `mountPortalStudio(window.__PORTAL_STUDIO_CONFIG__);`,
-          ].join("\n"),
+          children: buildStudioInitScript(resolvedBase),
           // Must run after the react-refresh preamble, so append at the end
           // of <head> instead of prepending.
           injectTo: "head",
