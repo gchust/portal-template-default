@@ -429,8 +429,43 @@ const sanitizeScreenshotRef = (
   if (!existsSync(resolved)) return undefined;
   const width = readBoundedNumber(input.width, MAX_REGION_COORDINATE) ?? 0;
   const height = readBoundedNumber(input.height, MAX_REGION_COORDINATE) ?? 0;
-  return { file, width, height };
+  const capturedAt = readString(input.capturedAt, 64);
+  return {
+    file,
+    width,
+    height,
+    // Preserve capturedAt through mutation rewrites (F-2): the MCP
+    // current_screenshot freshness check depends on it.
+    ...(capturedAt !== undefined && !Number.isNaN(Date.parse(capturedAt))
+      ? { capturedAt }
+      : {}),
+  };
 };
+
+/** Validate a heartbeat report carried by a client re-POST (F-2). */
+function sanitizeHeartbeatReport(input: unknown): HeartbeatReport | undefined {
+  if (!isRecord(input)) return undefined;
+  const state = readString(input.state, 16);
+  if (state !== "online" && state !== "stale" && state !== "offline") {
+    return undefined;
+  }
+  const reportedAt = readString(input.reportedAt, 64);
+  const checkedAt = readString(input.checkedAt, 64);
+  if (!reportedAt || !checkedAt) return undefined;
+  if (Number.isNaN(Date.parse(reportedAt)) || Number.isNaN(Date.parse(checkedAt))) {
+    return undefined;
+  }
+  const lastOnlineAt = readString(input.lastOnlineAt, 64);
+  return {
+    state,
+    reportedAt,
+    checkedAt,
+    ...(lastOnlineAt !== undefined &&
+    !Number.isNaN(Date.parse(lastOnlineAt))
+      ? { lastOnlineAt }
+      : {}),
+  };
+}
 
 /**
  * Sanitize a diagnostics array (server-authoritative): shape whitelist (no
@@ -751,6 +786,9 @@ export function sanitizeTask(
     : options.studioRoot
       ? sanitizeScreenshotRef(input.screenshot, options.studioRoot)
       : undefined;
+  // Mutation re-POSTs carry the last-known heartbeat; preserve it so the
+  // artifact's liveness state survives edit/delete/hide rewrites (F-2).
+  const heartbeat = isV1 ? undefined : sanitizeHeartbeatReport(input.heartbeat);
   let diagnostics: DiagnosticEntry[] = [];
   if (!isV1 && !isV2) {
     // Diagnostics present but invalid/over-budget must reject the task, not
@@ -762,7 +800,10 @@ export function sanitizeTask(
 
   let annotations: Annotation[];
   if (isV5) {
-    if (!Array.isArray(input.annotations) || input.annotations.length < 1) {
+    // An EMPTY annotations array is a VALID v5 task (the clear-all action
+    // produces one, D-033 #10/#11; the old single-selection model required
+    // at least one element, but annotations are optional in v5).
+    if (!Array.isArray(input.annotations)) {
       return null;
     }
     if (input.annotations.length > MAX_ANNOTATIONS) return null;
@@ -823,6 +864,7 @@ export function sanitizeTask(
     redaction: toServerManifest(recorder),
     ...(screenshot ? { screenshot } : {}),
     ...(diagnostics.length ? { diagnostics } : {}),
+    ...(heartbeat ? { heartbeat } : {}),
   };
 
   const serialized = JSON.stringify(task);

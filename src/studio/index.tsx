@@ -289,6 +289,45 @@ const TOOLBAR_STYLES = `
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.ps-annotation-item-hidden {
+  opacity: 0.55;
+}
+.ps-annotation-item-hidden .ps-marker-chip {
+  filter: grayscale(1);
+}
+.ps-annotation-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-top: 2px;
+}
+.ps-annotation-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #f87171;
+  margin-top: 4px;
+}
+.ps-annotation-confirm .ps-button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.ps-annotation-edit {
+  min-height: 44px;
+}
+.ps-menu-item-danger {
+  color: #f87171;
+}
+.ps-menu-item-danger:hover {
+  background: rgba(248, 113, 113, 0.12);
+}
+:host-context([data-ps-theme="light"]) .ps-menu-item-danger {
+  color: #dc2626;
+}
+:host-context([data-ps-theme="light"]) .ps-menu-item-danger:hover {
+  background: rgba(220, 38, 38, 0.08);
+}
 :host-context([data-ps-theme="light"]) .ps-annotation-item {
   background: rgba(0, 0, 0, 0.05);
 }

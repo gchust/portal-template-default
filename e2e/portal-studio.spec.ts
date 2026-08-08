@@ -934,7 +934,9 @@ test("dock: compact toolbar, drag persists across reload, More menu (G01)", asyn
   // Reset dock position via MOUSE (F1: outside-click must not swallow the
   // menuitem click across the shadow boundary) restores the default anchor.
   await root.locator(".ps-more-button").click();
-  await root.locator(".ps-more-menu .ps-menu-item").click();
+  await root
+    .locator(".ps-more-menu [role='menuitem']", { hasText: "Reset dock position" })
+    .click();
   await expect(root.locator(".ps-more-menu")).toHaveCount(0);
   const reset = (await dock.boundingBox())!;
   expect(Math.round(reset.x)).toBeGreaterThan(Math.round(moved.x) + 40);
@@ -1027,4 +1029,123 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
   await expect(root.locator(".ps-annotation-item")).toHaveCount(2);
   await expect(root.locator(".ps-unresolved")).toHaveCount(2);
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(0);
+});
+
+test("annotations: multi-select group, delete renumbers, hide and clear-all persist (G03)", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+
+  // Multi-select group: seed pick + toggle a second element into ONE group.
+  await page
+    .locator("#portal-studio-root [role='toolbar'] button", {
+      hasText: "Multi-select",
+    })
+    .click();
+  const cellA = page.locator("tbody tr").first().locator("td").nth(0);
+  const cellB = page.locator("tbody tr").first().locator("td").nth(1);
+  await cellA.hover();
+  await cellA.click();
+  await cellB.hover();
+  await cellB.click();
+  await page
+    .locator("#portal-studio-root [role='toolbar'] button", {
+      hasText: "Finish group",
+    })
+    .click();
+  await page
+    .locator("#portal-studio-root textarea")
+    .fill("G03 group annotation");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-badge")).toHaveText("1");
+  let task = readActiveTask();
+  expect(task.annotations).toHaveLength(1);
+  expect(task.annotations[0].kind).toBe("multi");
+  expect(task.annotations[0].elements).toHaveLength(2);
+  await page
+    .locator("#portal-studio-root [role='toolbar'] button", {
+      hasText: "Done",
+    })
+    .click();
+
+  // Second single annotation (delete target).
+  await page
+    .locator("#portal-studio-root [role='toolbar'] button", {
+      hasText: "Pick element",
+    })
+    .click();
+  const row2 = page.locator("tbody tr").first().locator("td").nth(2);
+  await row2.hover();
+  await row2.click();
+  await page
+    .locator("#portal-studio-root textarea")
+    .fill("G03 second annotation");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-badge")).toHaveText("2");
+
+  // Delete annotation 2 (its delete button is the second in the list) with
+  // the inline confirmation; the remaining marker renumbers to 1.
+  const deleteButtons = root.locator(
+    ".ps-annotation-item [aria-label='Delete']"
+  );
+  await expect(deleteButtons).toHaveCount(2);
+  await deleteButtons.nth(1).click();
+  await expect(
+    root.locator(".ps-annotation-confirm")
+  ).toBeVisible();
+  await root
+    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+    .click();
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
+  // The mutation POST is debounced — poll the persisted artifact.
+  await expect
+    .poll(() => readActiveTask().annotations.length)
+    .toBe(1);
+  task = readActiveTask();
+  expect(task.annotations[0].annotationId).toBe(
+    readActiveTask().annotations[0].annotationId
+  );
+  expect(task.annotations[0].comment).toBe("G03 group annotation");
+
+  // Hide the remaining annotation → reload → still hidden (never deleted).
+  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
+  // The label is uppercased via CSS text-transform.
+  await expect(root.locator(".ps-unresolved")).toContainText(/hidden/i);
+  // Persisted before the reload (debounced mutation).
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.hidden)
+    .toBe(true);
+  await page.reload();
+  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await openStudio(page);
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
+  await expect(root.locator(".ps-annotation-item")).toContainText(/hidden/i);
+
+  // More → Clear all annotations (confirm) → valid empty v5 task.
+  await root.locator(".ps-more-button").click();
+  await root
+    .locator(".ps-more-menu [role='menuitem']", {
+      hasText: "Clear all annotations",
+    })
+    .click();
+  await expect(root.locator(".ps-more-menu")).toContainText(
+    "Clear all annotations?"
+  );
+  await root
+    .locator(".ps-more-menu button", { hasText: "Clear all" })
+    .click();
+  await expect(root.locator(".ps-badge")).toHaveText("0");
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(0);
+  await expect
+    .poll(() => readActiveTask().annotations.length)
+    .toBe(0);
+  task = readActiveTask();
+  expect(task.schemaVersion).toBe(5);
+  expect(task.annotations).toEqual([]);
+
+  // Reload after clear-all: still empty, nothing resurrects.
+  await page.reload();
+  await expect(root.locator(".ps-badge")).toHaveText("0");
 });

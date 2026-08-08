@@ -220,6 +220,54 @@ describe("task sanitization", () => {
     expect(annotation.annotationId).toBe("task-v4-1-v4");
   });
 
+  it("preserves screenshot.capturedAt and heartbeat through mutation rewrites (F-2)", () => {
+    const mutation = {
+      schemaVersion: TASK_SCHEMA_VERSION,
+      taskId: "task-mut-1",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations: [],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+      screenshot: {
+        file: "screenshots/task-abc-123.png",
+        width: 1200,
+        height: 800,
+        capturedAt: "2026-08-07T12:00:05.000Z",
+      },
+      heartbeat: {
+        state: "online",
+        reportedAt: "2026-08-07T12:00:04.000Z",
+        checkedAt: "2026-08-07T12:00:04.000Z",
+        lastOnlineAt: "2026-08-07T12:00:04.000Z",
+      },
+    };
+    const root = makeTempStudioRoot();
+    atomicWriteScreenshot(root, "task-abc-123", Buffer.from("not-png"));
+    const task = sanitizeTask(mutation, { studioRoot: root });
+    expect(task).not.toBeNull();
+    expect(task?.screenshot?.capturedAt).toBe("2026-08-07T12:00:05.000Z");
+    expect(task?.heartbeat?.state).toBe("online");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("accepts a valid v5 task with ZERO annotations (clear-all, D-033 #10/#11)", () => {
+    const empty = {
+      schemaVersion: TASK_SCHEMA_VERSION,
+      taskId: "task-empty-1",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations: [],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    };
+    const task = sanitizeTask(empty);
+    expect(task).not.toBeNull();
+    expect(task?.annotations).toEqual([]);
+  });
+
   it("accepts a screenshot ref when the file exists", () => {
     const root = makeTempStudioRoot();
     atomicWriteScreenshot(root, "task-abc-123", Buffer.from("not-png"));

@@ -85,3 +85,84 @@ export function annotationDisplayNumber(
 }
 
 
+
+/**
+ * ---- Goal 03: pure annotation operations (D-033 #5/#10/#11, D-034 #4) ----
+ * Every mutation is a pure function over the annotations list: stable
+ * annotationIds never change; display numbers are derived live (order
+ * index), so deletion renumbers automatically; empty lists are VALID
+ * v5 tasks (the server accepts `annotations: []`).
+ */
+
+/** Append an annotation (bounded by MAX_ANNOTATIONS). */
+export function addAnnotation(
+  annotations: Annotation[],
+  annotation: Annotation
+): Annotation[] {
+  if (annotations.length >= MAX_ANNOTATIONS) return annotations;
+  return [...annotations, annotation];
+}
+
+/** Remove an annotation by its stable id (display numbers renumber live). */
+export function removeAnnotation(
+  annotations: Annotation[],
+  annotationId: string
+): Annotation[] {
+  return annotations.filter(
+    (annotation) => annotation.annotationId !== annotationId
+  );
+}
+
+/** Toggle the hidden flag (hide WITHOUT deletion, D-033 #11). */
+export function toggleAnnotationHidden(
+  annotations: Annotation[],
+  annotationId: string
+): Annotation[] {
+  return annotations.map((annotation) =>
+    annotation.annotationId === annotationId
+      ? { ...annotation, hidden: !annotation.hidden }
+      : annotation
+  );
+}
+
+/** Replace the comment of one annotation (inline edit). */
+export function updateAnnotationComment(
+  annotations: Annotation[],
+  annotationId: string,
+  comment: string
+): Annotation[] {
+  return annotations.map((annotation) =>
+    annotation.annotationId === annotationId
+      ? { ...annotation, comment }
+      : annotation
+  );
+}
+
+/** Clear all annotations → a valid empty v5 task (clear-all action). */
+export function clearAnnotations(): Annotation[] {
+  return [];
+}
+
+/**
+ * Group bound for the true multi-select mode (D-033 #5). Kept local so this
+ * module stays importable at vite config-load time (no `@/` alias there,
+ * D-008) — selection.ts's MAX_SELECTED_ELEMENTS is the same value for the
+ * legacy selection model; both are deliberately aligned at 50.
+ */
+export const MAX_GROUP_ELEMENTS = 50;
+
+/**
+ * True multi-select group toggle (D-033 #5): toggles a live element in/out
+ * of the group being built — the SAME annotation — bounded by
+ * MAX_GROUP_ELEMENTS. Pure over the group element list.
+ */
+export function groupToggleElement(
+  group: Element[],
+  element: Element
+): Element[] {
+  if (group.includes(element)) {
+    return group.filter((entry) => entry !== element);
+  }
+  if (group.length >= MAX_GROUP_ELEMENTS) return group;
+  return [...group, element];
+}

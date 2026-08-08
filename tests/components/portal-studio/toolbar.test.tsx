@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -580,6 +580,400 @@ describe("StudioToolbar", () => {
         (call[1] as { method?: string } | undefined)?.method === "POST"
     );
     expect(taskPost).toBeDefined();
+  });
+
+  // ---- Goal 03 true multi-select (D-033 #5) ----
+
+  it("multi-select: seed click starts ONE group, clicks toggle, Enter opens the comment editor, save produces a multi annotation", async () => {
+    const user = userEvent.setup();
+    const cellA = makePageElement("A", "cell-a");
+    const cellB = makePageElement("B", "cell-b");
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({
+            ok: true,
+            taskId: "task-multi-1",
+            file: "/repo/.portal-studio/tasks/active-task.json",
+          }),
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({ ok: true, file: "screenshots/task-multi-1.png" }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await user.click(screen.getByRole("button", { name: "Multi-select" }));
+    await user.click(cellA);
+    await user.click(cellB);
+    // Same annotation: two elements in the group, no new annotation yet.
+    expect(screen.getByText(/Selected/)).toBeInTheDocument();
+    // Enter finishes the group → comment editor appears.
+    await user.keyboard("{Enter}");
+    await user.type(
+      screen.getByLabelText("Annotation comment"),
+      "group comment"
+    );
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+    });
+    const taskPost = fetchMock.mock.calls.find(
+      (call) =>
+        (call[1] as { method?: string } | undefined)?.method === "POST" &&
+        String(call[0]).includes("/tasks")
+    );
+    const payload = JSON.parse((taskPost![1] as { body: string }).body);
+    expect(payload.annotations).toHaveLength(1);
+    expect(payload.annotations[0].kind).toBe("multi");
+    expect(payload.annotations[0].elements).toHaveLength(2);
+    expect(payload.annotations[0].comment).toBe("group comment");
+  });
+
+  it("multi-select: Space toggles the focused target; Esc cancels", async () => {
+    const user = userEvent.setup();
+    const cellA = makePageElement("A", "cell-a");
+    const cellB = makePageElement("B", "cell-b");
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await user.click(screen.getByRole("button", { name: "Multi-select" }));
+    cellA.focus();
+    await user.keyboard(" ");
+    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    cellB.focus();
+    await user.keyboard(" ");
+    expect(screen.getByText("2", { selector: "strong" })).toBeInTheDocument();
+    await user.keyboard(" ");
+    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    // Esc cancels the multi session: the finish-group action is gone and
+    // the idle panel (Pick element) is back.
+    expect(
+      screen.queryByRole("button", { name: "Finish group" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Pick element" })
+    ).toBeInTheDocument();
+  });
+
+  // ---- Goal 03 per-marker actions (D-033 #10/#11) ----
+
+  const makeLoadTask = (annotations: unknown[]) => ({
+    task: {
+      schemaVersion: 5,
+      taskId: "task-actions-1",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations,
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+      screenshot: {
+        file: "screenshots/task-actions-1.png",
+        width: 100,
+        height: 50,
+        capturedAt: "2026-08-07T12:00:01.000Z",
+      },
+    },
+  });
+
+  const loadThen = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+  };
+
+  const makeRoutedFetch = (annotations: unknown[]) => {
+    return mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse(makeLoadTask(annotations)),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true }),
+      },
+    ]);
+  };
+
+  it("edits a comment inline; dirty indicator; Ctrl+Enter saves via POST", async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "old comment",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await loadThen(user);
+    await user.click(
+      screen.getByRole("button", { name: "Edit comment" })
+    );
+    const textarea = screen.getByDisplayValue("old comment");
+    await user.type(textarea, "!");
+    expect(screen.getByText("Unsaved")).toBeInTheDocument();
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => {
+      expect(screen.getByText("old comment!")).toBeInTheDocument();
+    });
+    // The mutation POST rewrites the task with the edited comment (debounced).
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      );
+      expect(
+        posts.some(
+          (call) =>
+            (JSON.parse((call[1] as { body: string }).body).annotations[0]
+              ?.comment as string) === "old comment!"
+        )
+      ).toBe(true);
+    });
+    const editPosts = fetchMock.mock.calls.filter(
+      (call) =>
+        (call[1] as { method?: string } | undefined)?.method === "POST" &&
+        (
+          JSON.parse((call[1] as { body: string }).body).annotations[0]
+            ?.comment as string
+        ) === "old comment!"
+    );
+    expect(
+      (JSON.parse((editPosts[0][1] as { body: string }).body) as {
+        taskId: string;
+      }).taskId
+    ).toBe("task-actions-1");
+  });
+
+  it("deletes an annotation with inline confirmation; numbers renumber", async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "first",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+      {
+        annotationId: "ann-2",
+        kind: "element",
+        comment: "second",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await loadThen(user);
+    // Delete ann-1 (its delete button is the first in the list).
+    await user.click(
+      screen.getAllByRole("button", { name: "Delete" })[0]
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Delete this annotation?");
+    await user.click(within(alert).getByRole("button", { name: "Delete" }));
+    await waitFor(() => {
+      expect(screen.queryByText("first")).not.toBeInTheDocument();
+    });
+    // Live renumbering: the remaining annotation becomes number 1.
+    const chips = screen.getAllByText("1", { selector: "span" });
+    expect(chips.length).toBeGreaterThanOrEqual(1);
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      );
+      expect(
+        posts.some(
+          (call) =>
+            JSON.stringify(
+              (
+                JSON.parse((call[1] as { body: string }).body).annotations as {
+                  annotationId: string;
+                }[]
+              ).map((a) => a.annotationId)
+            ) === JSON.stringify(["ann-2"])
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("hides/unhides an annotation without deleting it", async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "visible",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await loadThen(user);
+    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await waitFor(() => {
+      expect(screen.getByText("Hidden")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      );
+      expect(
+        posts.some(
+          (call) =>
+            (
+              JSON.parse((call[1] as { body: string }).body).annotations as {
+                hidden?: boolean;
+              }[]
+            )[0]?.hidden === true
+        )
+      ).toBe(true);
+    });
+    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Hidden")).not.toBeInTheDocument();
+    });
+  });
+
+  it("More menu clears all annotations with confirmation", async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "doomed",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await loadThen(user);
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: /Clear all annotations/ })
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Clear all annotations?"
+    );
+    await user.click(screen.getByRole("button", { name: "Clear all" }));
+    await waitFor(() => {
+      expect(screen.queryByText("doomed")).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      );
+      expect(
+        posts.some(
+          (call) =>
+            (JSON.parse((call[1] as { body: string }).body)
+              .annotations as unknown[]).length === 0
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("Esc cancels the delete confirmation and returns focus (F-1)", async () => {
+    const user = userEvent.setup();
+    makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "keep me",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    const deleteButton = screen.getByRole("button", { name: "Delete" });
+    await user.click(deleteButton);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Delete this annotation?"
+    );
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("alert")
+      ).not.toBeInTheDocument();
+    });
+    // Focus returns to the (re-mounted) delete button of the same item.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Delete" })).toHaveFocus();
+    });
+    // The annotation was NOT deleted.
+    expect(screen.getByText("keep me")).toBeInTheDocument();
+  });
+
+  it("flushes a pending mutation on unmount (reload safety, D-039)", async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "will be hidden",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    const { unmount } = render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Hide" }));
+    // Immediately unmount (the debounce has NOT fired yet): the pending
+    // mutation must flush with keepalive instead of being lost.
+    unmount();
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      );
+      expect(
+        posts.some(
+          (call) =>
+            (
+              JSON.parse((call[1] as { body: string }).body)
+                .annotations as { hidden?: boolean }[]
+            )[0]?.hidden === true
+        )
+      ).toBe(true);
+    });
   });
 
   it("closes the panel from the toolbar header", async () => {
