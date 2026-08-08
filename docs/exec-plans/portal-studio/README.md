@@ -96,6 +96,15 @@ attribute reality (`data-nb-hidden-menu-item` only, in admin layout);
 - Implementation repo on `feat-agent-feedback` with a clean tree.
 - `.gitignore` entries for `.portal-studio/` are added as part of Goal 01.
 
+## Alpha regression acceptance (Goal 07)
+
+`07-alpha-regression.md`: real reproduction and root-cause classification of
+the Alpha (3.0.0-alpha.7) regression — the reported "public base URL" message
+is Vite base behavior; the functional blocker was the Alpha `roles:check`
+X-Portal 404, minimally fixed by a dogfood dev-proxy shim (D-028); the CRM
+data lost in the upgrade was re-created with Alpha validation deltas (D-029);
+the full annotate → read → agent fix → HMR → verify loop passed.
+
 ## Dogfood acceptance (Goal 06)
 
 The real code-agent dogfood acceptance log lives in
