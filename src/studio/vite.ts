@@ -72,7 +72,7 @@ export type PortalStudioPluginOptions = {
   root?: string;
 };
 
-const isLoopbackAddress = (address: string | undefined) =>
+export const isLoopbackAddress = (address: string | undefined) =>
   address === "127.0.0.1" ||
   address === "::1" ||
   address === "::ffff:127.0.0.1" ||

@@ -96,6 +96,14 @@ attribute reality (`data-nb-hidden-menu-item` only, in admin layout);
 - Implementation repo on `feat-agent-feedback` with a clean tree.
 - `.gitignore` entries for `.portal-studio/` are added as part of Goal 01.
 
+## Release evidence (Goal 05)
+
+The series closes with the final DoD evidence checklist (contract §12) in
+`05-release-hardening.md`, the abuse suite (`tests/logic/portal-studio/abuse.test.ts`),
+production-exclusion raw outputs (chunk/content scans + prod-preview POST 404
+probes), usage guides (`usage-codex.md`, `usage-pi-json.md`, `mcp-config.md`),
+and security notes (`security-notes.md`).
+
 ## How to use these documents
 
 - Read `00-shared-contract.md` once for the stable invariants, boundaries,

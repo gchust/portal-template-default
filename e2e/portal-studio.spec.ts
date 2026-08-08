@@ -770,3 +770,74 @@ test("update verification loop: real edit, HMR path, reload-bump path, MCP smoke
   expect(shot.file).toMatch(/^screenshots\/.+\.png$/);
   expect(shot.capturedAt).toBeDefined();
 });
+
+test("HMR re-injection: reloads and hot updates never duplicate the Studio mount", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  await page.waitForTimeout(1000);
+
+  const hostCount = () =>
+    page.evaluate(() => document.querySelectorAll("#portal-studio-root").length);
+  const captureFlags = () =>
+    page.evaluate(() => ({
+      capture: Boolean(
+        (window as unknown as Record<string, unknown>)
+          .__PORTAL_STUDIO_CAPTURE_INSTALLED__
+      ),
+      loop: Boolean(
+        (window as unknown as Record<string, unknown>)
+          .__PORTAL_STUDIO_EVIDENCE_LOOP_INSTALLED__
+      ),
+      mounted: Boolean(
+        (window as unknown as Record<string, unknown>)
+          .__PORTAL_STUDIO_MOUNTED__
+      ),
+    }));
+
+  // Baseline: exactly one host, all idempotency flags set.
+  expect(await hostCount()).toBe(1);
+  expect(await captureFlags()).toEqual({
+    capture: true,
+    loop: true,
+    mounted: true,
+  });
+
+  // Repeated full reloads must not duplicate the host or flags.
+  for (let round = 1; round <= 3; round += 1) {
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await page.waitForTimeout(1200);
+    expect(await hostCount(), `reload round ${round}`).toBe(1);
+    expect(await captureFlags()).toEqual({
+      capture: true,
+      loop: true,
+      mounted: true,
+    });
+  }
+
+  // The toolbar still works after reloads (single toggle, single panel).
+  await page.locator("#portal-studio-root .ps-toggle").click();
+  await expect(
+    page.locator("#portal-studio-root [role='toolbar']")
+  ).toHaveCount(1);
+  await page.locator("#portal-studio-root .ps-toggle").click();
+
+  // A REAL hot update (non-studio file) must not duplicate the mount.
+  const targetFile = path.resolve("src/components/ui/table.tsx");
+  const original = readFileSync(targetFile, "utf8");
+  try {
+    writeFileSync(targetFile, `${original}\n// portal-studio hmr marker\n`);
+    await page.waitForTimeout(2000);
+    expect(await hostCount()).toBe(1);
+    expect(await captureFlags()).toEqual({
+      capture: true,
+      loop: true,
+      mounted: true,
+    });
+  } finally {
+    writeFileSync(targetFile, original);
+  }
+});

@@ -105,15 +105,96 @@ git diff --check && git status --short
 
 ## Running log (maintain during execution)
 
-- **Progress:** (milestone status + evidence paths)
-- **Surprises & Discoveries:** (e.g. bundler inlining quirks, license findings)
-- **Decisions:** (append to contract §13; mark product-scope closures)
-- **Outcomes & Retrospective:** (series-level retrospective: what worked, what
-  the five Goals changed vs the contract, final DoD checklist with evidence)
+### Progress
 
-## Series close
+- M1 Abuse suite: **DONE** — `tests/logic/portal-studio/abuse.test.ts` (15 tests
+  green): 13 encoded/exotic traversal shapes rejected across
+  `isSafeTaskFileName` / `atomicWriteScreenshot` / `resolveTaskFilePath` /
+  `sanitizeTask`; token brute force (100 wrong → all rejected, real token
+  still verifies; constant-time structure = sha256 + timingSafeEqual, no
+  length leak); oversized bodies (task 413, diagnostics >64 KB rejected);
+  redaction-leakage seeds (Authorization/Cookie/query token/api_key/password/
+  bare token) absent from artifacts; secret-attribute stripping in the
+  screenshot clone; no-body-by-default re-assertion; loopback binding
+  (`isLoopbackAddress` exported + 7-address test); atomic writes 0600 with no
+  temp leftovers.
+- M2 E2E matrix + HMR re-injection: **DONE** — full matrix 5/5 (single/multi/
+  region/screenshot/diagnostics/guards/full-loop/MCP smoke) + new
+  "HMR re-injection" spec: exactly one host, idempotency flags, 3 reloads and
+  a real hot update (table.tsx comment, restored) never duplicate the mount;
+  toolbar still operable.
+- M3 Bundle-graph & prod-exclusion evidence: **DONE** — raw outputs below.
+- M4 Dependencies/licenses/NOTICE + provenance: see Decisions / this log.
+- M5 Docs + clean re-verify + evidence pack: see below.
 
-After this Goal: final DoD checklist (contract §12) is the acceptance artifact;
-the series is complete. Future feature requests are recorded in the contract
-Decision Log as "future" and implemented only through a new contract revision
-by the user.
+### Production-exclusion evidence (raw outputs, M3)
+
+```
+$ pnpm build        # exit 0, built in 22s
+$ find dist -name "*.js" | grep -iE "studio|portal-studio"    # no studio-named chunks
+$ grep -rlE "PortalStudio|portal-studio|__portal-studio|ps-toggle|mountPortalStudio|portal-studio-mcp|__PORTAL_STUDIO" dist/
+# grep exit 1 (zero matches)
+$ grep -c "portal-studio" dist/index.html                      # 0
+$ grep -rlE "__portal-studio/(tasks|screenshots|heartbeat|screenshot|verify|bootstrap)" dist/
+# no endpoint markers
+# prod preview (pnpm start, vite preview on [::1]:4173):
+$ curl -s -o /dev/null -w "%{http_code}" http://localhost:4173/__portal-studio/tasks -X POST -d '{}'   # 404
+$ curl -s -o /dev/null -w "%{http_code}" http://localhost:4173/__portal-studio/heartbeat -X POST -d '{}' # 404
+$ curl -s -o /dev/null -w "%{http_code}" http://localhost:4173/__portal-studio/verify -X POST -d '{}'    # 404
+# GET returns 200 index.html — the SPA history fallback, not an endpoint
+# (no middleware exists; every POST returns 404)
+$ curl -s http://localhost:4173/ | grep -cE "__PORTAL_STUDIO|portal-studio|ps-toggle"   # 0
+```
+
+### Surprises & Discoveries
+
+1. The prod preview binds to IPv6 loopback only (`[::1]:4173`); IPv4 probes
+   refused. Loopback-only holds, but on the IPv6 address — recorded.
+2. GET on an unknown path returns 200 (SPA history fallback) — only POSTs
+   prove endpoint absence (404). The evidence records POSTs for every dev
+   endpoint path.
+3. Refine start (vite preview) serves `dist/` with no middleware — dev
+   endpoints cannot exist there by construction.
+4. The E2E HMR re-injection test needed the hot update to target a
+   NON-studio file: editing a studio module would mutate the running app;
+   table.tsx (already used by the verification-loop spec) is the stable
+   choice, restored in `finally`.
+
+### Decisions
+
+- See contract Decision Log D-022 … D-024 (appended during Goal 05).
+
+### Outcomes & Retrospective (series close)
+
+- End-state reached: every contract §12 DoD item maps to reproducible evidence
+  (see the checklist below); Portal Studio is releasable and maintainable.
+- Series retrospective: five goals delivered a dev-only feedback loop
+  (capture → artifact → edit → verify) with honest security boundaries. The
+  recurring lessons: real-browser E2E catches what unit tests cannot (SVG
+  spacing, region drop, HMR ack reference, Buffer-in-browser); gate commands
+  must never mask exit codes (D-018); server-side authority (heartbeat
+  receipt time, session-file ownership, revision bumps) is the pattern that
+  keeps agent-facing claims honest.
+- Final gate run (set -o pipefail, real exit codes): ESLint 0; typecheck 0;
+  test 34 files / 205 of 205 exit 0; build 0; dist precise grep 0 (exit 1);
+  e2e 6/6 exit 0 (login + 5 studio specs incl. HMR re-injection); git diff
+  --check 0; package.json/pnpm-lock.yaml unchanged (zero deps across the
+  whole series); nocobase untouched; i18n parity 35/35 studio keys.
+
+### Series close
+
+The final DoD checklist (below) is the acceptance artifact. Future feature
+requests are recorded in the contract Decision Log as "future" and implemented
+only through a new contract revision by the user.
+
+### Final DoD evidence checklist (contract §12)
+
+| §12 | Item | Evidence |
+| --- | --- | --- |
+| 1 | Real elements → complete printable artifacts, JSON-only | Goals 01–02 E2E + unit suites; print CLI v1–v4 tests |
+| 2 | Agent loop verifiable (revision/diagnostics/heartbeat/screenshot) | Goal 03–04 E2E full-loop spec; verify CLI; mcp.test.ts |
+| 3 | Optional MCP server, no credentials in frontend, JSON fallback | Goal 04 mcp.test.ts + E2E MCP smoke; mcp-config.md; D-021 |
+| 4 | Production excludes Studio/diagnostics/MCP code + endpoints | M3 raw outputs above (chunk+content scan, POST 404 probes, html 0 markers) |
+| 5 | Security invariants under abuse testing | abuse.test.ts (15 tests) + Goals 01–04 guard tests |
+| 6 | Repo conventions (typecheck/lint/tests green, i18n, a11y, no `any`) | Final gate run (below); eslint/typecheck/test exit 0 |
+| 7 | Clean-workspace re-verification + release evidence | Clean single-pass gates (below); this checklist; usage docs |
