@@ -5,11 +5,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  TASK_SCHEMA_VERSION,
-  TASK_SCHEMA_VERSION_V1,
-  TASK_SCHEMA_VERSION_V2,
-} from "@/studio/types";
+import { TASK_SCHEMA_VERSION_V1, TASK_SCHEMA_VERSION_V2 } from "@/studio/types";
 
 const SCRIPT = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -56,7 +52,7 @@ const sampleV2Task = {
 };
 
 const sampleV3Task = {
-  schemaVersion: TASK_SCHEMA_VERSION,
+  schemaVersion: 3,
   taskId: "task-print-3",
   createdAt: "2026-08-07T12:00:00.000Z",
   url: "http://127.0.0.1:5176/users",
@@ -228,6 +224,32 @@ describe("portal-studio-print CLI", () => {
     const json = run(["--json"], dir);
     expect(JSON.parse(json.stdout).schemaVersion).toBe(2);
     expect(run(["--markdown"], dir).stdout).not.toContain("heartbeat:");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("renders v4 revision bookkeeping in markdown", () => {
+    const v4Task = {
+      ...sampleV3Task,
+      schemaVersion: 4,
+      revision: {
+        sourceRevision: "ab".repeat(32),
+        browserRevision: 7,
+        hmrAck: true,
+        expectedAfter: "2026-08-07T12:00:10.000Z",
+        state: "matched",
+        checkedAt: "2026-08-07T12:00:11.000Z",
+      },
+    };
+    const dir = makeStudioDir(v4Task);
+    const json = run(["--json"], dir);
+    expect(JSON.parse(json.stdout).schemaVersion).toBe(4);
+    const markdown = run(["--markdown"], dir);
+    expect(markdown.status).toBe(0);
+    expect(markdown.stdout).toContain("revision: source=abababababab");
+    expect(markdown.stdout).toContain("browser=7");
+    expect(markdown.stdout).toContain("state=matched");
+    expect(markdown.stdout).toContain("hmrAck=true");
+    expect(markdown.stdout).toContain("expectedAfter=2026-08-07T12:00:10.000Z");
     rmSync(dir, { recursive: true, force: true });
   });
 

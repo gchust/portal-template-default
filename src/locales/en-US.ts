@@ -144,4 +144,6 @@ export const starter = {
   "studio.taskCleared": "Task cleared",
   "studio.screenshot": "Screenshot",
   "studio.selectedCount": "Selected",
+  "studio.revisionStatus": "Revision",
+  "studio.browserRevision": "browser",
 } as const;

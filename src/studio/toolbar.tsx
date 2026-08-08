@@ -148,6 +148,11 @@ export function StudioToolbar({
   const [hoverName, setHoverName] = useState<string | null>(null);
   const [selectionRects, setSelectionRects] = useState<DOMRect[]>([]);
   const [selectionCount, setSelectionCount] = useState(0);
+  const [revisionStatus, setRevisionStatus] = useState<{
+    sourceRevision?: string;
+    browserRevision?: number;
+    state?: string;
+  }>();
   const selectionRef = useRef<SelectionState>(EMPTY_SELECTION);
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -350,6 +355,35 @@ export function StudioToolbar({
       document.removeEventListener("keydown", handleKeyDown, true);
     };
   }, [commitDraft, isMarquee]);
+
+  // Load the revision/ack/state status into the panel when it opens.
+  useEffect(() => {
+    if (!open || typeof fetch !== "function") return;
+    let cancelled = false;
+    fetch(config.endpoint, {
+      headers: { "X-Portal-Studio-Token": config.token },
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { task?: { revision?: unknown } } | null) => {
+        if (cancelled || !payload?.task?.revision) return;
+        const revision = payload.task.revision as {
+          sourceRevision?: string;
+          browserRevision?: number;
+          state?: string;
+        };
+        setRevisionStatus({
+          sourceRevision: revision.sourceRevision,
+          browserRevision: revision.browserRevision,
+          state: revision.state,
+        });
+      })
+      .catch(() => {
+        // Dev server restarting; status stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config.endpoint, config.token, open]);
 
   // Refresh selection rects on scroll/resize while the panel is open.
   useEffect(() => {
@@ -830,6 +864,17 @@ export function StudioToolbar({
 
           {isIdle ? (
             <div className="ps-section">
+              {revisionStatus ? (
+                <p className="ps-meta" role="status" aria-live="polite">
+                  {t("studio.revisionStatus", "Revision")}:{" "}
+                  <code>
+                    {revisionStatus.sourceRevision?.slice(0, 8) ?? "?"}
+                  </code>{" "}
+                  · {t("studio.browserRevision", "browser")}{" "}
+                  <code>{revisionStatus.browserRevision ?? "?"}</code> ·{" "}
+                  {revisionStatus.state ?? "?"}
+                </p>
+              ) : null}
               <div className="ps-actions ps-actions-start">
                 <button
                   type="button"

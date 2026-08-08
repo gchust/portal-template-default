@@ -106,15 +106,95 @@ git diff --check
 
 ## Running log (maintain during execution)
 
-- **Progress:** (milestone status + evidence paths)
-- **Surprises & Discoveries:** (e.g. Vite HMR ack timing, vite-plugin
-  middleware ordering for acks, stdio framing)
-- **Decisions:** (append to contract §13)
-- **Outcomes & Retrospective:** (filled at Goal end)
+### Progress
 
-## Handoff to Goal 05
+- M1 Revision tracking + ack: **DONE** — schema v4 additive
+  (`revision{sourceRevision, browserRevision, hmrAck, expectedAfter, state,
+  checkedAt}`); `sourceRevision` = sha256 over the task-referenced source
+  files (sorted, missing files hash as markers) computed by the dev server
+  from disk; `browserRevision` = server-issued monotonic counter via the
+  bootstrap endpoint (full reloads re-bootstrap → bump); HMR ack is
+  server-observed (plugin `handleHotUpdate`), informational only; reload bump
+  is the authoritative signal. Task POST stamps the initial revision; the
+  E2E proves a real edit changes the source revision and a reload bumps the
+  browser revision.
+- M2 Stale detection + bounded wait: **DONE** — `performBoundedWait` (pure,
+  injectable clock/sleep/state) with `evaluateRevisionMatch` (bump → matched;
+  hmrAck + online → matched; anything else → never trusted); timeout → `stale`
+  with `expectedAfter` deadline recorded; default 10 s, configurable ≤30 s
+  (constants exported); fake-timer unit tests cover match/stale/offline and
+  mid-wait flips.
+- M3 Verify flow + status UI: **DONE** — `POST /__portal-studio/verify`
+  (token-guarded, ≤1 KB) returns `{ok, state, revision, diagnostics,
+  screenshot}` after the bounded wait and atomically updates the artifact
+  revision; `scripts/portal-studio-verify.mjs` CLI (exit 0 matched / 1 stale /
+  2 error); `GET /__portal-studio/tasks` returns the active task; the toolbar
+  idle panel shows `Revision: <src> · browser <n> · <state>` (role=status,
+  aria-live, i18n en-US/zh-CN).
+- M4 stdio MCP server: **DONE** — `scripts/portal-studio-mcp.mjs`
+  (zero-dep, newline-delimited JSON-RPC 2.0): initialize/ping/tools/list/
+  tools/call; five tools (`capture_task`, `print_task`,
+  `current_screenshot`, `read_diagnostics`, `wait_verification`) operating on
+  the same artifact and endpoints; token read in-process (env/session.json,
+  never frontend); screenshots as file refs only; config docs
+  (`docs/exec-plans/portal-studio/mcp-config.md`); no new production
+  dependencies.
+- M5 Tests + E2E: **DONE** — 190 unit/component tests (revision math, bounded
+  wait, MCP protocol + tool parity, verify CLI, print v4, toolbar status UI,
+  v4 schema acceptance); E2E 4/4 incl. the full-loop spec: real source edit →
+  HMR-path verify (matched via hmrAck+online, source revision changed) →
+  reload-bump verify (matched via browserRevision bump) → fresh screenshot +
+  diagnostics read-back → MCP smoke (all five tools).
 
-Goal 05 does not add product features; it hardens everything above
-(abuse tests, E2E matrix, HMR re-injection, production bundle graph,
-dependencies/licenses/NOTICE, Codex + Pi/JSON usage docs, clean-workspace
-re-verification) and produces the release evidence for the final DoD.
+### Surprises & Discoveries
+
+1. **HMR ack reference point**: comparing `lastHotUpdateAtMs >= waitStart`
+   never matched — the agent's edit happens BEFORE the verify call, so the
+   hot update precedes the wait. The reference is the task's baseline
+   `checkedAt` (D-020); the E2E caught this immediately.
+2. **Reload wipes the diagnostics buffer**: inducing an error before the
+   reload step lost it (fresh page = fresh ring buffer). The E2E induces the
+   error after the reload — matching the real loop (errors observed AFTER the
+   edit/reload).
+3. **jsdom has no global fetch** for component tests: the status-UI effect
+   crashed tests that didn't stub fetch; a `typeof fetch === "function"`
+   guard fixed the component and `vi.unstubAllGlobals()` fixed cross-test
+   global leaks (fetch stubs survived `restoreAllMocks`).
+4. **Session-file self-heal**: `beforeEach` deletes `.portal-studio`
+   (including `session.json`); the listening-event persistence only ran once,
+   so the file stayed gone. The middleware now re-persists the SAME in-memory
+   token when the file is missing while serving (safe: a serving instance owns
+   the port; D-017 semantics preserved).
+5. Vite `handleHotUpdate` is serve-only and fires per edited module — a cheap,
+   honest "hot update served" signal; it is intentionally NOT a browser
+   confirmation (documented as informational in D-019).
+
+### Decisions
+
+- See contract Decision Log D-019 … D-021 (appended during Goal 04).
+
+### Outcomes & Retrospective (filled at Goal end)
+
+- End-state reached: the annotate → read → edit → wait HMR/reload → read
+  errors → current-screenshot loop is verifiable end to end with and without
+  MCP; revisions are honest (bump authoritative, stale never silently
+  trusted); the MCP server is a thin, documented wrapper over the same
+  artifact/endpoints with full JSON parity.
+- Retro: the pure-function seams (`performBoundedWait`, `evaluateRevisionMatch`,
+  `computeSourceRevision`) made the tricky timing logic unit-testable without
+  a browser; the E2E full loop earned its keep again (HMR reference bug).
+- Known trade-offs (documented, not defects): the HMR ack is
+  server-observed-push, not browser-confirmed-apply; the reload bump is the
+  only fully authoritative signal. `browserRevision` is single-counter per dev
+  server (last-write-wins across tabs — dev-only, documented).
+
+### AC checklist (Goal 04)
+
+| AC | Evidence |
+| --- | --- |
+| 1. Full loop verifiable with and without MCP (parity matrix as CI test) | E2E full-loop spec (HMR + reload paths) + MCP smoke (five tools, live server); mcp.test.ts parity (print_task/read_diagnostics vs print CLI; endpoint-path parity vs plugin constants) |
+| 2. Revisions honest: reload bumps browserRevision; unacked HMR → stale, never silent | E2E: reload → browserRevision increase → matched; revision.test.ts: hmrAck-alone false, offline false, bump authoritative; performBoundedWait timeout → stale |
+| 3. MCP stdio-only, node launch, documented config, no credentials in frontend, no new prod deps, five tools only | scripts/portal-studio-mcp.mjs; mcp-config.md; token in-process; package.json/lockfile unchanged; tools/list = exactly five |
+| 4. JSON path gains nothing only behind MCP; screenshots as file refs | mcp-config.md parity table; current_screenshot returns {file, capturedAt} only |
+| 5. i18n/a11y for status UI; diff --check clean; no lockfile changes | toolbar status line (role=status, aria-live), studio.revisionStatus/browserRevision keys en-US+zh-CN; gates below |
+| 6. Gates with real exit codes (pipefail) | eslint 0, typecheck 0, test 190/190, build 0, dist grep 0 (exit 1), e2e 4/4, diff --check 0 |

@@ -136,4 +136,6 @@ export const starter = {
   "studio.taskCleared": "任务已清除",
   "studio.screenshot": "截图",
   "studio.selectedCount": "已选",
+  "studio.revisionStatus": "修订",
+  "studio.browserRevision": "浏览器",
 } as const;

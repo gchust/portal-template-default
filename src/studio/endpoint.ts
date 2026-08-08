@@ -39,6 +39,8 @@ import {
   type PortalStudioTaskV1,
   type RedactionManifest,
   type Region,
+  type RevisionInfo,
+  type RevisionState,
   type ScreenshotRef,
   type SelectorCandidateKind,
 } from "./types";
@@ -554,6 +556,7 @@ export function updateActiveTaskEvidence(
     screenshot?: ScreenshotRef;
     diagnostics?: DiagnosticEntry[];
     heartbeat?: HeartbeatReport;
+    revision?: RevisionInfo;
   },
   options: { writeTaskFile?: (serialized: string) => void } = {}
 ): {
@@ -578,6 +581,9 @@ export function updateActiveTaskEvidence(
   }
   if (patch.heartbeat) {
     task.heartbeat = patch.heartbeat;
+  }
+  if (patch.revision) {
+    task.revision = patch.revision;
   }
 
   // Final artifact cap: the merged task (screenshot + diagnostics +
@@ -610,7 +616,98 @@ export function updateActiveTaskEvidence(
   return { ok: true };
 }
 
-/** Validate and normalize a raw v1/v2/v3 task payload into a safe v3 task. */
+// Revision tracking (contract §10, schema v4, Decision Log D-019).
+export const DEFAULT_WAIT_TIMEOUT_MS = 10_000;
+export const MAX_WAIT_TIMEOUT_MS = 30_000;
+export const MAX_SOURCE_REVISION_FILES = 20;
+
+/**
+ * Content hash of the task-referenced source files (sorted, stable). Files
+ * that no longer exist hash as their path with a missing marker, so edits
+ * and deletions both change the revision.
+ */
+export function computeSourceRevision(
+  files: Array<{ file: string; content: string }>
+): string {
+  const sorted = [...files].sort((left, right) =>
+    left.file.localeCompare(right.file)
+  );
+  const hash = createHash("sha256");
+  for (const entry of sorted) {
+    hash.update(entry.file);
+    hash.update("\0");
+    hash.update(entry.content);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+export type RevisionMatchInput = {
+  browserRevision: number;
+  baselineBrowserRevision: number | undefined;
+  hmrAck: boolean;
+  heartbeatOnline: boolean;
+};
+
+/**
+ * Honest match semantics (contract §10): the authoritative success signal is
+ * a reload bump (browserRevision above the baseline); the HMR ack is
+ * informational and only counts together with a live (online) browser. Never
+ * silently trusted otherwise.
+ */
+export function evaluateRevisionMatch(input: RevisionMatchInput): boolean {
+  if (
+    input.baselineBrowserRevision !== undefined &&
+    input.browserRevision > input.baselineBrowserRevision
+  ) {
+    return true;
+  }
+  return input.hmrAck && input.heartbeatOnline;
+}
+
+/**
+ * Bounded wait with injectable clock/state/sleep (fake-timer testable):
+ * polls the match state until the deadline; the outcome is either matched
+ * (reload bump authoritative, or HMR ack + online) or stale — never a
+ * silent pass.
+ */
+export async function performBoundedWait(input: {
+  timeoutMs: number;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  readState: () => RevisionMatchInput;
+}): Promise<{ matched: boolean; attempts: number }> {
+  const startMs = input.now();
+  let matched = false;
+  let attempts = 0;
+  while (input.now() - startMs < input.timeoutMs) {
+    attempts += 1;
+    matched = evaluateRevisionMatch(input.readState());
+    if (matched) break;
+    await input.sleep(250);
+  }
+  return { matched, attempts };
+}
+
+export function buildRevisionInfo(
+  sourceRevision: string,
+  browserRevision: number,
+  hmrAck: boolean,
+  state: RevisionState,
+  nowMs: number,
+  expectedAfter?: string
+): RevisionInfo {
+  return {
+    sourceRevision,
+    browserRevision,
+    hmrAck,
+    ...(expectedAfter ? { expectedAfter } : {}),
+    state,
+    checkedAt: new Date(nowMs).toISOString(),
+  };
+}
+
+/** Validate and normalize a raw v1–v4 task payload into a safe v4 task. */
 export function sanitizeTask(
   input: unknown,
   options: { studioRoot?: string } = {}
@@ -618,8 +715,11 @@ export function sanitizeTask(
   if (!isRecord(input)) return null;
   const isV1 = input.schemaVersion === TASK_SCHEMA_VERSION_V1;
   const isV2 = input.schemaVersion === TASK_SCHEMA_VERSION_V2;
-  const isV3 = input.schemaVersion === TASK_SCHEMA_VERSION;
-  if (!isV1 && !isV2 && !isV3) return null;
+  const isV3 = input.schemaVersion === 3;
+  const isV4 = input.schemaVersion === TASK_SCHEMA_VERSION;
+  if (!isV1 && !isV2 && !isV3 && !isV4) return null;
+  void isV3;
+  void isV4;
 
   const recorder = createServerRecorder();
   const taskId = readString(input.taskId, 64);

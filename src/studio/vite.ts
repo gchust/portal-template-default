@@ -19,9 +19,13 @@ import {
   atomicWriteSessionFile,
   atomicWriteTaskFile,
   buildHeartbeatReport,
+  buildRevisionInfo,
   clearActiveTask,
   commitEvidence,
+  computeSourceRevision,
   createServerRecorder,
+  DEFAULT_WAIT_TIMEOUT_MS,
+  deriveHeartbeatState,
   generateSessionToken,
   matchesPendingEvidence,
   MAX_ARTIFACT_BYTES,
@@ -29,6 +33,7 @@ import {
   MAX_TASK_BODY_BYTES,
   parseHeartbeatPayload,
   parseScreenshotPayload,
+  performBoundedWait,
   readActiveTask,
   readReferencedScreenshot,
   redactSessionToken,
@@ -40,6 +45,7 @@ import {
   updateActiveTaskEvidence,
   verifySessionToken,
 } from "./endpoint";
+import { existsSync, readFileSync } from "node:fs";
 import type {
   ElementCapture,
   PortalStudioTask,
@@ -51,6 +57,9 @@ const SCREENSHOTS_ENDPOINT_PATH = "/__portal-studio/screenshots";
 const HEARTBEAT_ENDPOINT_PATH = "/__portal-studio/heartbeat";
 const SCREENSHOT_COMMAND_ENDPOINT_PATH = "/__portal-studio/screenshot";
 const PENDING_ENDPOINT_PATH = "/__portal-studio/screenshot/pending";
+const BOOTSTRAP_ENDPOINT_PATH = "/__portal-studio/bootstrap";
+const VERIFY_ENDPOINT_PATH = "/__portal-studio/verify";
+const MAX_VERIFY_BODY_BYTES = 1024;
 const TOKEN_HEADER = "x-portal-studio-token";
 const MAX_HEARTBEAT_BODY_BYTES = 1024;
 const MAX_SCREENSHOT_COMMAND_BODY_BYTES = 16 * 1024;
@@ -234,12 +243,42 @@ export function portalStudioPlugin(
   const studioRoot = path.resolve(root, ".portal-studio");
   let sessionToken = "";
   let sessionFilePersisted = false;
+  const sessionPath = path.join(studioRoot, SESSION_FILENAME);
   let lastHeartbeatAtMs: number | undefined;
+  let lastIssuedBrowserRevision = 0;
+  let lastHotUpdateAtMs = 0;
   let pendingEvidence: {
     requestId: string;
     taskId?: string;
     annotations?: Array<{ x: number; y: number; width: number; height: number }>;
   } | null = null;
+
+  /**
+   * Content hash of the task-referenced source files, computed from disk at
+   * read time (contract §10). Missing files hash as a path marker so edits
+   * and deletions both change the revision.
+   */
+  const computeTaskSourceRevision = (task: {
+    elements: Array<{ sourceCandidates: SourceCandidate[] }>;
+  }): string => {
+    const files = new Map<string, string>();
+    for (const element of task.elements) {
+      for (const candidate of element.sourceCandidates) {
+        if (files.size >= 20) break;
+        if (files.has(candidate.file)) continue;
+        let content = "";
+        try {
+          content = readFileSync(candidate.file, "utf8");
+        } catch {
+          content = "<missing>";
+        }
+        files.set(candidate.file, content);
+      }
+    }
+    return computeSourceRevision(
+      [...files.entries()].map(([file, content]) => ({ file, content }))
+    );
+  };
 
   const readActiveHeartbeat = () => {
     try {
@@ -288,8 +327,7 @@ export function portalStudioPlugin(
    * rename, 0600).
    */
   const persistSessionFile = () => {
-    if (sessionFilePersisted) return;
-    const sessionPath = path.join(studioRoot, SESSION_FILENAME);
+    if (sessionFilePersisted && existsSync(sessionPath)) return;
     atomicWriteSessionFile(
       sessionPath,
       JSON.stringify(
@@ -346,6 +384,13 @@ export function portalStudioPlugin(
         },
       ];
     },
+    handleHotUpdate() {
+      // Informational HMR ack: a hot update was served to the browser. The
+      // reload bump remains the authoritative success signal (contract §10,
+      // D-019).
+      lastHotUpdateAtMs = Date.now();
+      return undefined;
+    },
     configureServer(server) {
       // Persist the session file only once this instance is actually
       // listening: a strictPort bind failure (port taken) means the
@@ -366,6 +411,8 @@ export function portalStudioPlugin(
         ) => {
           const isTaskPost =
             request.method === "POST" && request.url === TASKS_ENDPOINT_PATH;
+          const isTaskGet =
+            request.method === "GET" && request.url === TASKS_ENDPOINT_PATH;
           const isScreenshotPost =
             request.method === "POST" &&
             request.url === SCREENSHOTS_ENDPOINT_PATH;
@@ -380,20 +427,32 @@ export function portalStudioPlugin(
           const isPendingGet =
             request.method === "GET" &&
             request.url === PENDING_ENDPOINT_PATH;
+          const isBootstrapPost =
+            request.method === "POST" &&
+            request.url === BOOTSTRAP_ENDPOINT_PATH;
+          const isVerifyPost =
+            request.method === "POST" && request.url === VERIFY_ENDPOINT_PATH;
           if (
             !isTaskPost &&
+            !isTaskGet &&
             !isScreenshotPost &&
             !isTaskDelete &&
             !isHeartbeatPost &&
             !isScreenshotCommandPost &&
-            !isPendingGet
+            !isPendingGet &&
+            !isBootstrapPost &&
+            !isVerifyPost
           ) {
             next();
             return;
           }
           // A serving instance is by definition the successful listener, so
-          // self-healing the file here is safe (it owns the port).
-          if (!sessionFilePersisted && server.httpServer?.listening) {
+          // self-healing the file here is safe (it owns the port); the file
+          // is re-created with the SAME in-memory token if it was deleted.
+          if (
+            (!sessionFilePersisted || !existsSync(sessionPath)) &&
+            server.httpServer?.listening
+          ) {
             persistSessionFile();
           }
 
@@ -422,6 +481,16 @@ export function portalStudioPlugin(
           }
 
           // GET routes carry no body and must not enter the JSON parser.
+          if (isTaskGet) {
+            const task = readActiveTask(studioRoot);
+            if (!task) {
+              writeJsonResponse(response, 404, { error: "no_active_task" });
+              return;
+            }
+            writeJsonResponse(response, 200, { task });
+            return;
+          }
+
           if (isPendingGet) {
             writeJsonResponse(response, 200, {
               pending: pendingEvidence !== null,
@@ -430,13 +499,28 @@ export function portalStudioPlugin(
             return;
           }
 
+          // Browser bootstrap: issues a fresh monotonic browser revision.
+          // Full reloads re-run the bootstrap, so the counter bump is the
+          // authoritative "the page restarted" signal (contract §10). No
+          // body, so it returns before the JSON parser.
+          if (isBootstrapPost) {
+            lastIssuedBrowserRevision += 1;
+            writeJsonResponse(response, 200, {
+              ok: true,
+              browserRevision: lastIssuedBrowserRevision,
+            });
+            return;
+          }
+
           const bodyLimit = isScreenshotPost
             ? MAX_SCREENSHOT_BODY_BYTES
-            : isHeartbeatPost
-              ? MAX_HEARTBEAT_BODY_BYTES
-              : isScreenshotCommandPost
-                ? MAX_SCREENSHOT_COMMAND_BODY_BYTES
-                : MAX_TASK_BODY_BYTES;
+            : isVerifyPost
+              ? MAX_VERIFY_BODY_BYTES
+              : isHeartbeatPost
+                ? MAX_HEARTBEAT_BODY_BYTES
+                : isScreenshotCommandPost
+                  ? MAX_SCREENSHOT_COMMAND_BODY_BYTES
+                  : MAX_TASK_BODY_BYTES;
           const read = await readRequestBody(request, bodyLimit);
           if (!read.ok) {
             writeJsonResponse(response, read.status, {
@@ -451,6 +535,68 @@ export function portalStudioPlugin(
             raw = JSON.parse(read.body);
           } catch {
             writeJsonResponse(response, 400, { error: "invalid_json" });
+            return;
+          }
+
+          if (isVerifyPost) {
+            const payload = isRecordLike(raw) ? raw : {};
+            const requestedTimeout =
+              typeof payload.timeoutMs === "number" &&
+              Number.isFinite(payload.timeoutMs)
+                ? payload.timeoutMs
+                : DEFAULT_WAIT_TIMEOUT_MS;
+            const timeoutMs = Math.min(Math.max(requestedTimeout, 1_000), 30_000);
+            const startMs = Date.now();
+            const expectedAfter = new Date(startMs + timeoutMs).toISOString();
+            const activeTask = readActiveTask(studioRoot);
+            if (!activeTask) {
+              writeJsonResponse(response, 400, { error: "no_active_task" });
+              return;
+            }
+            const baselineBrowserRevision = activeTask.revision?.browserRevision;
+            // The HMR ack reference is the task's baseline timestamp: the
+            // agent's edit (and its hot update) happens BETWEEN the capture
+            // and the verify call, so comparing against the wait start
+            // would never see it (D-020).
+            const baselineCheckedAtMs =
+              Date.parse(activeTask.revision?.checkedAt ?? "") || startMs;
+            const hmrAck = lastHotUpdateAtMs >= baselineCheckedAtMs;
+            const sourceRevision = computeTaskSourceRevision(activeTask);
+            const wait = await performBoundedWait({
+              timeoutMs,
+              now: Date.now,
+              sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+              readState: () => ({
+                browserRevision: lastIssuedBrowserRevision,
+                baselineBrowserRevision,
+                hmrAck,
+                heartbeatOnline:
+                  deriveHeartbeatState(lastHeartbeatAtMs, Date.now()) ===
+                  "online",
+              }),
+            });
+            const state = wait.matched ? "matched" : "stale";
+            const revision = buildRevisionInfo(
+              sourceRevision,
+              lastIssuedBrowserRevision,
+              hmrAck,
+              state,
+              Date.now(),
+              expectedAfter
+            );
+            const update = updateActiveTaskEvidence(studioRoot, { revision });
+            if (!update.ok) {
+              writeJsonResponse(response, 400, { error: "revision_update_failed" });
+              return;
+            }
+            const updatedTask = readActiveTask(studioRoot);
+            writeJsonResponse(response, 200, {
+              ok: true,
+              state,
+              revision,
+              diagnostics: updatedTask?.diagnostics ?? [],
+              screenshot: updatedTask?.screenshot ?? null,
+            });
             return;
           }
 
@@ -589,6 +735,22 @@ export function portalStudioPlugin(
             });
             return;
           }
+          // Stamp the initial revision bookkeeping (schema v4): the source
+          // revision is the pre-edit baseline; the browser revision is the
+          // latest bootstrap counter; state starts as pending.
+          const stampedTask = JSON.parse(finalized.serialized) as PortalStudioTask;
+          stampedTask.revision = buildRevisionInfo(
+            computeTaskSourceRevision(stampedTask),
+            lastIssuedBrowserRevision,
+            false,
+            "pending",
+            Date.now()
+          );
+          const stamped = JSON.stringify(stampedTask, null, 2);
+          if (Buffer.byteLength(stamped, "utf8") > MAX_ARTIFACT_BYTES) {
+            writeJsonResponse(response, 400, { error: "artifact_too_large" });
+            return;
+          }
 
           // Replace lifecycle, transaction-safe: only READ the superseded
           // task's screenshot reference before the write; delete it only
@@ -600,11 +762,7 @@ export function portalStudioPlugin(
             studioRoot,
             resolveActiveTaskPath(studioRoot)
           );
-          atomicWriteTaskFile(
-            studioRoot,
-            "active-task.json",
-            finalized.serialized
-          );
+          atomicWriteTaskFile(studioRoot, "active-task.json", stamped);
           if (
             supersededScreenshot &&
             supersededScreenshot !== task.screenshot?.file

@@ -9,7 +9,7 @@
  * renders all three versions.
  */
 
-export const TASK_SCHEMA_VERSION = 3 as const;
+export const TASK_SCHEMA_VERSION = 4 as const;
 export const TASK_SCHEMA_VERSION_V1 = 1 as const;
 export const TASK_SCHEMA_VERSION_V2 = 2 as const;
 
@@ -111,6 +111,26 @@ export type HeartbeatState = "online" | "stale" | "offline";
  * Server-derived page state (never trusted from the browser alone — the
  * server computes the state from the last client report time).
  */
+/** Revision-tracking states (contract §10, schema v4). */
+export type RevisionState = "pending" | "matched" | "stale";
+
+/**
+ * Update-verification bookkeeping (schema v4): the source revision is the
+ * content hash of the task-referenced source files (computed by the dev
+ * server from disk); the browser revision is a server-issued monotonic
+ * counter bumped at every bootstrap (full reload); HMR ack is informational
+ * (server-observed hot update), the reload bump is the authoritative signal.
+ */
+export type RevisionInfo = {
+  sourceRevision: string;
+  browserRevision: number;
+  hmrAck: boolean;
+  /** ISO deadline of the bounded wait (set while verifying). */
+  expectedAfter?: string;
+  state: RevisionState;
+  checkedAt: string;
+};
+
 export type HeartbeatReport = {
   state: HeartbeatState;
   /** Last client heartbeat report observed by the server. */
@@ -137,6 +157,8 @@ export type PortalStudioTask = {
   diagnostics?: DiagnosticEntry[];
   /** Server-derived page state (schema v3). */
   heartbeat?: HeartbeatReport;
+  /** Update-verification bookkeeping (schema v4). */
+  revision?: RevisionInfo;
 };
 
 /** v1 payload shape (accepted by the server, normalized to v2+). */

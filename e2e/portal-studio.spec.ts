@@ -13,7 +13,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { expect, test } from "@playwright/test";
@@ -156,7 +156,7 @@ test("users page: single, shift-multi, marquee, replace, screenshot (3 rounds)",
   await saveTask(page, "E2E single: increase row padding");
 
   let task = readActiveTask();
-  expect(task.schemaVersion).toBe(3);
+  expect(task.schemaVersion).toBe(4);
   expect(task.elements).toHaveLength(1);
   const names = task.elements[0].componentCandidates
     .map((candidate) => candidate.name)
@@ -358,7 +358,7 @@ test("dev page: keyboard single and Shift+Enter multi, agent-side writes, guards
   );
   expect(typeof token).toBe("string");
   const agentTask = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     taskId: "agent-task-2",
     createdAt: new Date().toISOString(),
     url: single.url,
@@ -587,4 +587,186 @@ test("runtime diagnostics: console.error read-back, heartbeat authority, screens
   const latePayload = (await lateCommand.json()) as { heartbeat?: { state?: string } };
   expect(latePayload.heartbeat?.state).not.toBe("online");
   expect(["stale", "offline"]).toContain(latePayload.heartbeat?.state);
+});
+
+test("update verification loop: real edit, HMR path, reload-bump path, MCP smoke", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+
+  // Capture a baseline task.
+  await page.locator("#portal-studio-root .ps-toggle").click();
+  await page
+    .locator("#portal-studio-root [role='toolbar'] button", {
+      hasText: "Pick element",
+    })
+    .click();
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+  await page
+    .locator("#portal-studio-root textarea")
+    .fill("verify loop baseline");
+  await page
+    .locator("#portal-studio-root button", { hasText: "Save task" })
+    .click();
+  await expect(
+    page.locator("#portal-studio-root [role='toolbar']", {
+      hasText: "Task saved",
+    })
+  ).toBeVisible();
+
+  const token = await page.evaluate(
+    () => window.__PORTAL_STUDIO_CONFIG__?.token
+  );
+  const baseline = readActiveTask();
+  expect(baseline.revision).toBeDefined();
+  const baselineSourceRevision = baseline.revision!.sourceRevision;
+
+  // REAL edit: touch the referenced source file (HMR will serve the update).
+  const targetFile = path.resolve("src/components/ui/table.tsx");
+  const original = readFileSync(targetFile, "utf8");
+  try {
+    writeFileSync(targetFile, `${original}\n// portal-studio verify marker\n`);
+
+    // 1) HMR path: verify must match via (hmrAck && online).
+    const hmrVerify = await page.request.post(
+      resolvePortalTestURL(environment, "__portal-studio/verify"),
+      {
+        headers: { "X-Portal-Studio-Token": token },
+        data: { timeoutMs: 8000 },
+      }
+    );
+    expect(hmrVerify.status()).toBe(200);
+    const hmrPayload = (await hmrVerify.json()) as {
+      ok?: boolean;
+      state?: string;
+      revision?: { sourceRevision?: string; browserRevision?: number; hmrAck?: boolean };
+    };
+    expect(hmrPayload.ok).toBe(true);
+    expect(hmrPayload.state).toBe("matched");
+    // The source revision must reflect the edited file (changed baseline).
+    expect(hmrPayload.revision?.sourceRevision).not.toBe(baselineSourceRevision);
+    const updatedTask = readActiveTask();
+    expect(updatedTask.revision?.state).toBe("matched");
+    expect(updatedTask.revision?.hmrAck).toBe(true);
+  } finally {
+    writeFileSync(targetFile, original);
+  }
+
+  // 2) Reload-bump path (authoritative): reload re-runs the bootstrap, so
+  //    the browser revision increases and verify matches via the bump.
+  const preReloadRevision = readActiveTask().revision!.browserRevision;
+  await page.reload();
+  await page.waitForLoadState("domcontentloaded");
+  await page.waitForTimeout(1500);
+  const reloadVerify = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/verify"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: { timeoutMs: 5000 },
+    }
+  );
+  expect(reloadVerify.status()).toBe(200);
+  const reloadPayload = (await reloadVerify.json()) as {
+    state?: string;
+    revision?: { browserRevision?: number };
+  };
+  expect(reloadPayload.state).toBe("matched");
+  expect(reloadPayload.revision?.browserRevision).toBeGreaterThan(
+    preReloadRevision
+  );
+
+  // Induce a diagnostic AFTER the reload so the fresh ring buffer carries it.
+  const seeded = "VERIFY-SECRET-xyz";
+  await page.evaluate((secret) => {
+    console.error(`verify induced failure with Bearer ${secret}`);
+  }, seeded);
+
+  // 3) Fresh screenshot + diagnostics read-back through the JSON path.
+  const command = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/screenshot"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: {},
+    }
+  );
+  expect(command.status()).toBe(200);
+  await expect
+    .poll(
+      () =>
+        readActiveTask().diagnostics?.some((entry) =>
+          entry.message.includes("verify induced failure")
+        ) ?? false,
+      { timeout: 15_000 }
+    )
+    .toBe(true);
+  const finalTask = readActiveTask();
+  expect(finalTask.screenshot?.capturedAt).toBeDefined();
+  expect(JSON.stringify(finalTask)).not.toContain(seeded);
+  expect(finalTask.revision?.state).toBe("matched");
+
+  // 4) MCP smoke: all five tools against the same artifact + endpoints.
+  // The token comes from the page config (the session file is recreated by
+  // the server per request, but the in-page token is authoritative).
+  const { spawn } = await import("node:child_process");
+  const mcp = spawn(process.execPath, ["scripts/portal-studio-mcp.mjs"], {
+    env: {
+      ...process.env,
+      PORTAL_STUDIO_DIR: studioDir,
+      PORTAL_STUDIO_ORIGIN: environment.baseURL.replace(/\/$/, ""),
+      PORTAL_STUDIO_TOKEN: token,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let mcpOut = "";
+  mcp.stdout.on("data", (chunk) => {
+    mcpOut += String(chunk);
+  });
+  const mcpRequest = (id: number, method: string, params?: unknown) => {
+    mcp.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id, method, ...(params ? { params } : {}) })}\n`
+    );
+  };
+  mcpRequest(1, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "e2e", version: "1" } });
+  mcpRequest(2, "tools/list");
+  mcpRequest(3, "tools/call", { name: "print_task", arguments: {} });
+  mcpRequest(4, "tools/call", { name: "read_diagnostics", arguments: {} });
+  mcpRequest(5, "tools/call", { name: "wait_verification", arguments: { timeoutMs: 3000 } });
+  mcpRequest(6, "tools/call", { name: "current_screenshot", arguments: {} });
+  await expect
+    .poll(() => (mcpOut.match(/"id":6/g)?.length ?? 0) >= 1, { timeout: 20_000 })
+    .toBe(true);
+  mcp.kill();
+
+  const lines = mcpOut
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as { id: number; result?: { tools?: unknown; content?: Array<{ text: string }>; isError?: boolean } });
+  const byId = new Map(lines.map((line) => [line.id, line]));
+  const tools = byId.get(2)?.result?.tools as Array<{ name: string }> | undefined;
+  expect(tools?.map((tool) => tool.name)).toEqual([
+    "capture_task",
+    "print_task",
+    "current_screenshot",
+    "read_diagnostics",
+    "wait_verification",
+  ]);
+  const printed = byId.get(3)?.result?.content?.[0]?.text ?? "";
+  expect(JSON.parse(printed).taskId).toBe(finalTask.taskId);
+  const diagnostics = JSON.parse(byId.get(4)?.result?.content?.[0]?.text ?? "[]") as Array<{ message: string }>;
+  expect(
+    diagnostics.some((entry) => entry.message.includes("verify induced failure"))
+  ).toBe(true);
+  expect(JSON.stringify(diagnostics)).not.toContain(seeded);
+  const wait = byId.get(5)?.result as { isError?: boolean };
+  expect(wait?.isError).not.toBe(true);
+  const shot = JSON.parse(byId.get(6)?.result?.content?.[0]?.text ?? "{}") as {
+    file?: string;
+    capturedAt?: string;
+  };
+  expect(shot.file).toMatch(/^screenshots\/.+\.png$/);
+  expect(shot.capturedAt).toBeDefined();
 });

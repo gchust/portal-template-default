@@ -175,6 +175,23 @@ export function mountPortalStudio(config?: PortalStudioConfig): boolean {
   // Runtime diagnostics + heartbeat/evidence loop (idempotent across HMR).
   installDiagnosticsCapture(sharedDiagnosticsBuffer);
   startEvidenceLoop(config, sharedDiagnosticsBuffer);
+  // Bootstrap marker: requests a fresh monotonic browser revision from the
+  // dev server. Full reloads re-run this, so the counter bump is the
+  // authoritative "page restarted" signal (contract §10).
+  fetch("/__portal-studio/bootstrap", {
+    method: "POST",
+    headers: { "X-Portal-Studio-Token": config.token },
+  })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((payload: { browserRevision?: number } | null) => {
+      if (payload?.browserRevision !== undefined) {
+        (window as unknown as Record<string, unknown>).__PORTAL_STUDIO_BROWSER_REVISION__ =
+          payload.browserRevision;
+      }
+    })
+    .catch(() => {
+      // Dev server restarting; the next reload re-bootstraps.
+    });
   (window as Window & { __PORTAL_STUDIO_MOUNTED__?: boolean }).__PORTAL_STUDIO_MOUNTED__ = true;
   return true;
 }

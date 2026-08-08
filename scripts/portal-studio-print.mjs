@@ -132,6 +132,14 @@ function formatMarkdown(task) {
         (task.heartbeat.lastOnlineAt ? ` lastOnlineAt=${task.heartbeat.lastOnlineAt}` : "")
     );
   }
+  if (task.revision) {
+    const revision = task.revision;
+    lines.push(
+      `- revision: source=${revision.sourceRevision.slice(0, 12)} browser=${revision.browserRevision} state=${revision.state} hmrAck=${revision.hmrAck}` +
+        (revision.expectedAfter ? ` expectedAfter=${revision.expectedAfter}` : "") +
+        ` checkedAt=${revision.checkedAt}`
+    );
+  }
   if (Array.isArray(task.diagnostics) && task.diagnostics.length) {
     lines.push("- diagnostics:");
     for (const entry of task.diagnostics.slice(0, 20)) {

@@ -27,6 +27,41 @@ const makePageElement = (text = "Hello row", id = "") => {
   return row;
 };
 
+const jsonResponse = (payload: unknown, ok = true) => ({
+  ok,
+  json: async () => payload,
+});
+
+/**
+ * URL-routed fetch mock: the panel's status GET and the save-flow POSTs are
+ * dispatched by URL so mock ordering never depends on effect timing.
+ */
+const mockFetchRoutes = (
+  routes: Array<{
+    url: string;
+    method: string;
+    respond: () => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
+  }>
+) => {
+  const fetchMock = vi.fn(
+    (input: string | URL | Request, init?: { method?: string }) => {
+      const url = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      const route = routes.find(
+        (candidate) =>
+          candidate.url === url && candidate.method.toUpperCase() === method
+      );
+      return Promise.resolve(
+        route
+          ? route.respond()
+          : { ok: false, json: async () => ({ error: "unexpected" }) }
+      );
+    }
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+};
+
 const openAndPick = async (
   user: ReturnType<typeof userEvent.setup>,
   element: Element
@@ -47,6 +82,7 @@ beforeEach(async () => {
 afterEach(() => {
   document.body.innerHTML = "";
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("StudioToolbar", () => {
@@ -78,6 +114,39 @@ describe("StudioToolbar", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows the revision status when the active task has one", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        task: {
+          revision: {
+            sourceRevision: "ab".repeat(32),
+            browserRevision: 7,
+            hmrAck: true,
+            state: "matched",
+            checkedAt: "2026-08-07T12:00:00.000Z",
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    expect(await screen.findByText(/Revision/)).toBeInTheDocument();
+    expect(screen.getByText("abababab", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByText("7", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByText(/matched/)).toBeInTheDocument();
+    const [url, init] = fetchMock.mock.calls[0] as [
+      string,
+      { headers: Record<string, string> }
+    ];
+    expect(url).toBe("/__portal-studio/tasks");
+    expect(init.headers["X-Portal-Studio-Token"]).toBe("test-token");
+  });
+
   it("starts region marquee mode and cancels with Escape", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
@@ -97,30 +166,32 @@ describe("StudioToolbar", () => {
   it("picks a single element with the keyboard, saves a v2 task with a screenshot ref", async () => {
     const user = userEvent.setup();
     const row = makePageElement("Alice", "row-a");
-    const fetchMock = vi.fn();
-    // Task POST first, screenshot POST second (the task must exist before
-    // the evidence merge).
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        taskId: "task-1",
-        file: "/repo/.portal-studio/tasks/active-task.json",
-        sourceCandidates: [
-          { kind: "module", file: "/repo/registry/users/list.tsx", line: 42 },
-        ],
-      }),
-    });
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        file: "screenshots/task-1.png",
-        width: 100,
-        height: 50,
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({
+            ok: true,
+            taskId: "task-1",
+            file: "/repo/.portal-studio/tasks/active-task.json",
+            sourceCandidates: [
+              { kind: "module", file: "/repo/registry/users/list.tsx", line: 42 },
+            ],
+          }),
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({
+            ok: true,
+            file: "screenshots/task-1.png",
+            width: 100,
+            height: 50,
+          }),
+      },
+    ]);
 
     render(<StudioToolbar config={config} />);
     await openAndPick(user, row);
@@ -138,9 +209,12 @@ describe("StudioToolbar", () => {
     await waitFor(() => {
       expect(screen.getByText(/Task saved/)).toBeInTheDocument();
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const postCalls = fetchMock.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
+    );
+    expect(postCalls).toHaveLength(2);
 
-    const [taskUrl, taskInit] = fetchMock.mock.calls[0] as [
+    const [taskUrl, taskInit] = postCalls[0] as [
       string,
       { headers: Record<string, string>; body: string }
     ];
@@ -149,14 +223,14 @@ describe("StudioToolbar", () => {
     const taskPayload = JSON.parse(taskInit.body);
     expect(taskPayload.taskId).toBeTruthy();
 
-    const [shotUrl, shotInit] = fetchMock.mock.calls[1] as [
+    const [shotUrl, shotInit] = postCalls[1] as [
       string,
       { headers: Record<string, string>; body: string }
     ];
     expect(shotUrl).toBe("/__portal-studio/screenshots");
     expect(JSON.parse(shotInit.body).taskId).toBeTruthy();
     const payload = JSON.parse(taskInit.body);
-    expect(payload.schemaVersion).toBe(3);
+    expect(payload.schemaVersion).toBe(4);
     expect(payload.instruction).toBe("Increase padding");
     expect(payload.elements).toHaveLength(1);
     expect(payload.diagnostics).toEqual([]);
@@ -199,25 +273,24 @@ describe("StudioToolbar", () => {
   it("starts a new picking session with a clean selection after close/reopen", async () => {
     const user = userEvent.setup();
     const row = makePageElement("Alice", "row-a");
-    const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        taskId: "task-1",
-        sourceCandidates: [],
-      }),
-    });
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        file: "screenshots/task-1.png",
-        width: 100,
-        height: 50,
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, taskId: "task-1", sourceCandidates: [] }),
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({
+            ok: true,
+            file: "screenshots/task-1.png",
+            width: 100,
+            height: 50,
+          }),
+      },
+    ]);
 
     render(<StudioToolbar config={config} />);
     await openAndPick(user, row);
@@ -264,25 +337,25 @@ describe("StudioToolbar", () => {
   it("resets the selection after a successful save", async () => {
     const user = userEvent.setup();
     const row = makePageElement("Alice", "row-a");
-    const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        taskId: "task-1",
-        sourceCandidates: [],
-      }),
-    });
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        file: "screenshots/task-1.png",
-        width: 100,
-        height: 50,
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, taskId: "task-1", sourceCandidates: [] }),
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({
+            ok: true,
+            file: "screenshots/task-1.png",
+            width: 100,
+            height: 50,
+          }),
+      },
+    ]);
+    void fetchMock;
 
     render(<StudioToolbar config={config} />);
     await openAndPick(user, row);
@@ -307,11 +380,14 @@ describe("StudioToolbar", () => {
 
   it("clears the task through the DELETE endpoint", async () => {
     const user = userEvent.setup();
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ ok: true, clearedTask: true }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "DELETE",
+        respond: async () => jsonResponse({ ok: true, clearedTask: true }),
+      },
+    ]);
+    void fetchMock;
     render(<StudioToolbar config={config} />);
     await user.click(
       screen.getByRole("button", { name: "Open Portal Studio" })
@@ -320,13 +396,12 @@ describe("StudioToolbar", () => {
     await waitFor(() => {
       expect(screen.getByText("Task cleared")).toBeInTheDocument();
     });
-    const [url, init] = fetchMock.mock.calls[0] as [
-      string,
-      { method: string; headers: Record<string, string> }
-    ];
-    expect(url).toBe("/__portal-studio/tasks");
-    expect(init.method).toBe("DELETE");
-    expect(init.headers["X-Portal-Studio-Token"]).toBe("test-token");
+    const deleteCall = fetchMock.mock.calls.find(
+      (call) => (call[1] as { method?: string } | undefined)?.method === "DELETE"
+    ) as [string, { method: string; headers: Record<string, string> }];
+    expect(deleteCall[0]).toBe("/__portal-studio/tasks");
+    expect(deleteCall[1].method).toBe("DELETE");
+    expect(deleteCall[1].headers["X-Portal-Studio-Token"]).toBe("test-token");
   });
 
   it("shows an error when the save fails", async () => {

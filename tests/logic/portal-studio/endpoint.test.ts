@@ -190,7 +190,7 @@ describe("task sanitization", () => {
   });
 
   it("rejects wrong schema, missing fields, and unsafe ids", () => {
-    expect(sanitizeTask({ ...v2Task, schemaVersion: 4 })).toBeNull();
+    expect(sanitizeTask({ ...v2Task, schemaVersion: 5 })).toBeNull();
     expect(sanitizeTask({ ...v2Task, taskId: "../evil" })).toBeNull();
     expect(sanitizeTask({ ...v2Task, url: "" })).toBeNull();
     expect(
