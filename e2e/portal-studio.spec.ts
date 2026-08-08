@@ -299,23 +299,27 @@ test("users page: single, shift-multi, marquee, replace, screenshot (3 rounds)",
   expect(serialized).not.toMatch(/Bearer /);
   expect(serialized.length).toBeLessThan(256 * 1024);
 
-  // Clear lifecycle: return to the idle panel, then DELETE the task and its
-  // screenshot.
+  // Clear lifecycle (G04): Complete is the ONLY normal clear path — the
+  // old Clear-task button is gone; the agent-side DELETE endpoint still
+  // clears the task and its screenshot.
   await page
     .locator("#portal-studio-root [role='toolbar'] button", {
       hasText: "Done",
     })
     .click();
-  await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
+  await expect(
+    page.locator("#portal-studio-root [role='toolbar'] button", {
       hasText: "Clear task",
     })
-    .click();
-  await expect(
-    page.locator("#portal-studio-root [role='toolbar']", {
-      hasText: "Task cleared",
-    })
-  ).toBeVisible();
+  ).toHaveCount(0);
+  const token = await page.evaluate(
+    () => window.__PORTAL_STUDIO_CONFIG__?.token
+  );
+  const cleared = await page.request.delete(
+    resolvePortalTestURL(environment, "__portal-studio/tasks"),
+    { headers: { "X-Portal-Studio-Token": token } }
+  );
+  expect(cleared.status()).toBe(200);
   await expect
     .poll(() => {
       try {
@@ -898,7 +902,7 @@ test("dock: compact toolbar, drag persists across reload, More menu (G01)", asyn
   await expect(dock).toBeVisible();
   await expect(root.locator(".ps-toggle")).toBeVisible();
   await expect(root.locator(".ps-badge")).toBeVisible();
-  await expect(root.locator(".ps-more-button")).toBeVisible();
+  await expect(root.locator("[aria-label='More']")).toBeVisible();
   await expect(root.locator("[role='toolbar']")).toHaveCount(0);
   // No emoji glyphs (D-034 #5).
   expect(await root.locator(".ps-toggle").innerText()).not.toContain("🛠");
@@ -923,7 +927,7 @@ test("dock: compact toolbar, drag persists across reload, More menu (G01)", asyn
   expect(Math.round(after.y)).toBe(Math.round(moved.y));
 
   // More menu opens, Esc closes.
-  await root.locator(".ps-more-button").click();
+  await root.locator("[aria-label='More']").click();
   await expect(root.locator(".ps-more-menu")).toBeVisible();
   await expect(root.locator(".ps-more-menu")).toContainText(
     "Reset dock position"
@@ -933,7 +937,7 @@ test("dock: compact toolbar, drag persists across reload, More menu (G01)", asyn
 
   // Reset dock position via MOUSE (F1: outside-click must not swallow the
   // menuitem click across the shadow boundary) restores the default anchor.
-  await root.locator(".ps-more-button").click();
+  await root.locator("[aria-label='More']").click();
   await root
     .locator(".ps-more-menu [role='menuitem']", { hasText: "Reset dock position" })
     .click();
@@ -948,7 +952,7 @@ test("dock: compact toolbar, drag persists across reload, More menu (G01)", asyn
   await page.mouse.down();
   await page.mouse.move(topBox.x + 20, 5, { steps: 6 });
   await page.mouse.up();
-  await root.locator(".ps-more-button").click();
+  await root.locator("[aria-label='More']").click();
   const menuBox = (await root.locator(".ps-more-menu").boundingBox())!;
   expect(Math.round(menuBox.y)).toBeGreaterThanOrEqual(0);
   expect(Math.round(menuBox.y)).toBeGreaterThan(
@@ -1124,7 +1128,7 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   await expect(root.locator(".ps-annotation-item")).toContainText(/hidden/i);
 
   // More → Clear all annotations (confirm) → valid empty v5 task.
-  await root.locator(".ps-more-button").click();
+  await root.locator("[aria-label='More']").click();
   await root
     .locator(".ps-more-menu [role='menuitem']", {
       hasText: "Clear all annotations",
@@ -1148,4 +1152,82 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   // Reload after clear-all: still empty, nothing resurrects.
   await page.reload();
   await expect(root.locator(".ps-badge")).toHaveText("0");
+});
+
+test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04)", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+
+  // One annotation to work with.
+  await startPicking(page);
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G04 complete me");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-badge")).toHaveText("1");
+
+  // The old Clear-task normal path is gone (Complete replaced it).
+  await expect(
+    root.locator("[role='toolbar'] button", { hasText: "Clear task" })
+  ).toHaveCount(0);
+
+  // Copy parity: the copied Markdown equals `print --markdown` (the same
+  // shared formatter). Headless clipboard may be denied → fallback dialog.
+  const printed = execFileSync(
+    process.execPath,
+    ["scripts/portal-studio-print.mjs", "--markdown"],
+    { encoding: "utf8" }
+  ).trim();
+  // Poll: Copy must reflect the SERVER artifact (the post-save refresh
+  // merges screenshot + heartbeat), byte-identical to the CLI output.
+  await expect
+    .poll(
+      async () => {
+        await root.locator("[aria-label='Copy']").click();
+        const fallback = root.locator(".ps-copy-fallback textarea");
+        if (await fallback.isVisible().catch(() => false)) {
+          return (await fallback.inputValue()).trim();
+        }
+        return await page.evaluate(
+          () => navigator.clipboard.readText().catch(() => "")
+        );
+      },
+      { timeout: 15000 }
+    )
+    .toBe(printed);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+
+  // Explicit per-annotation Complete → persisted; verify exits 0 with
+  // completed:true (open-task exit semantics unchanged elsewhere).
+  await root.locator(".ps-annotation-item [aria-label='Complete']").click();
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.status)
+    .toBe("completed");
+  const verify = execFileSync(
+    process.execPath,
+    ["scripts/portal-studio-verify.mjs", "--timeout-ms", "1000"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PORTAL_STUDIO_DIR: studioDir,
+        PORTAL_STUDIO_ORIGIN: resolvePortalTestURL(environment, "").replace(/\/$/, ""),
+      },
+    }
+  );
+  const verifyPayload = JSON.parse(verify) as { completed?: boolean };
+  expect(verifyPayload.completed).toBe(true);
+
+  // Completed rendering survives reload.
+  await page.reload();
+  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await openStudio(page);
+  await expect(root.locator(".ps-annotation-item")).toContainText(
+    /completed/i
+  );
 });

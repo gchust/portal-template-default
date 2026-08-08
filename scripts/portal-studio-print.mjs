@@ -23,6 +23,11 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+// Shared formatter (G04, D-033 #15): the single Markdown/JSON renderer used
+// by the browser Copy action, the print CLI, and MCP print_task. The `.ts`
+// specifier keeps this script standalone under Node 22 type stripping.
+import { formatTaskJson, formatTaskMarkdown } from "../src/studio/format.ts";
+
 const TASK_FILENAME = "active-task.json";
 const TASK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
@@ -65,140 +70,6 @@ function readTask(studioRoot, taskId) {
 
 class TaskNotFoundError extends Error {}
 
-function formatElementLines(elements, prefix) {
-  const lines = [];
-  for (const [index, element] of elements.entries()) {
-    const label = elements.length > 1 ? `Element ${index + 1}: <${element.tagName}>` : `Element: <${element.tagName}>`;
-    lines.push(`### ${label}`, "");
-    lines.push("#### Selector candidates");
-    lines.push(...element.selectorCandidates.map(
-      (candidate) => `- [${candidate.kind}] ${candidate.selector}`
-    ));
-    lines.push("", "#### Component candidates");
-    lines.push(...(element.componentCandidates.length
-      ? element.componentCandidates
-          .slice(0, 20)
-          .map((candidate) => `- ${candidate.name ?? "(unknown)"}${candidate.kind ? ` (${candidate.kind})` : ""}`)
-      : ["- (none — DOM fallback)"]));
-    lines.push("", "#### Source candidates");
-    lines.push(...(element.sourceCandidates.length
-      ? element.sourceCandidates.map((source) =>
-          `- ${source.file}${typeof source.line === "number" ? `:${source.line}` : ""}`
-        )
-      : ["- (none)"]));
-    lines.push("", "#### Snapshot");
-    lines.push(`- text: ${element.snapshot.text.slice(0, 200) || "(empty)"}`);
-    if (element.snapshot.domOutline) {
-      lines.push(`- domOutline: ${element.snapshot.domOutline}`);
-    }
-    if (element.snapshot.computedStyle) {
-      lines.push(`- computedStyle: ${JSON.stringify(element.snapshot.computedStyle)}`);
-    }
-    lines.push(`- attributes: ${JSON.stringify(element.snapshot.attributes)}`);
-    lines.push(`- childCount: ${element.snapshot.childCount}`);
-    lines.push("");
-  }
-  return lines;
-}
-
-function formatMarkdown(task) {
-  // Annotation-first (schema v5): per-annotation comments with their own
-  // elements/regions. Legacy v1–v4 payloads keep the single-instruction
-  // rendering (dual reader, D-033 #17).
-  const isV5 = task.schemaVersion === 5 && Array.isArray(task.annotations);
-  const elements = isV5
-    ? task.annotations.flatMap((annotation) => annotation.elements)
-    : Array.isArray(task.elements)
-      ? task.elements
-      : Array.isArray(task.element)
-        ? task.element
-        : task.element
-          ? [task.element]
-          : [];
-  const lines = [
-    `# Task ${task.taskId}`,
-    "",
-    `- schemaVersion: ${task.schemaVersion}`,
-    `- url: ${task.url}`,
-    `- title: ${task.title}`,
-    `- capturedAt: ${task.createdAt}`,
-  ];
-  if (!isV5 && task.region) {
-    lines.push(
-      `- region: ${task.region.x},${task.region.y} ${task.region.width}x${task.region.height}`
-    );
-  }
-  if (task.screenshot) {
-    const capturedAt = task.screenshot.capturedAt ? ` capturedAt=${task.screenshot.capturedAt}` : "";
-    lines.push(`- screenshot: ${task.screenshot.file} (${task.screenshot.width}x${task.screenshot.height}${capturedAt})`);
-  }
-  if (task.heartbeat) {
-    lines.push(
-      `- heartbeat: ${task.heartbeat.state} reportedAt=${task.heartbeat.reportedAt} checkedAt=${task.heartbeat.checkedAt}` +
-        (task.heartbeat.lastOnlineAt ? ` lastOnlineAt=${task.heartbeat.lastOnlineAt}` : "")
-    );
-  }
-  if (task.revision) {
-    const revision = task.revision;
-    lines.push(
-      `- revision: source=${revision.sourceRevision.slice(0, 12)} browser=${revision.browserRevision} state=${revision.state} hmrAck=${revision.hmrAck}` +
-        (revision.expectedAfter ? ` expectedAfter=${revision.expectedAfter}` : "") +
-        ` checkedAt=${revision.checkedAt}`
-    );
-  }
-  if (Array.isArray(task.diagnostics) && task.diagnostics.length) {
-    lines.push("- diagnostics:");
-    for (const entry of task.diagnostics.slice(0, 20)) {
-      const urlPart = entry.url ? ` url=${entry.url}` : "";
-      lines.push(
-        `  - [${entry.source}] x${entry.occurrenceCount} @ ${entry.timestamp}: ${entry.message.slice(0, 160)}${urlPart}`
-      );
-    }
-    if (task.diagnostics.length > 20) {
-      lines.push(`  - … ${task.diagnostics.length - 20} more`);
-    }
-  }
-  if (task.businessContext && task.businessContext.length) {
-    lines.push("- businessContext:");
-    lines.push(...task.businessContext.slice(0, 20).map(
-      (item) => `  - [${item.type}] ${item.id ?? ""} (source: ${item.source})`
-    ));
-  }
-  if (task.redaction) {
-    lines.push(
-      `- redaction: droppedKeys=${JSON.stringify(task.redaction.droppedKeys)} redactedValues=${task.redaction.redactedValues} truncatedValues=${task.redaction.truncatedValues}`
-    );
-  }
-  if (isV5) {
-    lines.push("", `## Annotations (${task.annotations.length})`, "");
-    for (const [index, annotation] of task.annotations.entries()) {
-      lines.push(
-        `### Annotation ${index + 1}: [${annotation.kind}] ${annotation.annotationId}`,
-        ""
-      );
-      lines.push(`Comment: ${annotation.comment || "(empty)"}`, "");
-      if (annotation.region) {
-        lines.push(
-          `- region: ${annotation.region.x},${annotation.region.y} ${annotation.region.width}x${annotation.region.height}`
-        );
-      }
-      if (annotation.status === "completed") {
-        lines.push(`- status: completed${annotation.completedAt ? ` @ ${annotation.completedAt}` : ""}`);
-      }
-      if (annotation.elements && annotation.elements.length) {
-        lines.push(...formatElementLines(annotation.elements, ""));
-      }
-      lines.push("");
-    }
-  } else {
-    lines.push("", "## Instruction", task.instruction || "(empty)", "");
-    if (elements.length) {
-      lines.push(...formatElementLines(elements, ""));
-    }
-  }
-  return lines.join("\n");
-}
-
 function main() {
   let options;
   try {
@@ -206,10 +77,11 @@ function main() {
     const studioRoot = resolveStudioRoot();
     const task = readTask(studioRoot, options.taskId);
     if (options.format === "markdown") {
-      process.stdout.write(formatMarkdown(task));
+      process.stdout.write(formatTaskMarkdown(task));
     } else {
-      process.stdout.write(`${JSON.stringify(task, null, 2)}\n`);
+      process.stdout.write(formatTaskJson(task));
     }
+    process.stdout.write("\n");
     process.exitCode = 0;
   } catch (error) {
     if (error instanceof TaskNotFoundError || error.code === "ENOENT") {

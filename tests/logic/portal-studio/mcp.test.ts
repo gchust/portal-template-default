@@ -35,14 +35,22 @@ const sampleTask = {
   createdAt: "2026-08-07T12:00:00.000Z",
   url: "http://127.0.0.1:5176/users",
   title: "t",
-  instruction: "i",
-  elements: [
+  annotations: [
     {
-      tagName: "div",
-      selectorCandidates: [],
-      componentCandidates: [{ name: "X", key: null, kind: "fiber" }],
-      sourceCandidates: [],
-      snapshot: { text: "t", attributes: {}, childCount: 0 },
+      annotationId: "ann-mcp-1",
+      kind: "element",
+      comment: "i",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      status: "open",
+      elements: [
+        {
+          tagName: "div",
+          selectorCandidates: [],
+          componentCandidates: [{ name: "X", key: null, kind: "fiber" }],
+          sourceCandidates: [],
+          snapshot: { text: "t", attributes: {}, childCount: 0 },
+        },
+      ],
     },
   ],
   businessContext: [],
@@ -160,6 +168,44 @@ describe("portal-studio MCP server (stdio, zero-dep)", () => {
       env: { ...process.env, PORTAL_STUDIO_DIR: dir },
     });
     expect(JSON.parse(printed)).toEqual(sampleTask);
+    client.close();
+  });
+
+  it("print_task normalizes a v4 artifact through the shared formatter (F-5)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "portal-studio-mcp-v4-"));
+    mkdirSync(path.join(dir, "tasks"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "tasks", "active-task.json"),
+      JSON.stringify({
+        schemaVersion: 4,
+        taskId: "task-mcp-v4",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        url: "http://127.0.0.1:5176/users",
+        title: "t",
+        instruction: "legacy v4 via MCP",
+        elements: [
+          {
+            tagName: "div",
+            selectorCandidates: [],
+            componentCandidates: [],
+            sourceCandidates: [],
+            snapshot: { text: "t", attributes: {}, childCount: 0 },
+          },
+        ],
+        businessContext: [],
+        redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+      })
+    );
+    const client = new McpClient(dir);
+    const result = (await client.request("tools/call", {
+      name: "print_task",
+      arguments: {},
+    })) as McpResponse;
+    const content = (result.result as { content: Array<{ text: string }> })
+      .content[0].text;
+    const parsed = JSON.parse(content);
+    expect(parsed.schemaVersion).toBe(5);
+    expect(parsed.annotations[0].comment).toBe("legacy v4 via MCP");
     client.close();
   });
 

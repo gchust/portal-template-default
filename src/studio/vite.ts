@@ -63,6 +63,7 @@ import {
   verifySessionToken,
 } from "./endpoint";
 import { existsSync, readFileSync } from "node:fs";
+import { isTaskCompleted } from "./format.ts";
 import type {
   ElementCapture,
   PortalStudioTask,
@@ -667,9 +668,15 @@ export function portalStudioPlugin(
               return;
             }
             const updatedTask = readActiveTask(studioRoot);
+            // G04 (D-033 #13): a fully completed task is reported so the
+            // verify CLI can exit 0 without waiting for an edit.
+            const completed = updatedTask
+              ? isTaskCompleted(updatedTask)
+              : false;
             writeJsonResponse(response, 200, {
               ok: true,
               state,
+              completed,
               revision,
               diagnostics: updatedTask?.diagnostics ?? [],
               screenshot: updatedTask?.screenshot ?? null,

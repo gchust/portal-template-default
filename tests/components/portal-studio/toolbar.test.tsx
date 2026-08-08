@@ -399,30 +399,29 @@ describe("StudioToolbar", () => {
     expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
   });
 
-  it("clears the task through the DELETE endpoint", async () => {
+  it("removed the Clear-task normal path (G04, D-033 #13)", async () => {
     const user = userEvent.setup();
-    const fetchMock = mockFetchRoutes([
+    makeRoutedFetch([
       {
-        url: "/__portal-studio/tasks",
-        method: "DELETE",
-        respond: async () => jsonResponse({ ok: true, clearedTask: true }),
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "keep",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
       },
     ]);
-    void fetchMock;
     render(<StudioToolbar config={config} />);
     await user.click(
       screen.getByRole("button", { name: "Open Portal Studio" })
     );
-    await user.click(screen.getByRole("button", { name: "Clear task" }));
     await waitFor(() => {
-      expect(screen.getByText("Task cleared")).toBeInTheDocument();
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
-    const deleteCall = fetchMock.mock.calls.find(
-      (call) => (call[1] as { method?: string } | undefined)?.method === "DELETE"
-    ) as [string, { method: string; headers: Record<string, string> }];
-    expect(deleteCall[0]).toBe("/__portal-studio/tasks");
-    expect(deleteCall[1].method).toBe("DELETE");
-    expect(deleteCall[1].headers["X-Portal-Studio-Token"]).toBe("test-token");
+    // Complete is the ONLY normal clear path now: no Clear task button.
+    expect(
+      screen.queryByRole("button", { name: "Clear task" })
+    ).not.toBeInTheDocument();
   });
 
   it("shows an error when the save fails", async () => {
@@ -685,6 +684,21 @@ describe("StudioToolbar", () => {
       },
     },
   });
+
+  const pageWait = (count: number) =>
+    new Promise<void>((resolve) => {
+      const check = () => {
+        const posts = (globalThis.fetch as unknown as ReturnType<
+          typeof vi.fn
+        >)?.mock?.calls?.filter(
+          (call: unknown[]) =>
+            (call[1] as { method?: string } | undefined)?.method === "POST"
+        );
+        if (!posts || posts.length > count) resolve();
+        else setTimeout(check, 20);
+      };
+      check();
+    });
 
   const loadThen = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.click(
@@ -972,6 +986,238 @@ describe("StudioToolbar", () => {
                 .annotations as { hidden?: boolean }[]
             )[0]?.hidden === true
         )
+      ).toBe(true);
+    });
+  });
+
+  // ---- Goal 04 Copy (D-033 #12, D-034 #7) ----
+
+  it("Copy uses the async Clipboard API, never mutates, and announces feedback", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "copy me",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    const postsBefore = fetchMock.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
+    ).length;
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalled();
+    });
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("Comment: copy me");
+    expect(copied).toContain("# Task task-actions-1");
+    // aria-live feedback announced (the dock badge is also role=status).
+    expect(
+      screen.getByText("Copied to clipboard")
+    ).toBeInTheDocument();
+    // Copy NEVER clears or mutates annotations (no POST, list intact).
+    const postsAfter = fetchMock.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
+    ).length;
+    expect(postsAfter).toBe(postsBefore);
+    expect(screen.getByText("copy me")).toBeInTheDocument();
+  });
+
+  it("falls back to a selectable textarea when the Clipboard API fails", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error("denied")),
+      },
+    });
+    makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "manual copy",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Copy manually",
+    });
+    const textarea = within(dialog).getByRole("textbox");
+    expect((textarea as HTMLTextAreaElement).value).toContain(
+      "Comment: manual copy"
+    );
+    // The annotation is still there — Copy did not clear anything.
+    expect(screen.getByText("manual copy")).toBeInTheDocument();
+  });
+
+  // ---- Goal 04 Complete (D-033 #13) ----
+
+  it("per-annotation Complete persists status/completedAt without double-stamping", async () => {
+    const user = userEvent.setup();
+    // Stateful routes: once a mutation POST lands, the GET (triggered by
+    // the post-flush refreshTask) reflects the completed annotation —
+    // like the real server.
+    let posted = false;
+    const openAnn = {
+      annotationId: "ann-1",
+      kind: "element",
+      comment: "finish me",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      status: "open" as const,
+      elements: [],
+    };
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse(
+            makeLoadTask([
+              posted
+                ? {
+                    ...openAnn,
+                    status: "completed" as const,
+                    completedAt: "2026-08-07T12:30:00.000Z",
+                  }
+                : openAnn,
+            ])
+          ),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => {
+          posted = true;
+          return jsonResponse({ ok: true });
+        },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Complete" }));
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      );
+      expect(
+        posts.some((call) => {
+          const annotation = (
+            JSON.parse((call[1] as { body: string }).body)
+              .annotations as {
+              status: string;
+              completedAt?: string;
+            }[]
+          )[0];
+          return (
+            annotation.status === "completed" &&
+            typeof annotation.completedAt === "string"
+          );
+        })
+      ).toBe(true);
+    });
+    // Distinct completed rendering.
+    await waitFor(() => {
+      expect(screen.getByText("Completed")).toBeInTheDocument();
+    });
+    // Second click must NOT double-stamp (status stays completed).
+    const postsAfterFirst = fetchMock.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
+    ).length;
+    await user.click(screen.getByRole("button", { name: "Complete" }));
+    await pageWait(postsAfterFirst);
+    const completedPayloads = fetchMock.mock.calls
+      .filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      )
+      .map((call) => JSON.parse((call[1] as { body: string }).body));
+    expect(
+      completedPayloads.some(
+        (payload) =>
+          (payload.annotations as { completedAt?: string }[])[0].completedAt !==
+          undefined
+      )
+    ).toBe(true);
+  });
+
+  it("More menu 'Complete all' completes every annotation", async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "one",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+      {
+        annotationId: "ann-2",
+        kind: "region",
+        comment: "two",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: /Complete all/ })
+    );
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      );
+      expect(
+        posts.some((call) => {
+          const annotations = (
+            JSON.parse((call[1] as { body: string }).body)
+              .annotations as { status: string }[]
+          );
+          return (
+            annotations.length === 2 &&
+            annotations.every((a) => a.status === "completed")
+          );
+        })
       ).toBe(true);
     });
   });

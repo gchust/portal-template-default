@@ -15,7 +15,7 @@
  *   PORTAL_STUDIO_ORIGIN  dev server origin (default: http://127.0.0.1:5173)
  *   PORTAL_STUDIO_TOKEN   session token override (default: session.json)
  *
- * Exit codes: 0 matched, 1 stale, 2 error.
+ * Exit codes: 0 matched (or completed:true — G04), 1 stale, 2 error.
  */
 
 import { readFileSync } from "node:fs";
@@ -76,7 +76,10 @@ async function main() {
     return;
   }
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  process.exitCode = payload.state === "matched" ? 0 : 1;
+  // G04: a fully completed task exits 0 with completed:true (no edit
+  // wait needed); open-task semantics are unchanged (matched/stale).
+  process.exitCode =
+    payload.state === "matched" || payload.completed === true ? 0 : 1;
 }
 
 main().catch((error) => {

@@ -87,6 +87,7 @@ const TOOLBAR_STYLES = `
   line-height: 1;
   pointer-events: none;
 }
+.ps-copy-button,
 .ps-more-button {
   width: 28px;
   height: 28px;
@@ -99,6 +100,52 @@ const TOOLBAR_STYLES = `
   justify-content: center;
 }
 .ps-more-button:hover { color: #fafafa; background: #27272a; }
+.ps-copy-feedback {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #18181b;
+  color: #4ade80;
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 2147483001;
+}
+.ps-copy-fallback {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  width: 320px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #18181b;
+  color: #fafafa;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 2147483001;
+}
+.ps-copy-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+:host-context([data-ps-theme="light"]) .ps-copy-feedback {
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #ffffff;
+  color: #16a34a;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+:host-context([data-ps-theme="light"]) .ps-copy-fallback {
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #ffffff;
+  color: #18181b;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
 .ps-more-menu {
   position: absolute;
   right: 0;
@@ -289,6 +336,24 @@ const TOOLBAR_STYLES = `
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.ps-annotation-item-completed {
+  opacity: 0.72;
+}
+.ps-annotation-item-completed .ps-annotation-comment {
+  text-decoration: line-through;
+}
+.ps-marker-chip-completed {
+  background: #16a34a;
+}
+.ps-completed-label {
+  font-size: 10px;
+  color: #4ade80;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+:host-context([data-ps-theme="light"]) .ps-completed-label {
+  color: #16a34a;
+}
 .ps-annotation-item-hidden {
   opacity: 0.55;
 }
@@ -347,6 +412,7 @@ const TOOLBAR_STYLES = `
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 :host-context([data-ps-theme="light"]) .ps-toggle:hover { background: #f4f4f5; }
+:host-context([data-ps-theme="light"]) .ps-copy-button,
 :host-context([data-ps-theme="light"]) .ps-more-button {
   border: 1px solid rgba(0, 0, 0, 0.14);
   background: #ffffff;

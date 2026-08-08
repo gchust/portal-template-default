@@ -9,6 +9,8 @@ import {
   addAnnotation,
   annotationDisplayNumber,
   clearAnnotations,
+  completeAllAnnotations,
+  completeAnnotation,
   groupToggleElement,
   MAX_ANNOTATIONS,
   removeAnnotation,
@@ -109,5 +111,31 @@ describe("updateAnnotationComment (inline edit)", () => {
 describe("clearAnnotations (valid empty v5 task)", () => {
   it("returns an empty list that the server accepts", () => {
     expect(clearAnnotations()).toEqual([]);
+  });
+});
+
+describe("completeAnnotation / completeAllAnnotations (G04, D-033 #13)", () => {
+  it("stamps status=completed + completedAt once, never double-stamps", () => {
+    const annotations = [makeAnnotation("a"), makeAnnotation("b")];
+    const done = completeAnnotation(annotations, "a");
+    expect(done[0].status).toBe("completed");
+    expect(typeof done[0].completedAt).toBe("string");
+    expect(done[1].status).toBe("open");
+    // A second complete on the same annotation leaves it untouched.
+    const twice = completeAnnotation(done, "a");
+    expect(twice[0].completedAt).toBe(done[0].completedAt);
+    // Unknown ids leave the list unchanged.
+    expect(completeAnnotation(annotations, "zzz")).toEqual(annotations);
+  });
+
+  it("completes ALL annotations without double-stamping already-done ones", () => {
+    const annotations = [
+      { ...makeAnnotation("a"), status: "completed" as const, completedAt: "x" },
+      makeAnnotation("b"),
+    ];
+    const all = completeAllAnnotations(annotations);
+    expect(all[0].completedAt).toBe("x");
+    expect(all[1].status).toBe("completed");
+    expect(typeof all[1].completedAt).toBe("string");
   });
 });

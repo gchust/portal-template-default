@@ -25,6 +25,11 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
 
+// Shared formatter (G04, D-033 #15): print_task renders through the same
+// module as the browser Copy and the print CLI (explicit .ts specifier for
+// Node 22 type stripping). The five-tool contract is unchanged.
+import { formatTaskJson } from "../src/studio/format.ts";
+
 const SERVER_NAME = "portal-studio-mcp";
 const SERVER_VERSION = "1.0.0";
 const PROTOCOL_VERSION = "2024-11-05";
@@ -140,7 +145,7 @@ const callTool = async (name, args) => {
           `task "${args.taskId}" not found (active task is "${task.taskId}")`
         );
       }
-      return JSON.stringify(task, null, 2);
+      return formatTaskJson(task);
     }
     case "current_screenshot": {
       const token = readToken();

@@ -252,6 +252,31 @@ describe("task sanitization", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("preserves completed status + completedAt through sanitize (G04)", () => {
+    const task = sanitizeTask({
+      schemaVersion: TASK_SCHEMA_VERSION,
+      taskId: "task-completed-1",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations: [
+        {
+          annotationId: "ann-1",
+          kind: "element",
+          comment: "done",
+          createdAt: "2026-08-07T12:00:00.000Z",
+          status: "completed",
+          completedAt: "2026-08-07T12:30:00.000Z",
+          elements: [],
+        },
+      ],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    });
+    expect(task?.annotations[0].status).toBe("completed");
+    expect(task?.annotations[0].completedAt).toBe("2026-08-07T12:30:00.000Z");
+  });
+
   it("accepts a valid v5 task with ZERO annotations (clear-all, D-033 #10/#11)", () => {
     const empty = {
       schemaVersion: TASK_SCHEMA_VERSION,

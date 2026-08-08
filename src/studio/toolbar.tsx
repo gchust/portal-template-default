@@ -13,6 +13,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import {
+  CheckCircle2,
+  Copy,
   Eye,
   EyeOff,
   MoreHorizontal,
@@ -48,12 +50,15 @@ import {
   readHostComponentName,
 } from "./capture";
 import { sharedDiagnosticsBuffer, snapshotDiagnostics } from "./diagnostics";
+import { formatTaskMarkdown } from "./format.ts";
 import { captureViewportPng } from "./screenshot";
 import { isAnnotationUnresolved, resolveAnnotationTarget } from "./markers";
 import { newTaskId } from "./task-id";
 import {
   annotationDisplayNumber,
   clearAnnotations,
+  completeAllAnnotations,
+  completeAnnotation,
   groupToggleElement,
   normalizeTask,
   removeAnnotation,
@@ -157,7 +162,6 @@ type ToolbarMode =
       /** Non-blocking evidence warning (D-034 #2): the annotation is safe. */
       notice?: string;
     }
-  | { kind: "cleared" }
   | { kind: "error"; message: string };
 
 const findFocusable = (root: HTMLElement) =>
@@ -257,6 +261,16 @@ export function StudioToolbar({
   const [editValue, setEditValue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [clearAllConfirm, setClearAllConfirm] = useState(false);
+  // Copy state (G04, D-033 #12): "idle" | "copied" (aria-live feedback) |
+  // "manual" (Clipboard unavailable — selectable textarea fallback).
+  const [copyState, setCopyState] = useState<
+    "idle" | "copied" | "manual"
+  >("idle");
+  const [copyText, setCopyText] = useState("");
+  const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const copyButtonRef = useRef<HTMLButtonElement | null>(null);
   // Last-known task (loaded from the server) used to rebuild mutation
   // POSTs through the existing atomic rewrite (no new endpoints).
   const taskRef = useRef<PortalStudioTask | null>(null);
@@ -631,12 +645,13 @@ export function StudioToolbar({
     };
   }, [commitDraft, isMarquee]);
 
-  // Load the persisted annotations + revision status (schema v4/v5 dual
-  // read, D-033 #17). Runs on mount (the dock badge shows the live count
-  // without opening the panel) and refreshes when the panel opens.
-  useEffect(() => {
+  // Load the persisted task (annotations + revision status; schema v4/v5
+  // dual read, D-033 #17). Runs on mount (the dock badge shows the live
+  // count without opening the panel), when the panel opens, and after a
+  // save so Copy always reflects the SERVER artifact (screenshot +
+  // heartbeat merged) — byte-identical to the print CLI (G04 parity).
+  const refreshTask = useCallback(() => {
     if (typeof fetch !== "function") return;
-    let cancelled = false;
     fetch(config.endpoint, {
       headers: { "X-Portal-Studio-Token": config.token },
     })
@@ -647,7 +662,7 @@ export function StudioToolbar({
             task?: PortalStudioTask | PortalStudioTaskV4 | null;
           } | null
         ) => {
-          if (cancelled || !payload?.task) return;
+          if (!payload?.task) return;
           const normalized = normalizeTask(payload.task);
           if (!normalized) return;
           taskRef.current = normalized;
@@ -671,10 +686,11 @@ export function StudioToolbar({
       .catch(() => {
         // Dev server restarting; status stays hidden.
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [config.endpoint, config.token, open]);
+  }, [config.endpoint, config.token]);
+
+  useEffect(() => {
+    refreshTask();
+  }, [refreshTask, open]);
 
   // Marker re-resolution (D-033 #8): re-query the live DOM on route
   // changes (body child mutations), scroll, and resize — markers follow
@@ -986,8 +1002,9 @@ export function StudioToolbar({
       pendingPayloadRef.current = null;
       taskRef.current = payload;
       sendMutation(payload);
+      refreshTask();
     }
-  }, [sendMutation]);
+  }, [refreshTask, sendMutation]);
 
   const persistAnnotations = useCallback(
     (next: Annotation[]) => {
@@ -1001,6 +1018,9 @@ export function StudioToolbar({
         pendingPayloadRef.current = null;
         taskRef.current = payload;
         sendMutation(payload);
+        // Re-sync with the server artifact so a subsequent Copy matches
+        // the CLI byte-for-byte (F-3).
+        refreshTask();
       }, 300);
     },
     [sendMutation]
@@ -1009,6 +1029,29 @@ export function StudioToolbar({
   // Flush pending mutations on unmount AND on beforeunload (reloads) —
   // otherwise an edit made <300 ms before a reload would be lost (found
   // by the G03 e2e: the optimistic UI hid the missing persistence).
+  // Esc closes the manual-copy fallback dialog and returns focus (F-1).
+  useEffect(() => {
+    if (copyState !== "manual") return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setCopyState("idle");
+      copyButtonRef.current?.focus();
+    };
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () =>
+      document.removeEventListener("keydown", handleKeyDown, true);
+  }, [copyState]);
+
+  useEffect(() => {
+    return () => {
+      if (copyFeedbackTimerRef.current) {
+        clearTimeout(copyFeedbackTimerRef.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     const flush = () => flushPendingMutation();
     window.addEventListener("beforeunload", flush);
@@ -1017,6 +1060,43 @@ export function StudioToolbar({
       flushPendingMutation();
     };
   }, [flushPendingMutation]);
+
+  /**
+   * Copy the agent-facing Markdown (G04, D-033 #12/#15): first-class,
+   * NEVER clears or mutates any annotation state. Async Clipboard API with
+   * a selectable textarea fallback when unavailable/denied (D-034 #7).
+   */
+  const copyMarkdown = async () => {
+    const task = taskRef.current;
+    if (!task) {
+      setCopyState("manual");
+      setCopyText("");
+      return;
+    }
+    const markdown = formatTaskMarkdown(task);
+    setCopyText(markdown);
+    try {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.clipboard &&
+        typeof navigator.clipboard.writeText === "function"
+      ) {
+        await navigator.clipboard.writeText(markdown);
+        setCopyState("copied");
+        if (copyFeedbackTimerRef.current) {
+          clearTimeout(copyFeedbackTimerRef.current);
+        }
+        copyFeedbackTimerRef.current = setTimeout(() => {
+          setCopyState("idle");
+        }, 2000);
+        return;
+      }
+      throw new Error("clipboard unavailable");
+    } catch {
+      // D-034 #7: manual copy path.
+      setCopyState("manual");
+    }
+  };
 
   const startEdit = (annotation: Annotation) => {
     setEditingId(annotation.annotationId);
@@ -1065,35 +1145,6 @@ export function StudioToolbar({
     persistAnnotations(clearAnnotations());
     setClearAllConfirm(false);
     setMenuOpen(false);
-  };
-
-  const clearTask = async () => {
-    setMode({ kind: "saving" });
-    try {
-      const response = await fetch(config.endpoint, {
-        method: "DELETE",
-        headers: { "X-Portal-Studio-Token": config.token },
-      });
-      if (!response.ok) {
-        setMode({
-          kind: "error",
-          message: sessionErrorMessage(response.status),
-        });
-        return;
-      }
-      selectionRef.current = EMPTY_SELECTION;
-      setSelectionRects([]);
-      setSelectionCount(0);
-      setDraftComment("");
-      setAnnotations([]);
-      taskRef.current = null;
-      setMode({ kind: "cleared" });
-    } catch (error) {
-      setMode({
-        kind: "error",
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
   };
 
   const saveTask = async () => {
@@ -1237,6 +1288,9 @@ export function StudioToolbar({
           },
         };
       }
+      // The server artifact now carries the merged screenshot + heartbeat;
+      // refresh so Copy matches the CLI byte-for-byte (G04 parity).
+      refreshTask();
       setMode({
         kind: "saved",
         taskId: payload.taskId,
@@ -1311,6 +1365,55 @@ export function StudioToolbar({
           {annotations.length}
         </span>
         <button
+          ref={copyButtonRef}
+          type="button"
+          className="ps-icon-button ps-copy-button"
+          aria-label={t("studio.copy", "Copy")}
+          onClick={copyMarkdown}
+        >
+          <Copy size={16} aria-hidden="true" />
+        </button>
+        {copyState === "copied" ? (
+          <div className="ps-copy-feedback" role="status" aria-live="polite">
+            {t("studio.copied", "Copied to clipboard")}
+          </div>
+        ) : null}
+        {copyState === "manual" ? (
+          <div
+            className={
+              position.y < MENU_FLIP_MIN_ABOVE
+                ? "ps-copy-fallback ps-more-menu-below"
+                : "ps-copy-fallback"
+            }
+            role="dialog"
+            aria-label={t("studio.copyManual", "Copy manually")}
+          >
+            <p className="ps-hint">
+              {t(
+                "studio.copyManualHint",
+                "Clipboard unavailable — select and copy the text below."
+              )}
+            </p>
+            <textarea
+              className="ps-textarea ps-copy-text"
+              readOnly
+              rows={6}
+              value={
+                copyText ||
+                t("studio.copyEmpty", "No annotations to copy yet.")
+              }
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <button
+              type="button"
+              className="ps-button"
+              onClick={() => setCopyState("idle")}
+            >
+              {t("studio.close", "Close")}
+            </button>
+          </div>
+        ) : null}
+        <button
           ref={moreButtonRef}
           type="button"
           className="ps-icon-button ps-more-button"
@@ -1380,6 +1483,18 @@ export function StudioToolbar({
               </button>
               <button
                 type="button"
+                className="ps-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  persistAnnotations(completeAllAnnotations(annotations));
+                  setMenuOpen(false);
+                }}
+              >
+                <CheckCircle2 size={14} aria-hidden="true" />
+                {t("studio.completeAll", "Complete all")}
+              </button>
+              <button
+                type="button"
                 className="ps-menu-item ps-menu-item-danger"
                 role="menuitem"
                 onClick={() => setClearAllConfirm(true)}
@@ -1428,6 +1543,7 @@ export function StudioToolbar({
                   );
                   const unresolved = isAnnotationUnresolved(annotation);
                   const hidden = annotation.hidden === true;
+                  const completed = annotation.status === "completed";
                   const editing = editingId === annotation.annotationId;
                   const confirming = confirmDeleteId === annotation.annotationId;
                   const dirty = editing && editValue !== annotation.comment;
@@ -1437,10 +1553,20 @@ export function StudioToolbar({
                       className={
                         hidden
                           ? "ps-annotation-item ps-annotation-item-hidden"
-                          : "ps-annotation-item"
+                          : completed
+                            ? "ps-annotation-item ps-annotation-item-completed"
+                            : "ps-annotation-item"
                       }
                     >
-                      <span className="ps-marker-chip">{number ?? "?"}</span>
+                      <span
+                        className={
+                          completed
+                            ? "ps-marker-chip ps-marker-chip-completed"
+                            : "ps-marker-chip"
+                        }
+                      >
+                        {number ?? "?"}
+                      </span>
                       <span className="ps-annotation-body">
                         {editing ? (
                           <textarea
@@ -1474,6 +1600,11 @@ export function StudioToolbar({
                         {unresolved ? (
                           <span className="ps-unresolved">
                             {t("studio.unresolved", "Target not found")}
+                          </span>
+                        ) : null}
+                        {completed ? (
+                          <span className="ps-completed-label">
+                            {t("studio.completed", "Completed")}
                           </span>
                         ) : null}
                         {hidden ? (
@@ -1515,6 +1646,24 @@ export function StudioToolbar({
                               onClick={() => startEdit(annotation)}
                             >
                               <Pencil size={12} aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              className="ps-icon-button"
+                              aria-label={t(
+                                "studio.completeAnnotation",
+                                "Complete"
+                              )}
+                              onClick={() =>
+                                persistAnnotations(
+                                  completeAnnotation(
+                                    annotations,
+                                    annotation.annotationId
+                                  )
+                                )
+                              }
+                            >
+                              <CheckCircle2 size={12} aria-hidden="true" />
                             </button>
                             <button
                               type="button"
@@ -1793,21 +1942,6 @@ export function StudioToolbar({
             </div>
           ) : null}
 
-          {mode.kind === "cleared" ? (
-            <div className="ps-section" role="status" aria-live="polite">
-              <p className="ps-ok">
-                {t("studio.taskCleared", "Task cleared")}
-              </p>
-              <button
-                type="button"
-                className="ps-button ps-primary"
-                onClick={() => setMode({ kind: "idle" })}
-              >
-                {t("studio.done", "Done")}
-              </button>
-            </div>
-          ) : null}
-
           {mode.kind === "error" ? (
             <div className="ps-section" role="alert">
               <p className="ps-error">
@@ -1860,13 +1994,6 @@ export function StudioToolbar({
                   {t("studio.selectRegion", "Select region")}
                 </button>
               </div>
-              <button
-                type="button"
-                className="ps-button ps-danger"
-                onClick={clearTask}
-              >
-                {t("studio.clearTask", "Clear task")}
-              </button>
             </div>
           ) : null}
         </div>
@@ -1909,6 +2036,7 @@ export function StudioToolbar({
           annotations,
           annotation.annotationId
         );
+        const completed = annotation.status === "completed";
         if (annotation.kind === "region" && annotation.region) {
           return (
             <div
@@ -1917,7 +2045,13 @@ export function StudioToolbar({
               style={regionStyle(annotation.region)}
               aria-hidden="true"
             >
-              <span className="ps-marker-chip ps-marker-chip-onpage">
+              <span
+                className={
+                  completed
+                    ? "ps-marker-chip ps-marker-chip-onpage ps-marker-chip-completed"
+                    : "ps-marker-chip ps-marker-chip-onpage"
+                }
+              >
                 {number ?? "?"}
               </span>
             </div>
@@ -1938,7 +2072,13 @@ export function StudioToolbar({
             }}
             aria-hidden="true"
           >
-            <span className="ps-marker-chip ps-marker-chip-onpage">
+            <span
+              className={
+                completed
+                  ? "ps-marker-chip ps-marker-chip-onpage ps-marker-chip-completed"
+                  : "ps-marker-chip ps-marker-chip-onpage"
+              }
+            >
               {number ?? "?"}
             </span>
           </div>

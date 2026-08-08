@@ -164,17 +164,18 @@ const makeStudioDir = (task: unknown) => {
 };
 
 describe("portal-studio-print CLI", () => {
-  it("prints v2 JSON by default and exits 0", () => {
+  it("prints JSON via the shared formatter (normalized v5) and exits 0", () => {
     const dir = makeStudioDir(sampleV2Task);
     const result = run(["--json"], dir);
     expect(result.status).toBe(0);
     const parsed = JSON.parse(result.stdout);
     expect(parsed).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 5,
       taskId: "task-print-2",
-      instruction: "Increase padding.",
     });
-    expect(parsed.elements).toHaveLength(1);
+    expect(parsed.annotations).toHaveLength(1);
+    expect(parsed.annotations[0].comment).toBe("Increase padding.");
+    expect(parsed.annotations[0].elements).toHaveLength(1);
     expect(parsed.redaction.redactedValues).toBe(1);
     expect(parsed.screenshot.file).toBe("screenshots/task-print-2.png");
     rmSync(dir, { recursive: true, force: true });
@@ -185,7 +186,7 @@ describe("portal-studio-print CLI", () => {
     const result = run(["--markdown"], dir);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("# Task task-print-2");
-    expect(result.stdout).toContain("Increase padding.");
+    expect(result.stdout).toContain("Comment: Increase padding.");
     expect(result.stdout).toContain("TableRow (fiber)");
     expect(result.stdout).toContain("/repo/registry/users/list.tsx:42");
     expect(result.stdout).toContain("region: 10,20 300x120");
@@ -201,7 +202,7 @@ describe("portal-studio-print CLI", () => {
     const json = run(["--json"], dir);
     expect(json.status).toBe(0);
     const parsed = JSON.parse(json.stdout);
-    expect(parsed.schemaVersion).toBe(3);
+    expect(parsed.schemaVersion).toBe(5);
     expect(parsed.diagnostics).toHaveLength(2);
     expect(parsed.heartbeat.state).toBe("stale");
     expect(parsed.screenshot.capturedAt).toBe("2026-08-07T12:00:05.000Z");
@@ -222,7 +223,7 @@ describe("portal-studio-print CLI", () => {
     };
     const dir = makeStudioDir(v2Task);
     const json = run(["--json"], dir);
-    expect(JSON.parse(json.stdout).schemaVersion).toBe(2);
+    expect(JSON.parse(json.stdout).schemaVersion).toBe(5);
     expect(run(["--markdown"], dir).stdout).not.toContain("heartbeat:");
     rmSync(dir, { recursive: true, force: true });
   });
@@ -242,7 +243,7 @@ describe("portal-studio-print CLI", () => {
     };
     const dir = makeStudioDir(v4Task);
     const json = run(["--json"], dir);
-    expect(JSON.parse(json.stdout).schemaVersion).toBe(4);
+    expect(JSON.parse(json.stdout).schemaVersion).toBe(5);
     const markdown = run(["--markdown"], dir);
     expect(markdown.status).toBe(0);
     expect(markdown.stdout).toContain("revision: source=abababababab");
@@ -311,7 +312,7 @@ describe("portal-studio-print CLI", () => {
     const dir = makeStudioDir(sampleV1Task);
     const json = run(["--json"], dir);
     expect(json.status).toBe(0);
-    expect(JSON.parse(json.stdout).schemaVersion).toBe(1);
+    expect(JSON.parse(json.stdout).schemaVersion).toBe(5);
     const markdown = run(["--markdown"], dir);
     expect(markdown.status).toBe(0);
     expect(markdown.stdout).toContain("TableRow");

@@ -8,12 +8,26 @@
  * index + 1 (D-034 #4); stable `annotationId`s never renumber.
  */
 
+// Value imports carry the explicit .ts extension so Node 22 type
+// stripping can resolve them when the print CLI / MCP import this module.
 import {
   TASK_SCHEMA_VERSION,
+  TASK_SCHEMA_VERSION_V1,
+  TASK_SCHEMA_VERSION_V2,
   TASK_SCHEMA_VERSION_V4,
-  type Annotation,
-  type PortalStudioTask,
-  type PortalStudioTaskV4,
+} from "./types.ts";
+import type {
+  Annotation,
+  BusinessContextItem,
+  DiagnosticEntry,
+  ElementCapture,
+  HeartbeatReport,
+  PortalStudioTask,
+  PortalStudioTaskV4,
+  RedactionManifest,
+  Region,
+  RevisionInfo,
+  ScreenshotRef,
 } from "./types";
 
 export const MAX_ANNOTATIONS = 50;
@@ -24,9 +38,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 
 /**
- * v4 → v5 normalization (D-033 #17): `instruction` becomes a single
- * annotation's comment, `elements[]` its captures, `region` its rect.
- * Lossless for every v4 field (bookkeeping is carried through untouched).
+ * Legacy (v1–v4) → v5 normalization (D-033 #17): `instruction` becomes a
+ * single annotation's comment, `elements[]` its captures, `region` its
+ * rect. Lossless for every legacy field (bookkeeping is carried through
+ * untouched). v1 payloads carry a single `element` instead of `elements[]`.
  */
 export function normalizeV4ToV5(task: PortalStudioTaskV4): PortalStudioTask {
   const { instruction, elements, region, ...rest } = task;
@@ -44,6 +59,45 @@ export function normalizeV4ToV5(task: PortalStudioTaskV4): PortalStudioTask {
     schemaVersion: TASK_SCHEMA_VERSION,
     annotations: [annotation],
   };
+}
+
+const isElementCaptureArray = (value: unknown): value is ElementCapture[] =>
+  Array.isArray(value);
+
+/** v1–v3 payloads (single `element` or `elements[]`) → v5. */
+function normalizeLegacyToV5(
+  input: Record<string, unknown>
+): PortalStudioTask | null {
+  const taskId = input.taskId;
+  if (typeof taskId !== "string") return null;
+  const instruction = input.instruction;
+  if (typeof instruction !== "string") return null;
+  const rawElements =
+    input.schemaVersion === 1 ? [input.element] : input.elements;
+  if (!isElementCaptureArray(rawElements)) return null;
+  const v4: PortalStudioTaskV4 = {
+    schemaVersion: TASK_SCHEMA_VERSION_V4,
+    taskId,
+    createdAt: typeof input.createdAt === "string" ? input.createdAt : "",
+    url: typeof input.url === "string" ? input.url : "",
+    title: typeof input.title === "string" ? input.title : "",
+    instruction,
+    elements: rawElements,
+    ...(input.region ? { region: input.region as Region } : {}),
+    businessContext: (input.businessContext ?? []) as BusinessContextItem[],
+    redaction: (input.redaction ?? {
+      droppedKeys: [],
+      redactedValues: 0,
+      truncatedValues: 0,
+    }) as RedactionManifest,
+    ...(input.screenshot ? { screenshot: input.screenshot as ScreenshotRef } : {}),
+    ...(input.diagnostics
+      ? { diagnostics: input.diagnostics as DiagnosticEntry[] }
+      : {}),
+    ...(input.heartbeat ? { heartbeat: input.heartbeat as HeartbeatReport } : {}),
+    ...(input.revision ? { revision: input.revision as RevisionInfo } : {}),
+  };
+  return normalizeV4ToV5(v4);
 }
 
 /**
@@ -66,6 +120,15 @@ export function normalizeTask(input: unknown): PortalStudioTask | null {
       return null;
     }
     return normalizeV4ToV5(input as unknown as PortalStudioTaskV4);
+  }
+  // v1–v3 historical intermediates: normalized on read like v4 (D-033 #17
+  // dual reader — the print CLI keeps printing them, now as v5).
+  if (
+    input.schemaVersion === TASK_SCHEMA_VERSION_V2 ||
+    input.schemaVersion === 3 ||
+    input.schemaVersion === TASK_SCHEMA_VERSION_V1
+  ) {
+    return normalizeLegacyToV5(input);
   }
   return null;
 }
@@ -165,4 +228,41 @@ export function groupToggleElement(
   }
   if (group.length >= MAX_GROUP_ELEMENTS) return group;
   return [...group, element];
+}
+
+/**
+ * ---- Goal 04: Complete semantics (D-033 #13) ----
+ * Explicit Complete: per-annotation or all — status "completed" +
+ * completedAt, NEVER double-stamped (already-completed annotations are
+ * left untouched). Complete is the ONLY normal clear path; per-marker
+ * delete (G03) remains for destructive removal.
+ */
+
+/** Complete ONE annotation (no double-stamp). */
+export function completeAnnotation(
+  annotations: Annotation[],
+  annotationId: string
+): Annotation[] {
+  return annotations.map((annotation) =>
+    annotation.annotationId === annotationId &&
+    annotation.status !== "completed"
+      ? {
+          ...annotation,
+          status: "completed",
+          completedAt: new Date().toISOString(),
+        }
+      : annotation
+  );
+}
+
+/** Complete ALL annotations (no double-stamp). */
+export function completeAllAnnotations(
+  annotations: Annotation[]
+): Annotation[] {
+  const completedAt = new Date().toISOString();
+  return annotations.map((annotation) =>
+    annotation.status === "completed"
+      ? annotation
+      : { ...annotation, status: "completed", completedAt }
+  );
 }
