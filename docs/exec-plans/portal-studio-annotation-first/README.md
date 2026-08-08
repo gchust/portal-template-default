@@ -28,7 +28,7 @@ Portal Studio on `gchust/portal-template-default` branch
 | ~~`02-persistent-annotations.md`~~ | G02 ✅ | schemaVersion 5 `annotations[]`, per-comment, numbered persistent markers — DONE |
 | ~~`03-multi-select-area-delete.md`~~ | G03 ✅ | True multi-select, area annotation, per-marker edit/delete/hide — DONE |
 | ~~`04-copy-complete-shared-formatter.md`~~ | G04 ✅ | Copy, explicit Complete, shared Markdown formatter — DONE |
-| `05-hardening-cleanup.md` | G05 | Hardening & cleanup acceptance |
+| ~~`05-hardening-cleanup.md`~~ | G05 ✅ | Hardening & cleanup acceptance — DONE |
 
 ## Authoritative decisions (contract D-033..D-036)
 

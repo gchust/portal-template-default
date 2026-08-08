@@ -229,6 +229,9 @@ session; task JSON moves to **schemaVersion 5** with a v4→v5 migration.
   `region` → v5 marker `kind: "region"`; (d) `redaction`/`diagnostics`/
   `screenshot` fields unchanged; (e) active-task file version stamped and
   written as v5 on next save; (f) CLI/MCP keep a `--schema v4` passthrough
+   — RECONCILED (G05, D-041): no `--schema` flag was implemented; the print
+   CLI and MCP serve v1–v5 artifacts normalized to v5 through the shared
+   formatter (src/studio/format.ts, D-040) instead.
   for debugging.
 
 **Boundaries**: no multi-task queue/history (excluded); single active task
@@ -344,6 +347,8 @@ semantics for completed tasks documented (D-036).
    `completedAt?`; endpoint accepts status update (PATCH on active task or
    same POST semantics — decide at implementation, safest minimal, and
    record the choice in the Decision Log, e.g. D-037).
+   — RECONCILED (G05, D-041): decided in D-040 — NO new PATCH endpoint;
+   status updates go through the existing atomic POST rewrite.
 4. `src/studio/toolbar.tsx`: Copy + Complete buttons + feedback; i18n.
 5. Tests: golden formatter tests, print-cli/MCP parity tests, e2e complete
    + copy step; D-036.

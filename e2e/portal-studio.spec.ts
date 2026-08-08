@@ -1231,3 +1231,79 @@ test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04
     /completed/i
   );
 });
+
+test("a11y keyboard walkthrough: dock, More menu containment, Esc focus return (G05)", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await root.locator(".ps-dock").waitFor();
+
+  // Tab reaches the toggle; arrow keys move the dock; Esc/Enter semantics.
+  await root.locator(".ps-toggle").focus();
+  await expect(root.locator(".ps-toggle")).toBeFocused();
+  const dockBefore = (await root.locator(".ps-dock").boundingBox())!;
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("Shift+ArrowLeft");
+  const dockAfter = (await root.locator(".ps-dock").boundingBox())!;
+  expect(dockAfter.x).toBeLessThan(dockBefore.x - 20);
+
+  // Enter on the toggle opens the panel (native button activation).
+  await root.locator(".ps-toggle").focus();
+  await page.keyboard.press("Enter");
+  await expect(root.locator("[role='toolbar']")).toBeVisible();
+
+  // More menu: open via keyboard, Tab cycles within the menu, Esc closes
+  // and returns focus to the More button.
+  await root.locator("[aria-label='More']").focus();
+  await page.keyboard.press("Enter");
+  await expect(root.locator(".ps-more-menu")).toBeVisible();
+  const menuItems = root.locator(".ps-more-menu [role='menuitem']");
+  await expect(menuItems).toHaveCount(3);
+  // Tab ADVANCES through the items (not just containment — P1-1): after
+  // each Tab the focused menuitem text changes.
+  await page.keyboard.press("Tab");
+  await expect(menuItems.nth(0)).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(menuItems.nth(1)).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(menuItems.nth(2)).toBeFocused();
+  // Wrap-around keeps focus inside the menu.
+  await page.keyboard.press("Tab");
+  await expect(menuItems.nth(0)).toBeFocused();
+  // Shift+Tab wraps backwards.
+  await page.keyboard.press("Shift+Tab");
+  await expect(menuItems.nth(2)).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(root.locator(".ps-more-menu")).toHaveCount(0);
+  await expect(root.locator("[aria-label='More']")).toBeFocused();
+
+  // Delete-confirm Esc cancels and returns focus (F-1 path). The panel is
+  // still open from the toggle above — create an annotation to act on.
+  await page
+    .locator("#portal-studio-root [role='toolbar'] button", {
+      hasText: "Pick element",
+    })
+    .click();
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G05 a11y");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-badge")).toHaveText("1");
+  // aria-pressed reflects the toggle states (P3-1): hide/complete are
+  // not pressed initially.
+  await expect(
+    root.locator(".ps-annotation-item [aria-label='Hide']")
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect(
+    root.locator(".ps-annotation-item [aria-label='Complete']")
+  ).toHaveAttribute("aria-pressed", "false");
+  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
+  await expect(root.locator(".ps-annotation-confirm")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(root.locator(".ps-annotation-confirm")).toHaveCount(0);
+  await expect(
+    root.locator(".ps-annotation-item [aria-label='Delete']")
+  ).toBeFocused();
+});

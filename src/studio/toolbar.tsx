@@ -164,6 +164,16 @@ type ToolbarMode =
     }
   | { kind: "error"; message: string };
 
+/**
+ * The active element inside the Studio shadow root. `document.activeElement`
+ * retargets to the shadow HOST, so containment comparisons against
+ * shadow-internal elements would always be false (P1-1, G05 review).
+ */
+const shadowActiveElement = (): Element | null => {
+  const host = document.getElementById("portal-studio-root");
+  return host?.shadowRoot?.activeElement ?? document.activeElement;
+};
+
 const findFocusable = (root: HTMLElement) =>
   Array.from(
     root.querySelectorAll<HTMLElement>(
@@ -320,14 +330,35 @@ export function StudioToolbar({
     }
   }, []);
 
-  // Close the More menu on outside clicks and Esc (focus returns to More).
+  // Close the More menu on outside clicks and Esc (focus returns to
+  // More); Tab is contained within the menu (G05 a11y audit).
   useEffect(() => {
     if (!menuOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setMenuOpen(false);
-      setClearAllConfirm(false);
-      moreButtonRef.current?.focus();
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        setClearAllConfirm(false);
+        moreButtonRef.current?.focus();
+        return;
+      }
+      if (event.key === "Tab") {
+        const menu = dockRef.current?.querySelector(".ps-more-menu");
+        if (!menu) return;
+        const focusable = findFocusable(menu as HTMLElement);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = shadowActiveElement();
+        if (event.shiftKey) {
+          if (active === first || !menu.contains(active)) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (active === last || !menu.contains(active)) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
     };
     const handlePointerDown = (event: PointerEvent | MouseEvent) => {
       // composedPath() crosses the shadow boundary: events from inside the
@@ -746,7 +777,7 @@ export function StudioToolbar({
       if (!focusable.length) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
+      const active = shadowActiveElement();
       if (event.shiftKey) {
         if (active === first || !root.contains(active)) {
           event.preventDefault();
@@ -1040,15 +1071,36 @@ export function StudioToolbar({
   // Flush pending mutations on unmount AND on beforeunload (reloads) —
   // otherwise an edit made <300 ms before a reload would be lost (found
   // by the G03 e2e: the optimistic UI hid the missing persistence).
-  // Esc closes the manual-copy fallback dialog and returns focus (F-1).
+  // Esc closes the manual-copy fallback dialog and returns focus (F-1),
+  // and Tab is contained within the dialog (G05 a11y audit).
   useEffect(() => {
     if (copyState !== "manual") return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      setCopyState("idle");
-      copyButtonRef.current?.focus();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setCopyState("idle");
+        copyButtonRef.current?.focus();
+        return;
+      }
+      if (event.key === "Tab") {
+        const dialog = dockRef.current?.querySelector(".ps-copy-fallback");
+        if (!dialog) return;
+        const focusable = findFocusable(dialog as HTMLElement);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = shadowActiveElement();
+        if (event.shiftKey) {
+          if (active === first || !dialog.contains(active)) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (active === last || !dialog.contains(active)) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () =>
@@ -1665,6 +1717,7 @@ export function StudioToolbar({
                                 "studio.completeAnnotation",
                                 "Complete"
                               )}
+                              aria-pressed={completed}
                               onClick={() =>
                                 persistAnnotations(
                                   completeAnnotation(
@@ -1683,6 +1736,7 @@ export function StudioToolbar({
                                 "studio.hideAnnotation",
                                 "Hide"
                               )}
+                              aria-pressed={hidden}
                               onClick={() =>
                                 persistAnnotations(
                                   toggleAnnotationHidden(

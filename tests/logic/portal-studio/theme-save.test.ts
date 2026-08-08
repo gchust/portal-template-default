@@ -76,6 +76,15 @@ describe("D-031: host theme detection", () => {
     vi.unstubAllGlobals();
   });
 
+  it("parses dark shadcn oklch backgrounds", () => {
+    vi.stubGlobal(
+      "getComputedStyle",
+      vi.fn().mockReturnValue({ backgroundColor: "oklch(0.13 0 0)" })
+    );
+    expect(detectHostTheme()).toBe("dark");
+    vi.unstubAllGlobals();
+  });
+
   it("parses hsl backgrounds", () => {
     vi.stubGlobal(
       "getComputedStyle",

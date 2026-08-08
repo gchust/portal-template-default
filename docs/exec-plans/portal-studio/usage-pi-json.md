@@ -3,6 +3,9 @@
 The JSON/file path is the first-class interface: every capability works with
 plain shell commands and local files, no browser UI and no MCP required.
 
+> Artifacts are schemaVersion 5 (`annotations[]`); v1–v4 files are served
+> normalized to v5 by the print CLI and MCP (D-033 #17).
+
 ## The loop (annotate → read → edit → wait → verify)
 
 ```bash
@@ -43,11 +46,22 @@ node scripts/portal-studio-print.mjs --json | jq .screenshot    # fresh PNG ref 
 | Request a fresh screenshot | `POST /__portal-studio/screenshot` → browser fulfills → artifact `screenshot.capturedAt` updates |
 | Read diagnostics | `portal-studio-print.mjs --json` → `.diagnostics` |
 | Bounded wait | `POST /__portal-studio/verify` or `portal-studio-verify.mjs` |
-| Clear the task | `DELETE /__portal-studio/tasks` (token) |
+| Clear the task | `DELETE /__portal-studio/tasks` (token) — the normal UI clear path is now explicit Complete (G04); per-marker delete lives in the UI |
+| Verify a completed task | `portal-studio-verify.mjs` exits 0 with `completed: true` when every annotation is completed |
 | Heartbeat | the browser reports automatically; the server derives `online/stale/offline` from receipt time |
 
 All endpoints: loopback only, token-guarded (404 on missing/wrong token),
 bounded bodies, path-traversal safe, atomic writes.
+
+## Portal source management caveats (D-042)
+
+- `nb portal push` currently PACKS `.portal-studio/` (the CLI filter
+  excludes only `.git/node_modules/dist/.DS_Store/._*`) — session token +
+  local annotations + screenshots would be uploaded. Upstream filter
+  addition recommended; re-verified at G05.
+- `nb portal pull` WIPES `.portal-studio/` (git `clean -fdx` / directory
+  replace) — local annotations are dev-session-local and lost; restart
+  `pnpm dev` after a pull (the session regenerates).
 
 ## Without the browser (page closed)
 

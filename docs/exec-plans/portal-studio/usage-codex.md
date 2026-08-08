@@ -19,8 +19,10 @@ Open the Portal in a browser. Use the Studio toolbar (bottom-right 🛠):
 3. **Save task**.
 
 The task is written atomically to `.portal-studio/tasks/active-task.json`
-(schema v4) — component/source candidates, business context, redaction
-manifest, screenshot ref, diagnostics, heartbeat, and revision bookkeeping.
+(schema v5, `annotations[]`) — per-annotation comments, component/source
+candidates, business context, redaction manifest, screenshot ref,
+diagnostics, heartbeat, and revision bookkeeping. v1–v4 files are served
+normalized to v5 by the print CLI and MCP (D-033 #17).
 
 ## 2. Read the task (JSON path)
 
@@ -46,6 +48,8 @@ node scripts/portal-studio-verify.mjs --timeout-ms 10000
 Semantics (contract §10): a full reload bumps `browserRevision` (authoritative
 match); an HMR update counts only while the browser heartbeat is `online`
 (informational ack). A timeout marks the task `stale` — never a false pass.
+A fully completed task (every annotation `status: "completed"`) exits 0
+with `completed: true` (G04).
 
 ## 5. Read errors and current evidence
 

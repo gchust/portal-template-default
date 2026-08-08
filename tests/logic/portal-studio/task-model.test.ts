@@ -125,4 +125,3 @@ describe("annotationDisplayNumber", () => {
     expect(annotationDisplayNumber([], "a")).toBeUndefined();
   });
 });
-

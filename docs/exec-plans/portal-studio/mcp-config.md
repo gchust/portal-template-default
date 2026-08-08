@@ -45,7 +45,7 @@ Codex MCP config).
 | Tool | Arguments | Returns |
 | --- | --- | --- |
 | `capture_task` | `task` (schema v4 payload) | Endpoint result (`{ok, taskId, file, sourceCandidates}`) |
-| `print_task` | `taskId?` (optional match) | Active task JSON (same as `portal-studio-print.mjs --json`) |
+| `print_task` | `taskId?` (optional match) | Active task JSON, normalized to schema v5 via the shared formatter (byte-identical to `portal-studio-print.mjs --json`) |
 | `current_screenshot` | `annotations?` (rects) | File reference `{file, width, height, capturedAt, fresh}` — never inline pixels |
 | `read_diagnostics` | — | Active task diagnostics ring buffer |
 | `wait_verification` | `timeoutMs?` (default 10000, max 30000) | `{ok, state, revision, diagnostics, screenshot}` |

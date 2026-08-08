@@ -48,6 +48,27 @@ and how they are enforced:
 - MCP credentials never live in frontend code; the MCP server reads the token
   in-process only (env or `session.json`).
 
+## Annotation-first surface (G01–G05)
+
+- **schemaVersion 5 artifacts** (`annotations[]`): server-authoritative
+  sanitization per annotation — `annotationId` safe-name pattern,
+  `comment` ≤ 2000 (redacted at ingestion + server re-sanitized),
+  `status`/`hidden` whitelists, per-annotation element cap (totals bounded
+  by the 256 KB artifact cap). Empty `annotations: []` is a VALID task
+  (clear-all). v1–v4 files are normalized on read (D-033 #17) — no
+  migration framework.
+- **Mutations** (edit/delete/hide/complete): existing atomic POST rewrite
+  with a 300 ms debounce + flush on unload (keepalive); the refresh that
+  follows a mutation is chained AFTER the POST settles so a GET can never
+  observe pre-mutation state (G04 audit fix).
+- **Shared formatter** (`src/studio/format.ts`): the single Markdown/JSON
+  renderer for Copy/CLI/MCP — renders only artifact fields + the redaction
+  manifest; session tokens never enter artifacts (endpoint re-strips).
+- **Copy** uses the async Clipboard API with a selectable-textarea
+  fallback; the fallback text contains the same redacted artifact.
+- **verify** reports `completed: true` for fully completed tasks (exit 0);
+  open-task semantics unchanged (0 matched / 1 stale / 2 error).
+
 ## Verification honesty
 
 - Revision waits never silently pass: the reload bump is the authoritative

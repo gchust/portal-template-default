@@ -252,6 +252,72 @@ describe("task sanitization", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("rejects invalid v5 annotation fields (G05 security coverage)", () => {
+    const base = {
+      schemaVersion: TASK_SCHEMA_VERSION,
+      taskId: "task-v5-reject",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations: [
+        {
+          annotationId: "ann-1",
+          kind: "element",
+          comment: "c",
+          createdAt: "2026-08-07T12:00:00.000Z",
+          status: "open",
+          elements: [],
+        },
+      ],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    };
+    // Traversal-shaped annotationId.
+    expect(
+      sanitizeTask({
+        ...base,
+        annotations: [{ ...base.annotations[0], annotationId: "../evil" }],
+      })
+    ).toBeNull();
+    // Unknown kind.
+    expect(
+      sanitizeTask({
+        ...base,
+        annotations: [{ ...base.annotations[0], kind: "bogus" }],
+      })
+    ).toBeNull();
+    // Invalid status.
+    expect(
+      sanitizeTask({
+        ...base,
+        annotations: [{ ...base.annotations[0], status: "archived" }],
+      })
+    ).toBeNull();
+    // Invalid completedAt date.
+    expect(
+      sanitizeTask({
+        ...base,
+        annotations: [
+          { ...base.annotations[0], completedAt: "not-a-date" },
+        ],
+      })
+    ).toBeNull();
+    // Non-array annotations.
+    expect(sanitizeTask({ ...base, annotations: "nope" })).toBeNull();
+    // Secret-shaped comment values are redacted, not rejected.
+    const redacted = sanitizeTask({
+      ...base,
+      annotations: [
+        {
+          ...base.annotations[0],
+          comment: "Bearer super-secret-value",
+        },
+      ],
+    });
+    expect(redacted?.annotations[0].comment).toContain("[REDACTED]");
+    expect(redacted?.annotations[0].comment).not.toContain("super-secret-value");
+  });
+
   it("preserves completed status + completedAt through sanitize (G04)", () => {
     const task = sanitizeTask({
       schemaVersion: TASK_SCHEMA_VERSION,
