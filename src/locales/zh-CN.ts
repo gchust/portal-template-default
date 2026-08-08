@@ -126,6 +126,8 @@ export const starter = {
   "studio.savedFile": "文件",
   "studio.done": "完成",
   "studio.errorSave": "无法保存任务",
+  "studio.sessionStale":
+    "Portal Studio 会话已过期（开发服务器已重启）——请刷新页面重新连接，或当前来源不受信任（仅开发机可用，除非插件启用 allowRemote）",
   "studio.selectRegion": "框选区域",
   "studio.marqueeHint": "在页面上拖拽以选中区域内的所有元素；Esc 取消。",
   "studio.capturedCount": "已捕获",

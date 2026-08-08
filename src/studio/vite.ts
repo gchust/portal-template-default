@@ -28,6 +28,7 @@ export function buildStudioInitScript(base: string): string {
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { networkInterfaces } from "node:os";
 
 import type { Plugin, ViteDevServer } from "vite";
 
@@ -86,6 +87,13 @@ const MAX_TOTAL_SOURCE_CANDIDATES = 40;
 
 export type PortalStudioPluginOptions = {
   root?: string;
+  /**
+   * Opt-in (D-031): allow Studio endpoints from ANY remote address instead
+   * of dev-machine addresses only (loopback + the server's own interface
+   * IPs). The session token is still required; this only relaxes the
+   * transport-level source check. Default false.
+   */
+  allowRemote?: boolean;
 };
 
 export const isLoopbackAddress = (address: string | undefined) =>
@@ -93,6 +101,38 @@ export const isLoopbackAddress = (address: string | undefined) =>
   address === "::1" ||
   address === "::ffff:127.0.0.1" ||
   address === undefined;
+
+let ownAddressCache: Set<string> | null = null;
+
+/**
+ * All IPs of this machine (loopback, LAN, containers). Dev access through
+ * the machine's own LAN address (e.g. 192.168.2.199) is the same operator;
+ * the loopback-only check incorrectly treated it as remote (D-031).
+ */
+export const ownServerAddresses = (): ReadonlySet<string> => {
+  if (!ownAddressCache) {
+    const set = new Set<string>();
+    for (const entries of Object.values(networkInterfaces())) {
+      for (const entry of entries ?? []) {
+        set.add(entry.address);
+        if (entry.family === "IPv4") {
+          set.add(`::ffff:${entry.address}`);
+        }
+      }
+    }
+    ownAddressCache = set;
+  }
+  return ownAddressCache;
+};
+
+/**
+ * Trusted dev-machine source: loopback (legacy contract §7) or any address
+ * bound to this machine (LAN dev access). Remote machines stay rejected
+ * unless the plugin is configured with `allowRemote` (D-031).
+ */
+export const isTrustedStudioSource = (address: string | undefined): boolean =>
+  isLoopbackAddress(address) ||
+  (address ? ownServerAddresses().has(address) : false);
 
 /**
  * Read a request body up to the given byte limit. The limit is per-route:
@@ -472,8 +512,13 @@ export function portalStudioPlugin(
             persistSessionFile();
           }
 
-          // Loopback-only enforcement (contract §7).
-          if (!isLoopbackAddress(request.socket.remoteAddress)) {
+          // Dev-machine enforcement (contract §7, D-031): loopback or the
+          // server's own interface IPs; remote machines stay rejected unless
+          // the plugin opts in via allowRemote (still token-protected).
+          if (
+            !options.allowRemote &&
+            !isTrustedStudioSource(request.socket.remoteAddress)
+          ) {
             writeJsonResponse(response, 404, { error: "not_found" });
             return;
           }

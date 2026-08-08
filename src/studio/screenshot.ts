@@ -206,11 +206,20 @@ export async function captureViewportPng(
     context.drawImage(image, 0, 0, canvasWidth, canvasHeight);
 
     const markers = scaleAnnotations(annotations, scale, canvasWidth, canvasHeight);
-    context.strokeStyle = "#6366f1";
+    // Host-theme accent (D-031): mirrors the toolbar's --ps-accent chain.
+    const accent =
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--primary")
+        .trim() || "#6366f1";
+    context.strokeStyle = accent;
     context.lineWidth = Math.max(1, Math.round(scale * 2));
+    context.globalAlpha = 0.12;
+    context.fillStyle = accent;
     for (const marker of markers) {
-      context.fillStyle = "rgba(99, 102, 241, 0.12)";
       context.fillRect(marker.x, marker.y, marker.width, marker.height);
+    }
+    context.globalAlpha = 1;
+    for (const marker of markers) {
       context.strokeRect(marker.x, marker.y, marker.width, marker.height);
     }
 

@@ -133,6 +133,8 @@ export const starter = {
   "studio.savedFile": "File",
   "studio.done": "Done",
   "studio.errorSave": "Unable to save task",
+  "studio.sessionStale":
+    "Portal Studio 端点拒绝了请求（404）——开发服务器可能已重启（请刷新页面），或当前来源不受信任（仅开发机可用，除非插件启用 allowRemote）",
   "studio.selectRegion": "Select region",
   "studio.marqueeHint":
     "Drag over the page to select everything inside the region. Esc cancels.",

@@ -14,8 +14,12 @@ and how they are enforced:
 
 ## Endpoint hardening
 
-- Loopback only (`127.0.0.1`/`::1`/`::ffff:127.0.0.1` — middleware rejects
-  other remote addresses with 404). Same-origin; no CORS headers.
+- Dev-machine only (D-031): loopback (`127.0.0.1`/`::1`/`::ffff:127.0.0.1`)
+  plus any address bound to the dev machine itself (LAN/container IPs — the
+  same operator reaching the dev portal through its own LAN origin, which
+  previously 404'd). Any other remote address is rejected with 404 unless
+  the plugin opts in with `allowRemote` (still token-protected).
+  Same-origin; no CORS headers.
 - Random per-session token (≥ 32 bytes CSPRNG) protects every endpoint;
   comparison is hash-then-`timingSafeEqual` (constant-time, no length leak).
   Missing/wrong tokens are indistinguishable from a missing endpoint (404).

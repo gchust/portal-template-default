@@ -36,7 +36,11 @@ import {
 } from "@/studio/endpoint";
 import { sanitizeArtifact } from "@/studio/redact";
 import { stripSecretAttributes } from "@/studio/screenshot";
-import { isLoopbackAddress } from "@/studio/vite";
+import {
+  isLoopbackAddress,
+  isTrustedStudioSource,
+  ownServerAddresses,
+} from "@/studio/vite";
 
 const TASK_SCHEMA_VERSION = 4;
 
@@ -281,6 +285,25 @@ describe("abuse: endpoint loopback binding", () => {
     expect(isLoopbackAddress("10.0.0.1")).toBe(false);
     expect(isLoopbackAddress("172.17.0.1")).toBe(false);
     expect(isLoopbackAddress("8.8.8.8")).toBe(false);
+  });
+
+  it("trusts the machine's own interface addresses (LAN dev access, D-031)", () => {
+    // Any address bound to this machine must be accepted: loopback is
+    // already covered, and the machine's own LAN/container IPs are the
+    // same operator accessing through a different origin (the reported
+    // 404-on-LAN regression).
+    for (const address of ownServerAddresses()) {
+      expect(isTrustedStudioSource(address)).toBe(true);
+    }
+    expect(isTrustedStudioSource(undefined)).toBe(true);
+  });
+
+  it("rejects unknown remote addresses unless allowRemote opts in", () => {
+    // A different machine on the LAN is still not a trusted source.
+    // (203.0.113.7 is TEST-NET-3, guaranteed unassigned.)
+    expect(isTrustedStudioSource("10.99.99.99")).toBe(false);
+    expect(isTrustedStudioSource("8.8.8.8")).toBe(false);
+    expect(isTrustedStudioSource("203.0.113.7")).toBe(false);
   });
 });
 

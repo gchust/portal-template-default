@@ -14,6 +14,8 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 
 import { translate } from "@nocobase/portal-sdk/i18n";
 
+import { sessionErrorMessage } from "./errors";
+
 import {
   captureSelection,
   collectTargetStack,
@@ -22,6 +24,7 @@ import {
 } from "./capture";
 import { sharedDiagnosticsBuffer, snapshotDiagnostics } from "./diagnostics";
 import { captureViewportPng } from "./screenshot";
+import { newTaskId } from "./task-id";
 import {
   commitRegion,
   EMPTY_SELECTION,
@@ -469,7 +472,7 @@ export function StudioToolbar({
       if (!response.ok) {
         setMode({
           kind: "error",
-          message: `HTTP ${response.status}`,
+          message: sessionErrorMessage(response.status),
         });
         return;
       }
@@ -489,7 +492,7 @@ export function StudioToolbar({
   const saveTask = async () => {
     if (mode.kind !== "draft") return;
     setMode({ kind: "saving" });
-    const taskId = crypto.randomUUID();
+    const taskId = newTaskId();
     const task: PortalStudioTask = {
       schemaVersion: TASK_SCHEMA_VERSION,
       taskId,
@@ -523,7 +526,7 @@ export function StudioToolbar({
       if (!response.ok || !payload.ok || !payload.taskId) {
         setMode({
           kind: "error",
-          message: payload.error ?? String(response.status),
+          message: sessionErrorMessage(response.status, payload.error),
         });
         return;
       }
@@ -569,7 +572,10 @@ export function StudioToolbar({
       if (!shotResponse.ok || !shotPayload.ok || !shotPayload.file) {
         setMode({
           kind: "error",
-          message: shotPayload.error ?? String(shotResponse.status),
+          message: sessionErrorMessage(
+            shotResponse.status,
+            shotPayload.error
+          ),
         });
         return;
       }
