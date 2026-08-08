@@ -96,6 +96,18 @@ attribute reality (`data-nb-hidden-menu-item` only, in admin layout);
 - Implementation repo on `feat-agent-feedback` with a clean tree.
 - `.gitignore` entries for `.portal-studio/` are added as part of Goal 01.
 
+## Annotation-first redesign — execution plan (Goal 00)
+
+`08-annotation-first.md`: repository-grounded plan for the Annotation-first
+redesign — five sequential goals: G01 draggable dock; G02 persistent
+per-comment annotations (schemaVersion 5, v4→v5 migration); G03
+multi-select / area / per-marker edit-delete; G04 Copy / explicit Complete /
+shared formatter; G05 hardening & cleanup. Explicitly out of scope:
+multi-task history/archive, commit rewriting, upstream sync, release,
+dogfood implementation. Baseline: feat-agent-feedback @ aeafbbb (unit
+224 / e2e 6/6), NocoBase origin/develop @ f0a480e9f0 (authorized ff-only
+merge, evidence-reconcile/).
+
 ## Alpha regression acceptance (Goal 07)
 
 `07-alpha-regression.md`: real reproduction and root-cause classification of
