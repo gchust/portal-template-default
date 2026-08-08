@@ -10,11 +10,27 @@
  * between the hovered element and its ancestors while picking.
  */
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+
+import { MoreHorizontal, RotateCcw, Wrench, X } from "lucide-react";
 
 import { translate } from "@nocobase/portal-sdk/i18n";
 
 import { sessionErrorMessage } from "./errors";
+
+import {
+  clampDockPosition,
+  defaultDockPosition,
+  DEFAULT_DOCK_WIDTH,
+  DRAG_THRESHOLD_PX,
+  KEYBOARD_FAST_STEP_PX,
+  KEYBOARD_STEP_PX,
+  loadDockPosition,
+  moveDockPosition,
+  resolveDockLayout,
+  saveDockPosition,
+  type DockPosition,
+} from "./dock";
 
 import {
   captureSelection,
@@ -61,6 +77,35 @@ const t = (key: string, fallback: string) =>
 
 const STACK_DEPTH = 4;
 const MAX_REGION_SCAN_ELEMENTS = 5000;
+/** Flip the More menu below the dock when less space remains above. */
+const MENU_FLIP_MIN_ABOVE = 60;
+
+const readDockStorage = (): DockStorage | null => {
+  try {
+    return typeof window !== "undefined" ? window.localStorage : null;
+  } catch {
+    return null;
+  }
+};
+
+const viewportOf = (win: Window & typeof globalThis): DockViewport => ({
+  width: win.innerWidth,
+  height: win.innerHeight,
+});
+
+type DockStorage = {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+};
+
+type DockViewport = { width: number; height: number };
+
+type DragState = {
+  startX: number;
+  startY: number;
+  origin: DockPosition;
+  moved: boolean;
+};
 
 type ToolbarMode =
   | { kind: "idle" }
@@ -144,7 +189,29 @@ export function StudioToolbar({
   config: PortalStudioConfig;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Dock position (G01, D-033 #2): null = default bottom-right anchor;
+  // persisted via localStorage portal-studio.dock (D-037).
+  const [dockPosition, setDockPosition] = useState<DockPosition | null>(
+    () => {
+      const loaded = loadDockPosition(readDockStorage());
+      return loaded ? clampDockPosition(loaded, viewportOf(window)) : null;
+    }
+  );
+  const [dockWidth, setDockWidth] = useState(DEFAULT_DOCK_WIDTH);
+  const dockPositionRef = useRef<DockPosition | null>(dockPosition);
+  dockPositionRef.current = dockPosition;
+  const dockWidthRef = useRef(dockWidth);
+  dockWidthRef.current = dockWidth;
+  const dragRef = useRef<DragState | null>(null);
+  const dragListenersRef = useRef<{
+    move: (event: PointerEvent) => void;
+    up: (event: PointerEvent) => void;
+  } | null>(null);
+  const didDragRef = useRef(false);
   const [mode, setMode] = useState<ToolbarMode>({ kind: "idle" });
   const [instruction, setInstruction] = useState("");
   const [outlineRect, setOutlineRect] = useState<DOMRect>();
@@ -162,6 +229,161 @@ export function StudioToolbar({
   const picking = mode.kind === "picking";
   const isIdle = mode.kind === "idle";
   const isMarquee = mode.kind === "marquee";
+
+  const viewport = viewportOf(window);
+  const position = dockPosition ?? defaultDockPosition(viewport, dockWidth);
+  const layout = resolveDockLayout({
+    position,
+    viewport,
+    expanded: open,
+    dockWidth,
+  });
+
+  // Measure the real dock row width once so clamping keeps the whole row
+  // (toggle + badge + More) inside the viewport; falls back to the constant
+  // when measurement is unavailable (jsdom).
+  useLayoutEffect(() => {
+    const element = dockRef.current;
+    if (!element) return;
+    const measured = element.getBoundingClientRect().width;
+    if (measured > 0) {
+      setDockWidth(measured);
+      // Re-clamp a persisted position against the MEASURED width so a
+      // position saved at the extreme edge cannot sit off-viewport after
+      // reload (round-2 P4).
+      const persisted = dockPositionRef.current;
+      if (persisted) {
+        setDockPosition(clampDockPosition(persisted, viewportOf(window), measured));
+      }
+    }
+  }, []);
+
+  // Close the More menu on outside clicks and Esc (focus returns to More).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMenuOpen(false);
+      moreButtonRef.current?.focus();
+    };
+    const handlePointerDown = (event: PointerEvent | MouseEvent) => {
+      // composedPath() crosses the shadow boundary: events from inside the
+      // shadow are retargeted to the host, so a plain `contains(target)`
+      // check would treat menu-item clicks as outside clicks and unmount
+      // the menu before the item's click can fire (F1).
+      const path = event.composedPath?.() ?? [];
+      if (dockRef.current && path.includes(dockRef.current)) return;
+      setMenuOpen(false);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [menuOpen]);
+
+  const persistDockPosition = (next: DockPosition) => {
+    setDockPosition(next);
+    saveDockPosition(readDockStorage(), next);
+  };
+
+  // Pointer drag (G01 AC1): starts on any dock surface (row, toggle,
+  // badge — More menu excluded). No pointer capture, so button clicks keep
+  // their natural semantics; movement past the threshold marks the gesture
+  // as a drag (didDragRef suppresses the toggle's click action). Window-
+  // capture listeners end the drag on pointerup/cancel. The page-level
+  // picking/marquee listeners are unaffected: they exclude Studio elements
+  // (isStudioElement, D-034 #3) and our window-capture handler stops
+  // propagation of the events it consumes.
+  const stopDragListeners = () => {
+    const listeners = dragListenersRef.current;
+    if (!listeners) return;
+    window.removeEventListener("pointermove", listeners.move, true);
+    window.removeEventListener("pointerup", listeners.up, true);
+    window.removeEventListener("pointercancel", listeners.up, true);
+    dragListenersRef.current = null;
+  };
+
+  const handleDockPointerDown = (
+    event: React.PointerEvent<HTMLDivElement>
+  ) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest(".ps-more-menu")) return;
+    // A new gesture: clear any suppression left by a PREVIOUS drag so the
+    // next plain click still toggles the panel.
+    didDragRef.current = false;
+    const drag: DragState = {
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: dockPositionRef.current ?? position,
+      moved: false,
+    };
+    dragRef.current = drag;
+    const move = (moveEvent: PointerEvent) => {
+      const active = dragRef.current;
+      if (!active) return;
+      const dx = moveEvent.clientX - active.startX;
+      const dy = moveEvent.clientY - active.startY;
+      if (!active.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+      active.moved = true;
+      didDragRef.current = true;
+      // Fresh viewport/width so a mid-drag resize clamps correctly (F5).
+      const currentViewport = viewportOf(window);
+      setDockPosition(
+        clampDockPosition(
+          { x: active.origin.x + dx, y: active.origin.y + dy },
+          currentViewport,
+          dockWidthRef.current
+        )
+      );
+      moveEvent.preventDefault();
+      moveEvent.stopPropagation();
+    };
+    const up = (upEvent: PointerEvent) => {
+      stopDragListeners();
+      dragRef.current = null;
+      upEvent.stopPropagation();
+      if (drag.moved) {
+        saveDockPosition(readDockStorage(), dockPositionRef.current ?? position);
+      }
+    };
+    dragListenersRef.current = { move, up };
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
+    // No preventDefault here (F6): buttons keep mouse focus; the move
+    // handler prevents default (selection/scroll) during the drag.
+    event.stopPropagation();
+  };
+
+  // Keyboard drag (D-034 #5): arrows move the dock (Shift = larger step).
+  const handleToggleKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>
+  ) => {
+    const step = event.shiftKey ? KEYBOARD_FAST_STEP_PX : KEYBOARD_STEP_PX;
+    const delta = {
+      ArrowUp: { dx: 0, dy: -1 },
+      ArrowDown: { dx: 0, dy: 1 },
+      ArrowLeft: { dx: -1, dy: 0 },
+      ArrowRight: { dx: 1, dy: 0 },
+    }[event.key] as
+      | { dx: -1 | 0 | 1; dy: -1 | 0 | 1 }
+      | undefined;
+    if (!delta) return;
+    event.preventDefault();
+    event.stopPropagation();
+    persistDockPosition(
+      moveDockPosition(position, delta, viewport, step, dockWidth)
+    );
+  };
+
+  const resetDockPosition = () => {
+    persistDockPosition(defaultDockPosition(viewport, dockWidth));
+    setMenuOpen(false);
+  };
 
   const refreshSelectionRects = useCallback(() => {
     setSelectionRects(
@@ -618,26 +840,87 @@ export function StudioToolbar({
 
   return (
     <div ref={rootRef} className="ps-root" data-portal-studio-root>
-      <button
-        type="button"
-        className="ps-toggle"
-        aria-label={
-          open
-            ? t("studio.toggle.close", "Close Portal Studio")
-            : t("studio.toggle.open", "Open Portal Studio")
-        }
-        aria-expanded={open}
-        onClick={() => {
-          setOpen((current) => !current);
-          resetSession();
-        }}
+      <div
+        ref={dockRef}
+        className="ps-dock"
+        style={{ left: layout.toggle.left, top: layout.toggle.top }}
+        onPointerDown={handleDockPointerDown}
       >
-        🛠
-      </button>
+        <button
+          type="button"
+          className="ps-toggle"
+          aria-label={
+            open
+              ? t("studio.toggle.close", "Close Portal Studio")
+              : t("studio.toggle.open", "Open Portal Studio")
+          }
+          aria-expanded={open}
+          onClick={() => {
+            if (didDragRef.current) {
+              didDragRef.current = false;
+              return;
+            }
+            setOpen((current) => !current);
+            setMenuOpen(false);
+            resetSession();
+          }}
+          onKeyDown={handleToggleKeyDown}
+        >
+          <Wrench size={18} aria-hidden="true" />
+        </button>
+        <span
+          className="ps-badge"
+          role="status"
+          aria-label={t("studio.annotations", "Annotations")}
+        >
+          {/* G01 placeholder count; G02 wires the live annotation count. */}
+          0
+        </span>
+        <button
+          ref={moreButtonRef}
+          type="button"
+          className="ps-icon-button ps-more-button"
+          aria-label={t("studio.more", "More")}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={() => {
+            // Same post-drag click suppression as the toggle (F3): a drag
+            // that starts and ends on the More button must not toggle it.
+            if (didDragRef.current) {
+              didDragRef.current = false;
+              return;
+            }
+            setMenuOpen((current) => !current);
+          }}
+        >
+          <MoreHorizontal size={16} aria-hidden="true" />
+        </button>
+        {menuOpen ? (
+          <div
+            className={
+              position.y < MENU_FLIP_MIN_ABOVE
+                ? "ps-more-menu ps-more-menu-below"
+                : "ps-more-menu"
+            }
+            role="menu"
+          >
+            <button
+              type="button"
+              className="ps-menu-item"
+              role="menuitem"
+              onClick={resetDockPosition}
+            >
+              <RotateCcw size={14} aria-hidden="true" />
+              {t("studio.resetDock", "Reset dock position")}
+            </button>
+          </div>
+        ) : null}
+      </div>
 
       {panelVisible ? (
         <div
           className="ps-panel"
+          style={layout.panel}
           role="toolbar"
           aria-label={t("studio.title", "Portal Studio")}
         >
@@ -652,7 +935,7 @@ export function StudioToolbar({
                 resetSession();
               }}
             >
-              ✕
+              <X size={14} aria-hidden="true" />
             </button>
           </div>
 

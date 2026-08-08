@@ -127,11 +127,33 @@ const saveTask = async (
 
 test.describe.configure({ mode: "serial" });
 
+/**
+ * The HMR tests write a marker line into src/components/ui/table.tsx and
+ * restore it in `finally`. Self-healing cleanup below makes sure an
+ * interrupted/crashed run can never leave the marker behind: beforeEach
+ * strips it (so `original` is always the baseline) and afterAll strips it
+ * again (idempotent) — covering worker crashes and test timeouts.
+ */
+const TABLE_SOURCE = path.resolve("src/components/ui/table.tsx");
+const TABLE_MARKER_PATTERN = /\/\/ portal-studio (?:verify|hmr) marker\n?/g;
+
+const restoreTableMarker = () => {
+  try {
+    const current = readFileSync(TABLE_SOURCE, "utf8");
+    const cleaned = current.replace(TABLE_MARKER_PATTERN, "");
+    if (cleaned !== current) writeFileSync(TABLE_SOURCE, cleaned);
+  } catch {
+    // File missing/unreadable: nothing to restore.
+  }
+};
+
 test.beforeEach(() => {
+  restoreTableMarker();
   rmSync(studioDir, { recursive: true, force: true });
 });
 
 test.afterAll(() => {
+  restoreTableMarker();
   rmSync(studioDir, { recursive: true, force: true });
 });
 
@@ -840,4 +862,80 @@ test("HMR re-injection: reloads and hot updates never duplicate the Studio mount
   } finally {
     writeFileSync(targetFile, original);
   }
+});
+
+test("dock: compact toolbar, drag persists across reload, More menu (G01)", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  const dock = root.locator(".ps-dock");
+
+  // Collapsed = compact icon toolbar (toggle + badge + More), no large panel.
+  await expect(dock).toBeVisible();
+  await expect(root.locator(".ps-toggle")).toBeVisible();
+  await expect(root.locator(".ps-badge")).toBeVisible();
+  await expect(root.locator(".ps-more-button")).toBeVisible();
+  await expect(root.locator("[role='toolbar']")).toHaveCount(0);
+  // No emoji glyphs (D-034 #5).
+  expect(await root.locator(".ps-toggle").innerText()).not.toContain("🛠");
+
+  // Pointer drag: move the dock 120px left and 80px up.
+  const before = (await dock.boundingBox())!;
+  await page.mouse.move(before.x + 20, before.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(before.x + 20 - 120, before.y + 20 - 80, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  const moved = (await dock.boundingBox())!;
+  expect(Math.round(moved.x)).toBeLessThanOrEqual(Math.round(before.x) - 90);
+  expect(Math.round(moved.y)).toBeLessThanOrEqual(Math.round(before.y) - 50);
+
+  // Reload → position retained (localStorage portal-studio.dock).
+  await page.reload();
+  await expect(dock).toBeVisible();
+  const after = (await dock.boundingBox())!;
+  expect(Math.round(after.x)).toBe(Math.round(moved.x));
+  expect(Math.round(after.y)).toBe(Math.round(moved.y));
+
+  // More menu opens, Esc closes.
+  await root.locator(".ps-more-button").click();
+  await expect(root.locator(".ps-more-menu")).toBeVisible();
+  await expect(root.locator(".ps-more-menu")).toContainText(
+    "Reset dock position"
+  );
+  await page.keyboard.press("Escape");
+  await expect(root.locator(".ps-more-menu")).toHaveCount(0);
+
+  // Reset dock position via MOUSE (F1: outside-click must not swallow the
+  // menuitem click across the shadow boundary) restores the default anchor.
+  await root.locator(".ps-more-button").click();
+  await root.locator(".ps-more-menu .ps-menu-item").click();
+  await expect(root.locator(".ps-more-menu")).toHaveCount(0);
+  const reset = (await dock.boundingBox())!;
+  expect(Math.round(reset.x)).toBeGreaterThan(Math.round(moved.x) + 40);
+  expect(Math.round(reset.y)).toBeGreaterThan(Math.round(moved.y) + 40);
+
+  // Menu flips BELOW the dock at the top edge (F2) and stays on-screen.
+  const topBox = (await dock.boundingBox())!;
+  await page.mouse.move(topBox.x + 20, topBox.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(topBox.x + 20, 5, { steps: 6 });
+  await page.mouse.up();
+  await root.locator(".ps-more-button").click();
+  const menuBox = (await root.locator(".ps-more-menu").boundingBox())!;
+  expect(Math.round(menuBox.y)).toBeGreaterThanOrEqual(0);
+  expect(Math.round(menuBox.y)).toBeGreaterThan(
+    Math.round((await dock.boundingBox())!.y)
+  );
+  await page.keyboard.press("Escape");
+
+  // Expanded panel still works after the dock changes (aria-expanded).
+  await root.locator(".ps-toggle").click();
+  await expect(root.locator("[role='toolbar']")).toBeVisible();
+  await expect(root.locator(".ps-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true"
+  );
 });

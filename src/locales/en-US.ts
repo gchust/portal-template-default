@@ -111,6 +111,9 @@ export const starter = {
   "studio.title": "Portal Studio",
   "studio.toggle.open": "Open Portal Studio",
   "studio.toggle.close": "Close Portal Studio",
+  "studio.annotations": "Annotations",
+  "studio.more": "More",
+  "studio.resetDock": "Reset dock position",
   "studio.close": "Close",
   "studio.pick": "Pick element",
   "studio.pickHint":

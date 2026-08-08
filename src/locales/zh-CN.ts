@@ -105,6 +105,9 @@ export const starter = {
   "studio.title": "Portal Studio",
   "studio.toggle.open": "打开 Portal Studio",
   "studio.toggle.close": "关闭 Portal Studio",
+  "studio.annotations": "标注",
+  "studio.more": "更多",
+  "studio.resetDock": "重置 dock 位置",
   "studio.close": "关闭",
   "studio.pick": "拾取元素",
   "studio.pickHint":

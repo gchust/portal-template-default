@@ -437,4 +437,102 @@ describe("StudioToolbar", () => {
       screen.queryByRole("toolbar", { name: "Portal Studio" })
     ).not.toBeInTheDocument();
   });
+
+  // ---- Goal 01 dock (G01 AC3/AC4/AC5/AC7) ----
+
+  it("collapsed state renders the compact icon toolbar without the large panel", () => {
+    render(<StudioToolbar config={config} />);
+    expect(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Annotations" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("toolbar", { name: "Portal Studio" })
+    ).not.toBeInTheDocument();
+    // No emoji glyphs in the toolbar (D-034 #5).
+    expect(
+      document.querySelector("#portal-studio-root")
+    ).toBeNull(); // jsdom render has no host; check the root text instead
+    const dock = document.querySelector(".ps-dock");
+    expect(dock?.textContent).not.toContain("🛠");
+  });
+
+  it("expanding sets aria-expanded and shows the panel anchored above the dock", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    const toggle = screen.getByRole("button", { name: "Open Portal Studio" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const panel = screen.getByRole("toolbar", { name: "Portal Studio" });
+    // Panel layout comes from resolveDockLayout (inline left/top/bottom);
+    // position:fixed lives in the shadow stylesheet (not loaded in jsdom).
+    expect(panel.style.left).not.toBe("");
+    expect(panel.style.width).not.toBe("");
+  });
+
+  it("keyboard arrows move the dock; Shift moves by the larger step", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    const toggle = screen.getByRole("button", { name: "Open Portal Studio" });
+    const dock = document.querySelector(".ps-dock") as HTMLElement;
+    const before = { left: Number(dock.style.left.replace("px", "")), top: Number(dock.style.top.replace("px", "")) };
+    toggle.focus();
+    await user.keyboard("{ArrowLeft}");
+    await user.keyboard("{Shift>}{ArrowLeft}{/Shift}");
+    await waitFor(() => {
+      const after = { left: Number(dock.style.left.replace("px", "")), top: Number(dock.style.top.replace("px", "")) };
+      expect(after.left).toBe(before.left - 8 - 24);
+      expect(after.top).toBe(before.top);
+    });
+  });
+
+  it("keyboard drag never moves the dock outside the viewport", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    const toggle = screen.getByRole("button", { name: "Open Portal Studio" });
+    const dock = document.querySelector(".ps-dock") as HTMLElement;
+    toggle.focus();
+    for (let index = 0; index < 200; index += 1) {
+      await user.keyboard("{ArrowLeft}");
+    }
+    expect(Number(dock.style.left.replace("px", ""))).toBe(0);
+    for (let index = 0; index < 200; index += 1) {
+      await user.keyboard("{ArrowUp}");
+    }
+    expect(Number(dock.style.top.replace("px", ""))).toBe(0);
+  });
+
+  it("More menu opens, Esc closes it and returns focus to the More button", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    const more = screen.getByRole("button", { name: "More" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    await user.click(more);
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    const menu = screen.getByRole("menu");
+    expect(menu.textContent).toContain("Reset dock position");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    expect(more).toHaveFocus();
+  });
+
+  it("Reset dock position restores the default bottom-right anchor", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    const toggle = screen.getByRole("button", { name: "Open Portal Studio" });
+    const dock = document.querySelector(".ps-dock") as HTMLElement;
+    toggle.focus();
+    await user.keyboard("{ArrowLeft}");
+    await user.keyboard("{ArrowLeft}");
+    const movedLeft = Number(dock.style.left.replace("px", ""));
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(screen.getByRole("menuitem", { name: /Reset dock position/ }));
+    await waitFor(() => {
+      expect(Number(dock.style.left.replace("px", ""))).toBeGreaterThan(movedLeft);
+    });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
 });
