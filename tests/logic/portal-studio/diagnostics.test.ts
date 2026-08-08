@@ -170,7 +170,7 @@ describe("installDiagnosticsCapture — real channel wiring", () => {
   it("captures console.error through the wrapped channel", () => {
     const buffer = makeBuffer();
     const dispose = installDiagnosticsCapture(buffer);
-     
+
     console.error("real console boom Bearer cap-secret");
     expect(snapshotDiagnostics(buffer)).toHaveLength(1);
     const [entry] = snapshotDiagnostics(buffer);
@@ -184,7 +184,7 @@ describe("installDiagnosticsCapture — real channel wiring", () => {
     const buffer = makeBuffer();
     installDiagnosticsCapture(buffer);
     const second = installDiagnosticsCapture(buffer);
-     
+
     console.error("single capture");
     expect(snapshotDiagnostics(buffer)).toHaveLength(1);
     second();
