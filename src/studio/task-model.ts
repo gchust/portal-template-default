@@ -266,3 +266,16 @@ export function completeAllAnnotations(
       : { ...annotation, status: "completed", completedAt }
   );
 }
+
+/** Reopen a completed annotation (pure; Goal 03 marker editor). */
+export function reopenAnnotation(
+  annotations: Annotation[],
+  annotationId: string
+): Annotation[] {
+  return annotations.map((annotation) =>
+    annotation.annotationId === annotationId &&
+    annotation.status === "completed"
+      ? { ...annotation, status: "open", completedAt: undefined }
+      : annotation
+  );
+}

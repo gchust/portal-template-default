@@ -14,6 +14,7 @@ import {
   groupToggleElement,
   MAX_ANNOTATIONS,
   removeAnnotation,
+  reopenAnnotation,
   toggleAnnotationHidden,
   updateAnnotationComment,
 } from "@/studio/task-model";
@@ -137,5 +138,24 @@ describe("completeAnnotation / completeAllAnnotations (G04, D-033 #13)", () => {
     expect(all[0].completedAt).toBe("x");
     expect(all[1].status).toBe("completed");
     expect(typeof all[1].completedAt).toBe("string");
+  });
+});
+
+describe("reopenAnnotation (Goal 03 marker editor)", () => {
+  it("reopens a completed annotation and clears completedAt", () => {
+    const annotations = [
+      { ...makeAnnotation("a"), status: "completed" as const, completedAt: "2026-08-08T00:00:00.000Z" },
+      makeAnnotation("b"),
+    ];
+    const reopened = reopenAnnotation(annotations, "a");
+    expect(reopened[0].status).toBe("open");
+    expect(reopened[0].completedAt).toBeUndefined();
+    expect(reopened[1]).toEqual(annotations[1]);
+  });
+
+  it("leaves open annotations and unknown ids untouched", () => {
+    const annotations = [makeAnnotation("a"), makeAnnotation("b")];
+    expect(reopenAnnotation(annotations, "a")).toEqual(annotations);
+    expect(reopenAnnotation(annotations, "zzz")).toEqual(annotations);
   });
 });

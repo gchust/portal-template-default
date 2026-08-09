@@ -40,11 +40,14 @@ const mockFetchRoutes = (
   routes: Array<{
     url: string;
     method: string;
-    respond: () => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
+    respond: (init?: { method?: string; body?: string }) => Promise<{
+      ok: boolean;
+      json: () => Promise<unknown>;
+    }>;
   }>
 ) => {
   const fetchMock = vi.fn(
-    (input: string | URL | Request, init?: { method?: string }) => {
+    (input: string | URL | Request, init?: { method?: string; body?: string }) => {
       const url = String(input);
       const method = (init?.method ?? "GET").toUpperCase();
       const route = routes.find(
@@ -53,7 +56,7 @@ const mockFetchRoutes = (
       );
       return Promise.resolve(
         route
-          ? route.respond()
+          ? route.respond(init)
           : { ok: false, json: async () => ({ error: "unexpected" }) }
       );
     }
@@ -1548,6 +1551,780 @@ describe("StudioToolbar", () => {
     await user.keyboard("{Enter}");
     const restored = screen.getByLabelText("Annotation comment");
     expect((restored as HTMLTextAreaElement).value).toBe("unsaved draft survives");
+  });
+
+  // ---- Goal 03: marker-local annotation editor ----
+
+  /** jsdom returns zero rects; give page elements a real geometry. */
+  const mockRect = (
+    element: Element,
+    rect: { left: number; top: number; width: number; height: number }
+  ) => {
+    (element as HTMLElement & { getBoundingClientRect(): DOMRect }).getBoundingClientRect =
+      () =>
+        ({
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+          right: rect.left + rect.width,
+          bottom: rect.top + rect.height,
+          x: rect.left,
+          y: rect.top,
+          toJSON: () => ({}),
+        }) as DOMRect;
+  };
+
+  /** makePageElement + a non-zero rect (markers skip zero-sized targets). */
+  const makeMarkerPageElement = (
+    text: string,
+    id: string,
+    rect = { left: 100, top: 200, width: 200, height: 40 }
+  ) => {
+    const element = makePageElement(text, id);
+    mockRect(element, rect);
+    return element;
+  };
+
+  const makeMarkerTask = (annotations: unknown[]) => ({
+    task: {
+      schemaVersion: 5,
+      taskId: "task-markers-1",
+      createdAt: "2026-08-08T12:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations,
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    },
+  });
+
+  const markerRoutes = (annotations: unknown[], postOk = true) => {
+    // Stateful like the real server: the POST persists the submitted task,
+    // so the follow-up GET (refreshTask) returns the UPDATED annotations.
+    let current = [...annotations];
+    return mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse(makeMarkerTask(current)),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          if (!postOk) {
+            return jsonResponse({ ok: false, error: "boom" });
+          }
+          const payload = JSON.parse(init?.body ?? "{}") as {
+            annotations?: unknown[];
+          };
+          if (Array.isArray(payload.annotations)) {
+            current = payload.annotations;
+          }
+          return jsonResponse({ ok: true });
+        },
+      },
+    ]);
+  };
+
+  const elementCapture = (id: string) => ({
+    tagName: "tr",
+    selectorCandidates: [{ kind: "id", selector: `#${id}` }],
+    componentCandidates: [],
+    sourceCandidates: [],
+    snapshot: { text: id, attributes: {}, childCount: 0 },
+  });
+
+  it("markers render as semantic buttons labeled with display number and action", async () => {
+    makeMarkerPageElement("Alice", "row-a");
+    markerRoutes([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "fix this",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    expect(marker).toBeInTheDocument();
+    // Not aria-hidden — it is a real accessible control.
+    expect(marker.closest(".ps-marker-anchor")).not.toHaveAttribute(
+      "aria-hidden"
+    );
+  });
+
+  it("clicking an element marker opens the editor; Save persists via the shared path", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    markerRoutes([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "original",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    // Editor opens beside the marker with the current comment.
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    const textarea = within(dialog).getByRole("textbox");
+    expect((textarea as HTMLTextAreaElement).value).toBe("original");
+    // Edit and save.
+    await user.clear(textarea);
+    await user.type(textarea, "edited from marker");
+    await user.click(within(dialog).getByRole("button", { name: "Save comment" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    // Open the panel — the list shows the updated comment (shared path).
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    expect(await screen.findByText("edited from marker")).toBeInTheDocument();
+  });
+
+  it("save failure preserves the edited text and shows error/retry feedback", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    markerRoutes(
+      [
+        {
+          annotationId: "ann-1",
+          kind: "element",
+          comment: "original",
+          createdAt: "2026-08-08T12:00:00.000Z",
+          status: "open",
+          elements: [elementCapture("row-a")],
+        },
+      ],
+      false
+    );
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    const textarea = within(dialog).getByRole("textbox");
+    await user.clear(textarea);
+    await user.type(textarea, "precious text");
+    await user.click(within(dialog).getByRole("button", { name: "Save comment" }));
+    // Error feedback shown; editor stays open; text preserved.
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/boom/);
+    });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect((within(dialog).getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+      "precious text"
+    );
+    // The FAILED comment must NOT be in shared state: close the editor and
+    // open the panel — the list still shows the last CONFIRMED comment.
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    expect(screen.getByText("original")).toBeInTheDocument();
+    expect(screen.queryByText("precious text")).not.toBeInTheDocument();
+  });
+
+  it("a failed comment cannot leak into a later unrelated mutation", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    // Stateful mock: the FIRST POST fails; subsequent mutations succeed.
+    let failed = true;
+    let current: unknown[] = [
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "original",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ];
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse(makeMarkerTask(current)),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          if (failed) {
+            failed = false;
+            return jsonResponse({ ok: false, error: "boom" });
+          }
+          const payload = JSON.parse(init?.body ?? "{}") as {
+            annotations?: unknown[];
+          };
+          if (Array.isArray(payload.annotations)) {
+            current = payload.annotations;
+          }
+          return jsonResponse({ ok: true });
+        },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    // 1. Failed edit of the comment.
+    await user.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    const textarea = within(dialog).getByRole("textbox");
+    await user.clear(textarea);
+    await user.type(textarea, "doomed leak");
+    await user.click(within(dialog).getByRole("button", { name: "Save comment" }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/boom/);
+    });
+    await user.keyboard("{Escape}");
+    // 2. Unrelated mutation: Complete via the marker editor. It must build
+    //    on the CONFIRMED annotations (comment "original"), never "doomed".
+    await user.click(marker);
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Annotation editor" })).getByRole(
+        "button",
+        { name: "Complete" }
+      )
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    // The persisted artifact: comment "original", status completed — the
+    // successful Complete mutation never carried the failed comment.
+    await waitFor(() => {
+      const bodies = fetchMock.mock.calls
+        .filter(
+          (call) =>
+            (call[1] as { method?: string } | undefined)?.method === "POST"
+        )
+        .map((call) => (call[1] as { body?: string }).body ?? "");
+      expect(
+        bodies.some((body) => body.includes('"status":"completed"'))
+      ).toBe(true);
+    });
+    const postBodies = fetchMock.mock.calls
+      .filter((call) => (call[1] as { method?: string } | undefined)?.method === "POST")
+      .map((call) => (call[1] as { body?: string }).body ?? "");
+    const completedPost = postBodies.find((body) =>
+      body.includes('"status":"completed"')
+    )!;
+    expect(completedPost).not.toContain("doomed leak");
+    expect(completedPost).toContain("original");
+  });
+
+  it("retry after a failed save succeeds and persists the corrected comment", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    // First POST fails; the retry POST succeeds (stateful mock).
+    let failed = true;
+    let current: unknown[] = [
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "original",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ];
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse(makeMarkerTask(current)),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          if (failed) {
+            failed = false;
+            return jsonResponse({ ok: false, error: "boom" });
+          }
+          const payload = JSON.parse(init?.body ?? "{}") as {
+            annotations?: unknown[];
+          };
+          if (Array.isArray(payload.annotations)) {
+            current = payload.annotations;
+          }
+          return jsonResponse({ ok: true });
+        },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    // 1. First save attempt fails — error shown, draft preserved.
+    await user.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    const textarea = within(dialog).getByRole("textbox");
+    await user.clear(textarea);
+    await user.type(textarea, "retry text");
+    await user.click(within(dialog).getByRole("button", { name: "Save comment" }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/boom/);
+    });
+    expect((textarea as HTMLTextAreaElement).value).toBe("retry text");
+    // 2. Retry (same Save button) succeeds — editor closes, list updated.
+    await user.click(within(dialog).getByRole("button", { name: "Save comment" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    expect(await screen.findByText("retry text")).toBeInTheDocument();
+  });
+
+  it("another marker cannot race an in-flight save; a late failure stays on the original editor and draft", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    // Deferred POST: the first save stays in flight until the gate resolves.
+    let openGate: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    let current: unknown[] = [
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "original one",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+      {
+        annotationId: "ann-2",
+        kind: "element",
+        comment: "original two",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ];
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse(makeMarkerTask(current)),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          await gate;
+          const payload = JSON.parse(init?.body ?? "{}") as {
+            annotations?: unknown[];
+          };
+          if (Array.isArray(payload.annotations)) {
+            current = payload.annotations;
+          }
+          return jsonResponse({ ok: false, error: "boom" });
+        },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const markers = await screen.findAllByRole("button", {
+      name: /open editor/,
+    });
+    expect(markers).toHaveLength(2);
+    // Open the FIRST marker, type a draft, and start the save (in flight).
+    await user.click(markers[0]);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    const textarea = within(dialog).getByRole("textbox");
+    await user.clear(textarea);
+    await user.type(textarea, "draft one");
+    await user.click(within(dialog).getByRole("button", { name: "Save comment" }));
+    // The save is pending — clicking the SECOND marker must NOT switch the
+    // editor (save-in-flight lock).
+    await user.click(markers[1]);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(
+      (within(screen.getByRole("dialog", { name: "Annotation editor" })).getByRole(
+        "textbox"
+      ) as HTMLTextAreaElement).value
+    ).toBe("draft one");
+    // Let the save fail — the error lands on the ORIGINAL editor with the
+    // draft intact, not on the other marker's editor.
+    openGate?.();
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/boom/);
+    });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(
+      (within(screen.getByRole("dialog", { name: "Annotation editor" })).getByRole(
+        "textbox"
+      ) as HTMLTextAreaElement).value
+    ).toBe("draft one");
+  });
+
+  it("list mutation controls cannot race an in-flight marker save", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    let openGate: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    let current: unknown[] = [
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "original",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ];
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse(makeMarkerTask(current)),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          await gate;
+          const payload = JSON.parse(init?.body ?? "{}") as {
+            annotations?: unknown[];
+          };
+          if (Array.isArray(payload.annotations)) {
+            current = payload.annotations;
+          }
+          return jsonResponse({ ok: true });
+        },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    const textarea = within(dialog).getByRole("textbox");
+    await user.clear(textarea);
+    await user.type(textarea, "marker save");
+    await user.click(within(dialog).getByRole("button", { name: "Save comment" }));
+    // While the save is in flight the list Complete button is DISABLED —
+    // no newer action can be enqueued and dropped. (Scope to the LIST
+    // control; the marker editor's own Complete is disabled too.)
+    const listComplete = document.querySelector(
+      ".ps-annotation-item [aria-label='Complete']"
+    ) as HTMLButtonElement;
+    expect(listComplete.disabled).toBe(true);
+    await user.click(listComplete);
+    const postsDuringSave = fetchMock.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
+    ).length;
+    expect(postsDuringSave).toBe(1);
+    // Complete the save — the marker comment is persisted.
+    openGate?.();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    // The list control works again after the save settles.
+    const listCompleteAfter = document.querySelector(
+      ".ps-annotation-item [aria-label='Complete']"
+    ) as HTMLButtonElement;
+    await user.click(listCompleteAfter);
+    await waitFor(() => {
+      const bodies = fetchMock.mock.calls
+        .filter(
+          (call) =>
+            (call[1] as { method?: string } | undefined)?.method === "POST"
+        )
+        .map((call) => (call[1] as { body?: string }).body ?? "");
+      expect(
+        bodies.some((body) => body.includes('"status":"completed"'))
+      ).toBe(true);
+    });
+  });
+
+  it("Complete for open annotations and Reopen for completed ones", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    markerRoutes([
+      {
+        annotationId: "ann-open",
+        kind: "element",
+        comment: "do me",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+      {
+        annotationId: "ann-done",
+        kind: "element",
+        comment: "done",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "completed",
+        completedAt: "2026-08-08T13:00:00.000Z",
+        elements: [elementCapture("row-a")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    // Open annotation → Complete button.
+    const openMarker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(openMarker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    await user.click(within(dialog).getByRole("button", { name: "Complete" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    // Completed annotation → Reopen button.
+    const doneMarker = await screen.findByRole("button", {
+      name: "Annotation 2: open editor",
+    });
+    await user.click(doneMarker);
+    const dialog2 = screen.getByRole("dialog", { name: "Annotation editor" });
+    expect(
+      within(dialog2).queryByRole("button", { name: "Complete" })
+    ).not.toBeInTheDocument();
+    await user.click(within(dialog2).getByRole("button", { name: "Reopen" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("Delete requires lightweight confirmation and removes the annotation", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    markerRoutes([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "doomed",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    // Confirmation appears; the first Delete click must NOT remove yet.
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "Delete this annotation?"
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Delete", exact: true })
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByText("doomed")).not.toBeInTheDocument();
+    });
+  });
+
+  it("Escape closes the editor and restores focus to the marker button", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    markerRoutes([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "focus me",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(marker).toHaveFocus();
+    });
+  });
+
+  it("outside click closes the editor; clicks inside the editor keep it open", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    markerRoutes([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "stay",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    // Click inside the editor → stays open.
+    await user.click(within(dialog).getByRole("textbox"));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    // Click outside (the page row) → closes.
+    await user.click(document.body);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("pointer/keyboard events inside the editor do not leak into capture or hotkey handlers", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    markerRoutes([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "isolated",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    const textarea = within(dialog).getByRole("textbox");
+    textarea.focus();
+    // A pointer move inside the editor must NOT start picking (no hint).
+    fireEvent.pointerMove(textarea, { clientX: 5, clientY: 5 });
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    // A hotkey combo typed inside the editor textarea must NOT switch modes
+    // and must NOT be treated as a handled shortcut (no preventDefault).
+    const keyEvent = new KeyboardEvent("keydown", {
+      key: "m",
+      ctrlKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const spy = vi.spyOn(keyEvent, "preventDefault");
+    textarea.dispatchEvent(keyEvent);
+    expect(screen.queryByText(/Multi-select/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
+    // The editor is still open and the draft intact.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("hotkey combos from NON-editable editor controls do not leak (mode idle, no preventDefault)", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    markerRoutes([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "isolated",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    // Focus a NON-editable control inside the editor (the Complete button).
+    const completeButton = within(dialog).getByRole("button", { name: "Complete" });
+    completeButton.focus();
+    const keyEvent = new KeyboardEvent("keydown", {
+      key: "p",
+      ctrlKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const spy = vi.spyOn(keyEvent, "preventDefault");
+    completeButton.dispatchEvent(keyEvent);
+    // Mode must stay idle (no pick hint) and the shortcut must not be
+    // handled (preventDefault not called) — the guard covers ALL editor
+    // internals, not just editable targets.
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Drag over the page/)).not.toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("multi marker activation highlights every captured target temporarily", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    makeMarkerPageElement("Bob", "row-b");
+    markerRoutes([
+      {
+        annotationId: "ann-multi",
+        kind: "multi",
+        comment: "group",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [elementCapture("row-a"), elementCapture("row-b")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    // Two temporary highlights — one per resolved captured target.
+    expect(document.querySelectorAll(".ps-marker-highlight")).toHaveLength(2);
+    // Closing the editor removes the highlights.
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(document.querySelectorAll(".ps-marker-highlight")).toHaveLength(0);
+    });
+  });
+
+  it("region marker opens the editor positioned beside the region boundary", async () => {
+    const user = userEvent.setup();
+    markerRoutes([
+      {
+        annotationId: "ann-region",
+        kind: "region",
+        comment: "area note",
+        createdAt: "2026-08-08T12:00:00.000Z",
+        status: "open",
+        elements: [],
+        region: { x: 400, y: 300, width: 200, height: 120 },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
+    // Positioned beside the region: top = region bottom + gap (below).
+    const style = (dialog as HTMLElement).style;
+    expect(Number(style.top.replace("px", ""))).toBe(300 + 120 + 8);
+    expect(Number(style.left.replace("px", ""))).toBe(400 + 200 - 264);
   });
 
 });

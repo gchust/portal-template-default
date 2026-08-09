@@ -270,6 +270,56 @@ const TOOLBAR_STYLES = `
   font-weight: 700;
   line-height: 1;
 }
+/* Goal 03: markers are semantic buttons — clickable, keyboard-focusable. */
+.ps-marker-chip-button {
+  pointer-events: auto;
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+}
+.ps-marker-chip-button:hover {
+  filter: brightness(1.15);
+}
+.ps-marker-chip-button:focus-visible {
+  outline: 2px solid var(--ps-accent, #6366f1);
+  outline-offset: 2px;
+}
+/* Goal 03: region marker chip sits on the region outline's corner. */
+.ps-marker-region-chip {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+/* Goal 03: temporary multi-target highlight while the editor is open. */
+.ps-marker-highlight {
+  border-color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  pointer-events: none;
+}
+/* Goal 03: marker-local editor dialog. max-width/max-height + overflow
+   make it FIT viewports smaller than its nominal 264x232 size, keeping
+   Save/Delete reachable via scrolling (review P1). */
+.ps-marker-editor {
+  position: fixed;
+  z-index: 2147483003;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #18181b;
+  color: #fafafa;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+  max-width: calc(100vw - 8px);
+  max-height: calc(100vh - 8px);
+  overflow-y: auto;
+}
+:host-context([data-ps-theme="light"]) .ps-marker-editor {
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #ffffff;
+  color: #18181b;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
 .ps-marker-chip-onpage {
   border: 1px solid rgba(255, 255, 255, 0.7);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);

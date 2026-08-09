@@ -172,4 +172,9 @@ export const starter = {
   "studio.dragHint": "Drag to reposition",
   "studio.showAllMarkers": "Show all markers",
   "studio.hideAllMarkers": "Hide all markers",
+  "studio.marker.openEditor": "Annotation {{number}}: open editor",
+  "studio.editorTitle": "Annotation editor",
+  "studio.saveComment": "Save comment",
+  "studio.reopen": "Reopen",
+  "studio.saveError": "Unable to save — try again.",
 } as const;

@@ -1003,6 +1003,277 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(0);
 });
 
+test("marker-local editor (G03): element marker save, complete/reopen, delete, Esc focus return", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+
+  // One element annotation to act on.
+  await startPicking(page);
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G03 marker note");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+
+  // Marker is a semantic, enabled button (not aria-hidden).
+  const marker = root.locator(".ps-marker-anchor button");
+  await expect(marker).toHaveCount(1);
+  await expect(marker).toBeEnabled();
+
+  // Keyboard activation (Enter) opens the marker-local editor.
+  await marker.focus();
+  await page.keyboard.press("Enter");
+  const editor = root.locator(".ps-marker-editor");
+  await expect(editor).toBeVisible();
+  const textarea = editor.locator("textarea");
+  await expect(textarea).toHaveValue("G03 marker note");
+
+  // Viewport-safe: the editor stays fully inside the viewport.
+  const box = (await editor.boundingBox())!;
+  const vp = page.viewportSize()!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(vp.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(vp.height);
+
+  // Save edits the comment through the shared path → artifact updated.
+  await textarea.fill("G03 marker edited");
+  await editor.locator(".ps-button.ps-primary").click();
+  await expect(editor).toHaveCount(0);
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.comment)
+    .toBe("G03 marker edited");
+
+  // Complete from the marker editor (open → completed).
+  await marker.click();
+  await expect(editor).toBeVisible();
+  await editor
+    .locator(".ps-button:not(.ps-primary):not(.ps-danger)")
+    .click();
+  await expect(editor).toHaveCount(0);
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.status)
+    .toBe("completed");
+
+  // Reopen from the marker editor (completed → open).
+  await marker.click();
+  await expect(editor).toBeVisible();
+  await editor
+    .locator(".ps-button:not(.ps-primary):not(.ps-danger)")
+    .click();
+  await expect(editor).toHaveCount(0);
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.status)
+    .toBe("open");
+
+  // Esc closes the editor and restores focus to the marker button.
+  await marker.click();
+  await expect(editor).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(editor).toHaveCount(0);
+  await expect(marker).toBeFocused();
+
+  // Delete requires lightweight confirmation, then removes the annotation.
+  await marker.click();
+  await editor.locator(".ps-button.ps-danger").click();
+  await expect(editor.locator(".ps-annotation-confirm")).toBeVisible();
+  await editor.locator(".ps-button.ps-danger").click();
+  await expect(editor).toHaveCount(0);
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+  await expect(root.locator(".ps-marker-anchor button")).toHaveCount(0);
+});
+
+test("marker-local editor (G03): fits viewports smaller than the editor", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  // Create the annotation at the default viewport, THEN shrink to a size
+  // SMALLER than the editor's nominal 264x232.
+  await openStudio(page);
+  await startPicking(page);
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G03 small viewport");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+  await page.setViewportSize({ width: 220, height: 200 });
+
+  // The dialog must FIT the smaller viewport (max-width/max-height +
+  // overflow) with the bounding box fully inside.
+  const marker = root.locator(".ps-marker-anchor button");
+  // The fixed-position marker may sit outside the shrunken viewport;
+  // a programmatic click opens the editor — its ANCHOR must still clamp
+  // inside the viewport (the behavior under test).
+  await marker.evaluate((el) => (el as HTMLButtonElement).click());
+  const editor = root.locator(".ps-marker-editor");
+  await expect(editor).toBeVisible();
+  const box = (await editor.boundingBox())!;
+  const vp = page.viewportSize()!;
+  expect(vp.width).toBeLessThan(264);
+  expect(vp.height).toBeLessThan(232);
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(vp.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(vp.height);
+
+  // Save remains reachable and works at this size.
+  await editor.locator(".ps-button.ps-primary").click();
+  await expect(editor).toHaveCount(0);
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.comment)
+    .toBe("G03 small viewport");
+
+  // Delete (with its confirmation) remains reachable too.
+  await marker.evaluate((el) => (el as HTMLButtonElement).click());
+  await expect(editor).toBeVisible();
+  await editor.locator(".ps-button.ps-danger").click();
+  await expect(editor.locator(".ps-annotation-confirm")).toBeVisible();
+  await editor.locator(".ps-button.ps-danger").click();
+  await expect(editor).toHaveCount(0);
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+  await expect(root.locator(".ps-marker-anchor button")).toHaveCount(0);
+});
+
+test("marker-local editor (G03): multi highlight, region boundary, save failure, event isolation", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+
+  // Multi annotation: two cells in ONE group.
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Multi-select" })
+    .click();
+  const cellA = page.locator("tbody tr").first().locator("td").nth(0);
+  const cellB = page.locator("tbody tr").first().locator("td").nth(1);
+  await cellA.hover();
+  await cellA.click();
+  await cellB.hover();
+  await cellB.click();
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Finish group" })
+    .click();
+  await page
+    .locator("#portal-studio-root textarea")
+    .fill("G03 multi marker");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+  const task = readActiveTask();
+  expect(task.annotations[0].kind).toBe("multi");
+
+  // Opening the multi marker highlights every captured target.
+  const multiMarker = root.locator(".ps-marker-anchor button").first();
+  await multiMarker.click();
+  await expect(root.locator(".ps-marker-editor")).toBeVisible();
+  await expect(root.locator(".ps-marker-highlight")).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  await expect(root.locator(".ps-marker-highlight")).toHaveCount(0);
+
+  // Save failure: the POST is intercepted → error shown, text preserved.
+  await page.route("**/__portal-studio/tasks", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, error: "simulated failure" }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+  await multiMarker.click();
+  const editor = root.locator(".ps-marker-editor");
+  await editor.locator("textarea").fill("G03 doomed text");
+  await editor.locator(".ps-button.ps-primary").click();
+  await expect(editor.locator(".ps-error")).toContainText(/simulated failure/);
+  await expect(editor.locator("textarea")).toHaveValue("G03 doomed text");
+  // Regression (review P1): the FAILED comment must NOT reach the shared
+  // state or the server artifact — the last confirmed comment stays.
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.comment)
+    .toBe("G03 multi marker");
+  await page.unroute("**/__portal-studio/tasks");
+  await page.keyboard.press("Escape");
+
+  // Event isolation: typing a hotkey combo inside the editor textarea must
+  // NOT switch Studio modes, and pointer events must not start capture.
+  await multiMarker.click();
+  await expect(root.locator(".ps-marker-editor")).toBeVisible();
+  await editor.locator("textarea").click();
+  // Exactly the two multi-target highlights are shown; a leaked hotkey or
+  // pointer capture would add the hidden capture-mode outline (mode switch
+  // renders an extra .ps-outline even when no target is hovered yet).
+  await expect(root.locator(".ps-marker-highlight")).toHaveCount(2);
+  const outlinesBefore = await root.locator(".ps-outline").count();
+  await page.keyboard.press("Control+Alt+KeyM");
+  await expect(root.locator(".ps-marker-highlight")).toHaveCount(2);
+  await expect(root.locator(".ps-outline")).toHaveCount(outlinesBefore);
+  await expect(root.locator(".ps-marker-editor")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Region annotation (marquee): the region marker chip opens the editor
+  // anchored beside the region boundary, inside the viewport.
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Select region" })
+    .click();
+  const table = page.locator("tbody").first();
+  const tbox = (await table.boundingBox())!;
+  await page.mouse.move(tbox.x + 10, tbox.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(tbox.x + tbox.width - 10, tbox.y + tbox.height - 10, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await page
+    .locator("#portal-studio-root textarea")
+    .fill("G03 region marker");
+  await page.keyboard.press("Control+Enter");
+  await expect
+    .poll(() => readActiveTask().annotations.at(-1)?.kind)
+    .toBe("region");
+
+  const regionMarker = root.locator(".ps-marker-region-chip");
+  await expect(regionMarker).toHaveCount(1);
+  await regionMarker.click();
+  await expect(root.locator(".ps-marker-editor")).toBeVisible();
+  const editorBox = (await editor.boundingBox())!;
+  const vp = page.viewportSize()!;
+  expect(editorBox.x).toBeGreaterThanOrEqual(0);
+  expect(editorBox.y).toBeGreaterThanOrEqual(0);
+  expect(editorBox.x + editorBox.width).toBeLessThanOrEqual(vp.width);
+  expect(editorBox.y + editorBox.height).toBeLessThanOrEqual(vp.height);
+  await page.keyboard.press("Escape");
+
+  // Cleanup: delete both annotations so later tests start empty.
+  await closeStudio(page);
+  await openStudio(page);
+  const deleteButtons = root.locator(
+    ".ps-annotation-item [aria-label='Delete']"
+  );
+  const count = await deleteButtons.count();
+  for (let index = 0; index < count; index += 1) {
+    await deleteButtons.first().click();
+    await root.locator(".ps-annotation-confirm").waitFor();
+    await root
+      .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+      .click();
+    await expect
+      .poll(() => readActiveTask().annotations.length)
+      .toBe(count - index - 1);
+  }
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
+});
+
 test("annotations: multi-select group, delete renumbers, hide and clear-all persist (G03)", async ({
   page,
 }) => {

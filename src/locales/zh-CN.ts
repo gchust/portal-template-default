@@ -164,4 +164,9 @@ export const starter = {
   "studio.dragHint": "拖拽以重新定位",
   "studio.showAllMarkers": "显示所有标记",
   "studio.hideAllMarkers": "隐藏所有标记",
+  "studio.marker.openEditor": "标注 {{number}}：打开编辑器",
+  "studio.editorTitle": "标注编辑器",
+  "studio.saveComment": "保存评论",
+  "studio.reopen": "重新打开",
+  "studio.saveError": "保存失败，请重试。",
 } as const;

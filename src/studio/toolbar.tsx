@@ -52,7 +52,13 @@ import {
 import { sharedDiagnosticsBuffer, snapshotDiagnostics } from "./diagnostics";
 import { formatTaskMarkdown } from "./format.ts";
 import { captureViewportPng } from "./screenshot";
-import { isAnnotationUnresolved, resolveAnnotationTarget } from "./markers";
+import {
+  isAnnotationUnresolved,
+  resolveAnnotationTarget,
+  resolveAnnotationTargets,
+  resolveMarkerEditorPosition,
+  MARKER_EDITOR_WIDTH,
+} from "./markers";
 import { newTaskId } from "./task-id";
 import {
   annotationDisplayNumber,
@@ -60,6 +66,7 @@ import {
   groupToggleElement,
   normalizeTask,
   removeAnnotation,
+  reopenAnnotation,
   toggleAnnotationHidden,
   updateAnnotationComment,
 } from "./task-model";
@@ -268,6 +275,20 @@ export function StudioToolbar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Goal 03 marker-local editor: which annotation's marker is open, the
+  // draft comment (never cleared on save failure), error/retry state,
+  // and the lightweight delete confirmation.
+  const [editorAnnotationId, setEditorAnnotationId] = useState<string | null>(
+    null
+  );
+  const [editorDraft, setEditorDraft] = useState("");
+  const [editorError, setEditorError] = useState<string | null>(null);
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [editorDeleteConfirm, setEditorDeleteConfirm] = useState(false);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const markerButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const editorSavingRef = useRef(false);
+  editorSavingRef.current = editorSaving;
   // Copy state (G04, D-033 #12): "idle" | "copied" (aria-live feedback) |
   // "manual" (Clipboard unavailable — selectable textarea fallback).
   const [copyState, setCopyState] = useState<
@@ -929,8 +950,8 @@ export function StudioToolbar({
   const sendMutation = useCallback(
     (
       payload: PortalStudioTask,
-      options: { keepalive?: boolean } = {}
-    ): Promise<void> => {
+      options: { keepalive?: boolean; silent?: boolean } = {}
+    ): Promise<{ ok: boolean; error?: string }> => {
       const body = JSON.stringify(payload);
       const useKeepalive = options.keepalive === true;
       if (
@@ -940,7 +961,7 @@ export function StudioToolbar({
         console.warn(
           "[portal-studio] task exceeds the keepalive budget; the unload save was skipped (D-043)"
         );
-        return Promise.resolve();
+        return Promise.resolve({ ok: true });
       }
       return fetch(config.endpoint, {
         method: "POST",
@@ -954,14 +975,20 @@ export function StudioToolbar({
         .then((response) => response.json())
         .then((result: { ok?: boolean; error?: string }) => {
           if (result.ok !== true) {
-            setMode({
-              kind: "error",
-              message: result.error ?? "annotation update failed",
-            });
+            const error = result.error ?? "annotation update failed";
+            if (options.silent !== true) {
+              setMode({ kind: "error", message: error });
+            }
+            return { ok: false, error };
           }
+          return { ok: true };
         })
         .catch(() => {
-          // Dev server restarting; the next mutation retries.
+          // Dev server restarting; the caller decides retry behavior.
+          return {
+            ok: false,
+            error: "network error — dev server restarting",
+          };
         });
     },
     [config.endpoint, config.token]
@@ -1131,6 +1158,180 @@ export function StudioToolbar({
     persistAnnotations(removeAnnotation(annotations, confirmDeleteId));
     setConfirmDeleteId(null);
   };
+
+  // -----------------------------------------------------------------------
+  // Goal 03: marker-local annotation editor
+  // -----------------------------------------------------------------------
+
+  /** Open the editor for a marker; keeps saved + unsaved state intact. */
+  const openMarkerEditor = (annotation: Annotation) => {
+    // Save-in-flight lock (review): never switch editors mid-save.
+    if (editorSavingRef.current) return;
+    setEditorAnnotationId(annotation.annotationId);
+    setEditorDraft(annotation.comment);
+    setEditorError(null);
+    setEditorSaving(false);
+    setEditorDeleteConfirm(false);
+  };
+
+  const closeMarkerEditor = () => {
+    setEditorAnnotationId(null);
+    setEditorError(null);
+    setEditorSaving(false);
+    setEditorDeleteConfirm(false);
+  };
+
+  /**
+   * Save the editor comment via the SAME mutation functions/client path as
+   * the list editor (updateAnnotationComment + sendMutation). The shared
+   * annotations state, taskRef and the server artifact stay at the last
+   * CONFIRMED value until the POST succeeds: a failed save must never leak
+   * the unsaved comment into the list or a later unrelated mutation. On
+   * failure the draft text is preserved (editorDraft untouched) and
+   * error/retry feedback is shown.
+   */
+  const saveEditorComment = async () => {
+    if (!editorAnnotationId || editorSaving) return;
+    setEditorSaving(true);
+    setEditorError(null);
+    // Serialize with any list mutation that is already pending (debounced):
+    // flush it FIRST so this save is ordered AFTER it and the newer action
+    // is never dropped (review P1). List controls are also disabled while
+    // saving, so nothing new can be enqueued mid-flight.
+    if (persistTimerRef.current) {
+      clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+    }
+    if (pendingPayloadRef.current) {
+      const pending = pendingPayloadRef.current;
+      pendingPayloadRef.current = null;
+      taskRef.current = pending;
+      const flushed = await sendMutation(pending, { silent: true });
+      if (!flushed.ok) {
+        setEditorError(
+          t("studio.saveError", "Unable to save — try again.")
+        );
+        setEditorSaving(false);
+        return;
+      }
+    }
+    const base = taskRef.current;
+    if (!base) {
+      setEditorSaving(false);
+      closeMarkerEditor();
+      return;
+    }
+    // Build the comment edit on the CURRENT (post-flush) annotations so an
+    // earlier pending edit is preserved, not overwritten.
+    const next = updateAnnotationComment(
+      base.annotations,
+      editorAnnotationId,
+      editorDraft
+    );
+    // No optimistic shared-state update here — the POST is the single
+    // observable mutation; failure leaves list/taskRef/server untouched.
+    const result = await sendMutation(
+      { ...base, annotations: next },
+      { silent: true }
+    );
+    if (!result.ok) {
+      // Draft text preserved in editorDraft; expose retry/error feedback.
+      setEditorError(
+        result.error ?? t("studio.saveError", "Unable to save — try again.")
+      );
+      setEditorSaving(false);
+      return;
+    }
+    // Confirmed: only now sync the shared state to the server artifact.
+    const confirmed = { ...base, annotations: next };
+    setAnnotations(next);
+    taskRef.current = confirmed;
+    refreshTask();
+    setEditorSaving(false);
+    closeMarkerEditor();
+  };
+
+  /** Complete an open annotation from the marker editor (shared path). */
+  const completeEditorAnnotation = () => {
+    if (!editorAnnotationId) return;
+    persistAnnotations(
+      completeAnnotation(annotations, editorAnnotationId)
+    );
+    closeMarkerEditor();
+  };
+
+  /** Reopen a completed annotation from the marker editor (shared path). */
+  const reopenEditorAnnotation = () => {
+    if (!editorAnnotationId) return;
+    persistAnnotations(
+      reopenAnnotation(annotations, editorAnnotationId)
+    );
+    closeMarkerEditor();
+  };
+
+  /** Delete an annotation from the marker editor (shared path). */
+  const deleteEditorAnnotation = () => {
+    if (!editorAnnotationId) return;
+    persistAnnotations(
+      removeAnnotation(annotations, editorAnnotationId)
+    );
+    closeMarkerEditor();
+  };
+
+  // Esc closes the marker editor and returns focus to its marker button
+  // (skipped while a save POST is in flight so a late failure still lands
+  // on the open editor with the draft preserved).
+  useEffect(() => {
+    if (!editorAnnotationId) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (editorSavingRef.current) return;
+      closeMarkerEditor();
+      requestAnimationFrame(() => {
+        markerButtonRefs.current.get(editorAnnotationId)?.focus();
+      });
+    };
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [editorAnnotationId]);
+
+  // Outside click closes the marker editor safely. composedPath() crosses
+  // the shadow boundary in real browsers (events inside the shadow are
+  // retargeted to the host, so a plain contains(target) check would treat
+  // editor/marker clicks as outside); contains() is the jsdom fallback.
+  useEffect(() => {
+    if (!editorAnnotationId) return;
+    const hitInside = (
+      node: Element | null,
+      path: EventTarget[],
+      target: EventTarget | null
+    ): boolean => {
+      if (!node) return false;
+      if (path.includes(node)) return true;
+      return target instanceof Node && node.contains(target);
+    };
+    const handlePointerDown = (event: PointerEvent | MouseEvent) => {
+      const path = event.composedPath?.() ?? [];
+      const target = event.target;
+      // Clicks inside the editor never close it.
+      if (hitInside(editorRef.current, path, target)) return;
+      // Clicks on ANY marker button are handled by the button's own
+      // toggle; the editor stays open until that click runs.
+      for (const [, button] of markerButtonRefs.current) {
+        if (hitInside(button, path, target)) return;
+      }
+      if (editorSavingRef.current) return;
+      closeMarkerEditor();
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("mousedown", handlePointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("mousedown", handlePointerDown, true);
+    };
+  }, [editorAnnotationId]);
 
   // The button that opened the current delete confirmation (focus return).
   const confirmDeleteButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1338,6 +1539,22 @@ export function StudioToolbar({
 
   useEffect(() => {
     const handleHotkey = (event: KeyboardEvent) => {
+      // Events originating inside the Studio's OWN UI (marker editor
+      // textarea/buttons, panel, dock) must never trigger global
+      // shortcuts. Shadow-DOM retargeting makes event.target the HOST for
+      // document listeners, so check composedPath() (browsers) with a
+      // contains() fallback (jsdom) BEFORE matching — otherwise Ctrl/Cmd
+      // + Alt typed in the editor could still enter capture mode.
+      if (rootRef.current) {
+        const path = event.composedPath?.() ?? [];
+        if (path.includes(rootRef.current)) return;
+        if (
+          event.target instanceof Node &&
+          rootRef.current.contains(event.target)
+        ) {
+          return;
+        }
+      }
       const matched = matchHotkey(event);
       if (!matched) return;
       event.preventDefault();
@@ -1375,6 +1592,38 @@ export function StudioToolbar({
   }, []);
 
   const panelVisible = open;
+
+  // Goal 03: marker-local editor anchor — prefer bottom-right of the
+  // marker/region rect, flip + clamp inside the viewport (pure math).
+  const editorAnnotation = editorAnnotationId
+    ? (annotations.find(
+        (annotation) => annotation.annotationId === editorAnnotationId
+      ) ?? null)
+    : null;
+  const editorAnchor = (() => {
+    if (!editorAnnotation) return undefined;
+    const viewport = viewportOf(window);
+    if (editorAnnotation.kind === "region" && editorAnnotation.region) {
+      const r = editorAnnotation.region;
+      return resolveMarkerEditorPosition(
+        { left: r.x, top: r.y, width: r.width, height: r.height },
+        viewport
+      );
+    }
+    const target = resolveAnnotationTarget(editorAnnotation);
+    if (!target) return undefined;
+    const rect = target.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return undefined;
+    return resolveMarkerEditorPosition(
+      {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      },
+      viewport
+    );
+  })();
 
   return (
     <div ref={rootRef} className="ps-root" data-portal-studio-root>
@@ -1596,6 +1845,7 @@ export function StudioToolbar({
                             className="ps-textarea ps-annotation-edit"
                             rows={2}
                             autoFocus
+                            disabled={editorSaving}
                             value={editValue}
                             onChange={(event) => setEditValue(event.target.value)}
                             onKeyDown={(event) => {
@@ -1644,6 +1894,7 @@ export function StudioToolbar({
                             <button
                               type="button"
                               className="ps-button ps-danger"
+                              disabled={editorSaving}
                               onClick={confirmDelete}
                             >
                               {t("studio.delete", "Delete")}
@@ -1651,6 +1902,7 @@ export function StudioToolbar({
                             <button
                               type="button"
                               className="ps-button"
+                              disabled={editorSaving}
                               onClick={() => setConfirmDeleteId(null)}
                             >
                               {t("studio.cancel", "Cancel")}
@@ -1666,6 +1918,7 @@ export function StudioToolbar({
                                 "studio.editAnnotation",
                                 "Edit comment"
                               )}
+                              disabled={editorSaving}
                               onClick={() => startEdit(annotation)}
                             >
                               <Pencil size={12} aria-hidden="true" />
@@ -1678,6 +1931,7 @@ export function StudioToolbar({
                                 "Complete"
                               )}
                               aria-pressed={completed}
+                              disabled={editorSaving}
                               onClick={() =>
                                 persistAnnotations(
                                   completeAnnotation(
@@ -1697,6 +1951,7 @@ export function StudioToolbar({
                                 "Hide"
                               )}
                               aria-pressed={hidden}
+                              disabled={editorSaving}
                               onClick={() =>
                                 persistAnnotations(
                                   toggleAnnotationHidden(
@@ -1719,6 +1974,7 @@ export function StudioToolbar({
                                 "studio.deleteAnnotation",
                                 "Delete"
                               )}
+                              disabled={editorSaving}
                               ref={(node) => {
                                 // Re-arm on every mount so the Esc focus
                                 // return targets a CONNECTED button (F-1).
@@ -2011,12 +2267,13 @@ export function StudioToolbar({
         />
       ))}
 
-      {/* Annotation-first marker overlay (G02, D-033 #8/#9): numbered
-          badges over resolved live targets; region rects with dashed
-          outlines. Rendered INSIDE the shadow host (D-034 #3 mounting
-          rule) so markers never pollute evidence screenshots and can
-          never be annotated by Studio itself. Unresolved targets stay in
-          the list (grey chip) with no page anchor. */}
+      {/* Annotation-first marker overlay (G02, D-033 #8/#9; Goal 03):
+          numbered, SEMANTIC BUTTON markers over resolved live targets;
+          region rects with dashed outlines carry a marker button at the
+          top-right corner. Rendered INSIDE the shadow host (D-034 #3
+          mounting rule) so markers never pollute evidence screenshots and
+          can never be annotated by Studio itself. Unresolved targets stay
+          in the list (grey chip) with no page anchor. */}
       {annotations.map((annotation) => {
         if (annotation.hidden === true) return null;
         const number = annotationDisplayNumber(
@@ -2024,23 +2281,48 @@ export function StudioToolbar({
           annotation.annotationId
         );
         const completed = annotation.status === "completed";
+        const chipClass = completed
+          ? "ps-marker-chip ps-marker-chip-onpage ps-marker-chip-button ps-marker-chip-completed"
+          : "ps-marker-chip ps-marker-chip-onpage ps-marker-chip-button";
+        const markerLabel = t(
+          "studio.marker.openEditor",
+          "Annotation {{number}}: open editor"
+        ).replace("{{number}}", String(number ?? "?"));
+        const markerRef = (node: HTMLButtonElement | null) => {
+          if (node) {
+            markerButtonRefs.current.set(annotation.annotationId, node);
+          } else {
+            markerButtonRefs.current.delete(annotation.annotationId);
+          }
+        };
+        const markerOnClick = () => {
+          // Save-in-flight lock (review): a marker click can neither close
+          // nor switch the editor while a save POST is pending, so a late
+          // success/failure stays attached to the ORIGINAL editor+draft.
+          if (editorSaving) return;
+          if (editorAnnotationId === annotation.annotationId) {
+            closeMarkerEditor();
+            return;
+          }
+          openMarkerEditor(annotation);
+        };
         if (annotation.kind === "region" && annotation.region) {
           return (
             <div
               key={annotation.annotationId}
               className="ps-outline ps-region"
               style={regionStyle(annotation.region)}
-              aria-hidden="true"
             >
-              <span
-                className={
-                  completed
-                    ? "ps-marker-chip ps-marker-chip-onpage ps-marker-chip-completed"
-                    : "ps-marker-chip ps-marker-chip-onpage"
-                }
+              <button
+                type="button"
+                ref={markerRef}
+                className={`${chipClass} ps-marker-region-chip`}
+                style={{ position: "absolute", top: 4, right: 4 }}
+                aria-label={markerLabel}
+                onClick={markerOnClick}
               >
                 {number ?? "?"}
-              </span>
+              </button>
             </div>
           );
         }
@@ -2057,20 +2339,144 @@ export function StudioToolbar({
               left: rect.left - 6,
               top: rect.top - 6,
             }}
-            aria-hidden="true"
           >
-            <span
-              className={
-                completed
-                  ? "ps-marker-chip ps-marker-chip-onpage ps-marker-chip-completed"
-                  : "ps-marker-chip ps-marker-chip-onpage"
-              }
+            <button
+              type="button"
+              ref={markerRef}
+              className={chipClass}
+              aria-label={markerLabel}
+              onClick={markerOnClick}
             >
               {number ?? "?"}
-            </span>
+            </button>
           </div>
         );
       })}
+
+      {/* Goal 03: temporary multi-target highlight while the editor is
+          open on a multi annotation — every resolved captured target is
+          outlined so the group is visible at once. */}
+      {editorAnnotation && editorAnnotation.kind === "multi"
+        ? resolveAnnotationTargets(editorAnnotation).map((target, index) => {
+            const rect = target.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) return null;
+            return (
+              <div
+                key={`${editorAnnotation.annotationId}-hl-${index}`}
+                className="ps-outline ps-selected ps-marker-highlight"
+                style={rectStyle(rect)}
+                aria-hidden="true"
+              />
+            );
+          })
+        : null}
+
+      {/* Goal 03: marker-local editor — small, viewport-clamped dialog
+          beside the marker. Events inside it are stopped from leaking to
+          the business page or capture handlers (pointer/keyboard/hotkey
+          isolation; the shadow host additionally keeps it out of page
+          listeners and screenshots). */}
+      {editorAnnotation && editorAnchor ? (
+        <div
+          ref={editorRef}
+          className="ps-marker-editor"
+          role="dialog"
+          aria-label={t("studio.editorTitle", "Annotation editor")}
+          style={{
+            left: editorAnchor.left,
+            top: editorAnchor.top,
+            width: MARKER_EDITOR_WIDTH,
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <p className="ps-label" id="ps-marker-editor-label">
+            {t("studio.instruction", "Annotation comment")}
+          </p>
+          <textarea
+            className="ps-textarea"
+            rows={3}
+            autoFocus
+            aria-labelledby="ps-marker-editor-label"
+            disabled={editorSaving}
+            value={editorDraft}
+            onChange={(event) => setEditorDraft(event.target.value)}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                saveEditorComment();
+              }
+            }}
+          />
+          {editorError ? (
+            <p className="ps-error" role="alert">
+              {editorError}
+            </p>
+          ) : null}
+          <div className="ps-actions">
+            <button
+              type="button"
+              className="ps-button ps-primary"
+              disabled={editorSaving}
+              onClick={saveEditorComment}
+            >
+              {editorSaving
+                ? t("studio.saving", "Saving task…")
+                : t("studio.saveComment", "Save comment")}
+            </button>
+            {editorAnnotation.status === "completed" ? (
+              <button
+                type="button"
+                className="ps-button"
+                disabled={editorSaving}
+                onClick={reopenEditorAnnotation}
+              >
+                {t("studio.reopen", "Reopen")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="ps-button"
+                disabled={editorSaving}
+                onClick={completeEditorAnnotation}
+              >
+                {t("studio.completeAnnotation", "Complete")}
+              </button>
+            )}
+            {editorDeleteConfirm ? (
+              <span className="ps-annotation-confirm" role="alert">
+                {t("studio.confirmDelete", "Delete this annotation?")}{" "}
+                <button
+                  type="button"
+                  className="ps-button ps-danger"
+                  disabled={editorSaving}
+                  onClick={deleteEditorAnnotation}
+                >
+                  {t("studio.delete", "Delete")}
+                </button>
+                <button
+                  type="button"
+                  className="ps-button"
+                  disabled={editorSaving}
+                  onClick={() => setEditorDeleteConfirm(false)}
+                >
+                  {t("studio.cancel", "Cancel")}
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="ps-button ps-danger"
+                disabled={editorSaving}
+                onClick={() => setEditorDeleteConfirm(true)}
+              >
+                {t("studio.deleteAnnotation", "Delete")}
+              </button>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
