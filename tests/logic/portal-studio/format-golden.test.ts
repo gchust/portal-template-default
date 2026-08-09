@@ -185,6 +185,24 @@ describe("formatTaskMarkdown — Goal 04 includeCompleted option", () => {
   });
 });
 
+describe("formatTaskMarkdown — Goal 05 completion command template", () => {
+  it("includes the stable annotationId and the exact completion command for every annotation", () => {
+    const markdown = formatTaskMarkdown(v5Fixture);
+    expect(markdown).toContain(
+      "Complete (verified): pnpm studio:complete -- ann-1 --verified --summary \"what changed and how it was verified\""
+    );
+    expect(markdown).toContain(
+      "Complete (verified): pnpm studio:complete -- ann-2 --verified --summary \"what changed and how it was verified\""
+    );
+  });
+
+  it("the open-only (includeCompleted:false) output keeps the command template too", () => {
+    const markdown = formatTaskMarkdown(v5Fixture, { includeCompleted: false });
+    expect(markdown).toContain("pnpm studio:complete -- ann-2 --verified");
+    expect(markdown).not.toContain("pnpm studio:complete -- ann-1 --verified");
+  });
+});
+
 describe("formatTaskMarkdown — v4 normalize-on-read (D-033 #17)", () => {
   it("renders a v4 artifact as its normalized v5 single annotation", () => {
     const markdown = formatTaskMarkdown(v4Fixture);

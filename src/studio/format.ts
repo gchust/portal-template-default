@@ -203,7 +203,12 @@ export function formatTaskMarkdown(
     );
     lines.push(`Comment: ${annotation.comment || "(empty)"}`, "");
     lines.push(...formatAnnotation(annotation));
-    lines.push("");
+    // Goal 05: copied Markdown carries the stable annotationId and the
+    // EXACT verified-completion command template for a local Code Agent.
+    lines.push(
+      `Complete (verified): pnpm studio:complete -- ${annotation.annotationId} --verified --summary "what changed and how it was verified"`,
+      ""
+    );
   });
   return lines.join("\n");
 }

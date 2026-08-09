@@ -255,6 +255,39 @@ export function completeAnnotation(
   );
 }
 
+/** Maximum length of the verified-completion summary (Goal 05). */
+export const MAX_COMPLETION_SUMMARY_LENGTH = 2000;
+
+/**
+ * Verified completion (Goal 05): like completeAnnotation but records the
+ * completion EVIDENCE additively (verified flag + bounded summary + who
+ * recorded it). The evidence never replaces the canonical status fields;
+ * unrelated annotation fields are preserved (spread). No double-stamp.
+ */
+export function completeAnnotationVerified(
+  annotations: Annotation[],
+  annotationId: string,
+  evidence: { verified: boolean; summary: string; source: "cli" }
+): Annotation[] {
+  const completedAt = new Date().toISOString();
+  return annotations.map((annotation) =>
+    annotation.annotationId === annotationId &&
+    annotation.status !== "completed"
+      ? {
+          ...annotation,
+          status: "completed",
+          completedAt,
+          completedEvidence: {
+            verified: evidence.verified,
+            summary: evidence.summary,
+            source: evidence.source,
+            completedAt,
+          },
+        }
+      : annotation
+  );
+}
+
 /** Complete ALL annotations (no double-stamp). */
 export function completeAllAnnotations(
   annotations: Annotation[]
@@ -275,7 +308,12 @@ export function reopenAnnotation(
   return annotations.map((annotation) =>
     annotation.annotationId === annotationId &&
     annotation.status === "completed"
-      ? { ...annotation, status: "open", completedAt: undefined }
+      ? {
+          ...annotation,
+          status: "open",
+          completedAt: undefined,
+          completedEvidence: undefined,
+        }
       : annotation
   );
 }

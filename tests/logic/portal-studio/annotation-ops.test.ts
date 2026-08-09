@@ -11,7 +11,9 @@ import {
   clearAnnotations,
   completeAllAnnotations,
   completeAnnotation,
+  completeAnnotationVerified,
   countOpenAnnotations,
+  MAX_COMPLETION_SUMMARY_LENGTH,
   groupToggleElement,
   MAX_ANNOTATIONS,
   removeAnnotation,
@@ -143,6 +145,55 @@ describe("completeAnnotation / completeAllAnnotations (G04, D-033 #13)", () => {
     expect(all[0].completedAt).toBe("x");
     expect(all[1].status).toBe("completed");
     expect(typeof all[1].completedAt).toBe("string");
+  });
+});
+
+describe("completeAnnotationVerified (Goal 05 agent CLI)", () => {
+  it("completes with additive evidence and preserves unrelated fields", () => {
+    const annotation = { ...makeAnnotation("a"), extra: "keep" };
+    const done = completeAnnotationVerified([annotation], "a", {
+      verified: true,
+      summary: "Fixed; verified via reload",
+      source: "cli",
+    });
+    expect(done[0].status).toBe("completed");
+    expect(done[0].extra).toBe("keep");
+    expect(done[0].completedEvidence).toEqual({
+      verified: true,
+      summary: "Fixed; verified via reload",
+      source: "cli",
+      completedAt: expect.any(String),
+    });
+  });
+
+  it("does not double-stamp an already-completed annotation", () => {
+    const annotation = {
+      ...makeAnnotation("a"),
+      status: "completed" as const,
+      completedAt: "2026-08-09T00:00:00.000Z",
+    };
+    const done = completeAnnotationVerified([annotation], "a", {
+      verified: true,
+      summary: "again",
+      source: "cli",
+    });
+    expect(done[0]).toEqual(annotation);
+  });
+
+  it("reopen clears the additive evidence", () => {
+    const completed = completeAnnotationVerified([makeAnnotation("a")], "a", {
+      verified: true,
+      summary: "done",
+      source: "cli",
+    });
+    const reopened = reopenAnnotation(completed, "a");
+    expect(reopened[0].status).toBe("open");
+    expect(reopened[0].completedEvidence).toBeUndefined();
+    expect(reopened[0].completedAt).toBeUndefined();
+  });
+
+  it("MAX_COMPLETION_SUMMARY_LENGTH bounds the summary", () => {
+    expect(MAX_COMPLETION_SUMMARY_LENGTH).toBe(2000);
   });
 });
 

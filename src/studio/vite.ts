@@ -53,12 +53,14 @@ import {
   performBoundedWait,
   readActiveTask,
   readReferencedScreenshot,
+  readTaskRevision,
   redactSessionToken,
   removeScreenshotFile,
   resolveActiveTaskPath,
   sanitizeDiagnostics,
   sanitizeTask,
   SESSION_FILENAME,
+  stampTaskRevision,
   updateActiveTaskEvidence,
   verifySessionToken,
 } from "./endpoint";
@@ -77,6 +79,7 @@ const SCREENSHOT_COMMAND_ENDPOINT_PATH = "/__portal-studio/screenshot";
 const PENDING_ENDPOINT_PATH = "/__portal-studio/screenshot/pending";
 const BOOTSTRAP_ENDPOINT_PATH = "/__portal-studio/bootstrap";
 const VERIFY_ENDPOINT_PATH = "/__portal-studio/verify";
+const REVISION_ENDPOINT_PATH = "/__portal-studio/revision";
 const MAX_VERIFY_BODY_BYTES = 1024;
 const TOKEN_HEADER = "x-portal-studio-token";
 const MAX_HEARTBEAT_BODY_BYTES = 1024;
@@ -434,6 +437,7 @@ export function portalStudioPlugin(
         token: ensureToken(),
         endpoint: TASKS_ENDPOINT_PATH,
         screenshotsEndpoint: SCREENSHOTS_ENDPOINT_PATH,
+        revisionEndpoint: REVISION_ENDPOINT_PATH,
       });
       // Inline module scripts in dev index.html are processed by Vite, so the
       // studio entry import resolves through the dev transform pipeline. The
@@ -505,6 +509,8 @@ export function portalStudioPlugin(
             request.url === BOOTSTRAP_ENDPOINT_PATH;
           const isVerifyPost =
             request.method === "POST" && request.url === VERIFY_ENDPOINT_PATH;
+          const isRevisionGet =
+            request.method === "GET" && request.url === REVISION_ENDPOINT_PATH;
           if (
             !isTaskPost &&
             !isTaskGet &&
@@ -514,7 +520,8 @@ export function portalStudioPlugin(
             !isScreenshotCommandPost &&
             !isPendingGet &&
             !isBootstrapPost &&
-            !isVerifyPost
+            !isVerifyPost &&
+            !isRevisionGet
           ) {
             next();
             return;
@@ -573,6 +580,18 @@ export function portalStudioPlugin(
             writeJsonResponse(response, 200, {
               pending: pendingEvidence !== null,
               ...(pendingEvidence ? { request: pendingEvidence } : {}),
+            });
+            return;
+          }
+
+          // Goal 05: lightweight same-origin revision read — the browser
+          // polls THIS (not the full task) and re-fetches the task only
+          // when the value changes. null when no active task exists.
+          if (isRevisionGet) {
+            const activeTask = readActiveTask(studioRoot);
+            writeJsonResponse(response, 200, {
+              ok: true,
+              taskRevision: activeTask ? readTaskRevision(studioRoot) : null,
             });
             return;
           }
@@ -832,6 +851,9 @@ export function portalStudioPlugin(
             "pending",
             Date.now()
           );
+          // Goal 05: the server-owned monotonic taskRevision is stamped on
+          // every successful task write (distinct from task.revision).
+          stampTaskRevision(stampedTask, studioRoot);
           const stamped = JSON.stringify(stampedTask, null, 2);
           if (Buffer.byteLength(stamped, "utf8") > MAX_ARTIFACT_BYTES) {
             writeJsonResponse(response, 400, { error: "artifact_too_large" });

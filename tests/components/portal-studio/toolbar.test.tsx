@@ -2529,4 +2529,176 @@ describe("StudioToolbar", () => {
     });
   });
 
+  // ---- Goal 05: visibility-aware revision polling / browser sync ----
+
+  const revisionConfig = {
+    ...config,
+    revisionEndpoint: "/__portal-studio/revision",
+  };
+
+  const revisionRoutes = (options: {
+    revisions: Array<number | null>;
+    failAfter?: number;
+  }) => {
+    let revisionCalls = 0;
+    let taskGets = 0;
+    // The task served by the task GET carries the CURRENT server-owned
+    // revision; tests bump it to simulate a CLI write between fetches.
+    let taskRevision = 1;
+    const fetchMock = vi.fn(
+      (input: string | URL | Request, init?: { method?: string }) => {
+        const url = String(input);
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "/__portal-studio/revision" && method === "GET") {
+          if (
+            options.failAfter !== undefined &&
+            revisionCalls >= options.failAfter
+          ) {
+            return Promise.resolve({ ok: false, json: async () => ({}) });
+          }
+          const revision =
+            options.revisions[
+              Math.min(revisionCalls, options.revisions.length - 1)
+            ];
+          revisionCalls += 1;
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, taskRevision: revision }),
+          });
+        }
+        if (url === "/__portal-studio/tasks" && method === "GET") {
+          taskGets += 1;
+          // Snapshot the revision at CALL time (the real server reads the
+          // artifact when the request arrives — a CLI write AFTER this GET
+          // must not retroactively change what this fetch served).
+          const servedRevision = taskRevision;
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              task: {
+                schemaVersion: 5,
+                taskId: "poll-task",
+                createdAt: "2026-08-09T00:00:00.000Z",
+                url: "http://127.0.0.1:4173/users",
+                title: "Users",
+                annotations: [],
+                businessContext: [],
+                redaction: {
+                  droppedKeys: [],
+                  redactedValues: 0,
+                  truncatedValues: 0,
+                },
+                taskRevision: servedRevision,
+              },
+            }),
+          });
+        }
+        return Promise.resolve({ ok: false, json: async () => ({}) });
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return {
+      fetchMock,
+      countTaskGets: () => taskGets,
+      countRevisionCalls: () =>
+        fetchMock.mock.calls.filter((call) =>
+          String(call[0]).includes("/revision")
+        ).length,
+      setTaskRevision: (revision: number) => {
+        taskRevision = revision;
+      },
+    };
+  };
+
+  it(
+    "re-fetches the task ONLY when the server taskRevision changes",
+    async () => {
+      const { countTaskGets } = revisionRoutes({ revisions: [1, 1, 2, 2] });
+      render(<StudioToolbar config={revisionConfig} />);
+      // Mount refreshTask = first task GET; the first poll seeds the
+      // baseline (revision 1) WITHOUT refetching.
+      expect(countTaskGets()).toBe(1);
+      // Revision stays 1 for two polls (~1s each) — no refetch.
+      await new Promise((resolve) => setTimeout(resolve, 2300));
+      expect(countTaskGets()).toBe(1);
+      // The next poll sees revision 2 — the task is re-fetched.
+      await waitFor(() => {
+        expect(countTaskGets()).toBe(2);
+      }, { timeout: 3000 });
+    },
+    15000
+  );
+
+  it(
+    "a CLI completion landing between mount and the first poll still syncs (P1 baseline race)",
+    async () => {
+      const { countTaskGets, setTaskRevision } = revisionRoutes({
+        // The FIRST poll already observes the NEW revision (the CLI wrote
+        // before the first poll fired) — it must NOT be accepted as the
+        // baseline: the baseline is the last FETCHED task's revision.
+        revisions: [2, 2],
+      });
+      render(<StudioToolbar config={revisionConfig} />);
+      // Mount refreshTask fetched the task at revision 1 (baseline).
+      expect(countTaskGets()).toBe(1);
+      // The CLI completes the annotation before the first poll runs.
+      setTaskRevision(2);
+      // The first poll sees 2 != 1 (last fetched) → the task is re-fetched.
+      await waitFor(
+        () => {
+          expect(countTaskGets()).toBe(2);
+        },
+        { timeout: 3000 }
+      );
+    },
+    15000
+  );
+
+  it(
+    "does not poll while the document is hidden; resumes when visible",
+    async () => {
+      const visibility = { state: "visible" };
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => visibility.state,
+      });
+      const { countRevisionCalls } = revisionRoutes({ revisions: [1, 1] });
+      render(<StudioToolbar config={revisionConfig} />);
+      // One visible poll (~1s).
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      expect(countRevisionCalls()).toBe(1);
+      // Hidden: no new polls for 1.5s.
+      visibility.state = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      expect(countRevisionCalls()).toBe(1);
+      // Visible again: the visibilitychange handler re-polls immediately.
+      visibility.state = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      await waitFor(() => {
+        expect(countRevisionCalls()).toBe(2);
+      }, { timeout: 3000 });
+    },
+    15000
+  );
+
+  it(
+    "backs off while the revision read keeps failing, then recovers",
+    async () => {
+      const { countRevisionCalls } = revisionRoutes({
+        revisions: [1],
+        failAfter: 1,
+      });
+      render(<StudioToolbar config={revisionConfig} />);
+      // Poll 1 succeeds (baseline). Poll 2 (~1s) fails; backoff 2s.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const afterFirst = countRevisionCalls();
+      expect(afterFirst).toBeGreaterThanOrEqual(1);
+      // Let the failed poll + the 2s backoff elapse → a third attempt.
+      await new Promise((resolve) => setTimeout(resolve, 3300));
+      expect(countRevisionCalls()).toBeGreaterThanOrEqual(3);
+    },
+    15000
+  );
+
 });

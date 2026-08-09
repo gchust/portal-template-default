@@ -1668,6 +1668,110 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
 });
 
+test("agent CLI complete/reopen sync to the browser within two seconds (G05)", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+
+  // One open annotation to act on.
+  await startPicking(page);
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G05 sync me");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+  const annotationId = readActiveTask().annotations[0].annotationId;
+  expect(annotationId).toMatch(/^[a-zA-Z0-9]/);
+
+  // The CLI completes the annotation from the shell (same artifact the
+  // dev server serves — no browser interaction).
+  const cliEnv = { ...process.env, PORTAL_STUDIO_DIR: studioDir };
+  const completed = execFileSync(
+    process.execPath,
+    [
+      "scripts/portal-studio-agent.mjs",
+      "complete",
+      "--",
+      annotationId,
+      "--verified",
+      "--summary",
+      "G05 verified via reload; evidence recorded",
+    ],
+    { encoding: "utf8", env: cliEnv }
+  );
+  expect(completed).toContain("completed");
+
+  // Goal 05: the OPEN view removes the CLI-completed item within TWO
+  // seconds (revision-gated polling — no HMR/source/timestamp inference).
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(0, {
+    timeout: 2000,
+  });
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
+  // All view shows it as completed (evidence preserved in the artifact).
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "All", exact: true })
+    .click();
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
+  await expect(root.locator(".ps-annotation-item-completed")).toHaveCount(1);
+  const artifact = readActiveTask();
+  expect(artifact.annotations[0].completedEvidence?.verified).toBe(true);
+  expect(artifact.annotations[0].completedEvidence?.summary).toContain(
+    "G05 verified via reload"
+  );
+  expect(typeof artifact.taskRevision).toBe("number");
+
+  // A BROWSER mutation after the CLI completion must NOT strip the
+  // additive evidence (sanitizeTask preserves completedEvidence): hide the
+  // completed item from the list, then read the artifact back.
+  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.hidden)
+    .toBe(true);
+  const afterHide = readActiveTask();
+  expect(afterHide.annotations[0].completedEvidence?.verified).toBe(true);
+  expect(afterHide.annotations[0].completedEvidence?.summary).toContain(
+    "G05 verified via reload"
+  );
+  // Un-hide so the reopen flow below is unaffected.
+  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.hidden)
+    .toBe(false);
+
+  // Reopen via the CLI → the item reappears in the Open view within two
+  // seconds.
+  const reopened = execFileSync(
+    process.execPath,
+    ["scripts/portal-studio-agent.mjs", "reopen", "--", annotationId],
+    { encoding: "utf8", env: cliEnv }
+  );
+  expect(reopened).toContain("reopened");
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Open", exact: true })
+    .click();
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(1, {
+    timeout: 2000,
+  });
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+  expect(readActiveTask().annotations[0].status).toBe("open");
+  expect(
+    readActiveTask().annotations[0].completedEvidence
+  ).toBeUndefined();
+
+  // Cleanup: remove the annotation so later tests start empty.
+  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
+  await root.locator(".ps-annotation-confirm").waitFor();
+  await root
+    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+    .click();
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+});
+
 test("large task (>64KB) mutations persist via the plain POST (D-043 regression)", async ({
   page,
 }) => {

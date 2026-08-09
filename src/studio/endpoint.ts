@@ -45,8 +45,8 @@ import {
   type RevisionState,
   type ScreenshotRef,
   type SelectorCandidateKind,
-} from "./types";
-import { MAX_ANNOTATIONS } from "./task-model";
+} from "./types.ts";
+import { MAX_ANNOTATIONS, MAX_COMPLETION_SUMMARY_LENGTH } from "./task-model.ts";
 
 export const SESSION_TOKEN_BYTES = 32;
 export const MAX_TASK_BODY_BYTES = 256 * 1024;
@@ -623,6 +623,9 @@ export function updateActiveTaskEvidence(
   if (patch.revision) {
     task.revision = patch.revision;
   }
+  // Goal 05: every successful server-side evidence mutation bumps the
+  // server-owned monotonic taskRevision (distinct from task.revision).
+  stampTaskRevision(task, studioRoot);
 
   // Final artifact cap: the merged task (screenshot + diagnostics +
   // heartbeat) must stay within the 256 KB budget — limiting only the
@@ -901,6 +904,36 @@ function sanitizeAnnotation(
   }
   const hidden =
     typeof input.hidden === "boolean" ? (input.hidden as boolean) : undefined;
+  // Goal 05: preserve the additive verified-completion evidence across the
+  // browser POST path (sanitized, bounded, never trusted raw). status and
+  // completedAt remain the canonical completion fields for legacy readers.
+  let completedEvidence: Annotation["completedEvidence"];
+  const rawEvidence = isRecord(input.completedEvidence)
+    ? input.completedEvidence
+    : undefined;
+  if (rawEvidence) {
+    const evidenceVerified = rawEvidence.verified === true;
+    const evidenceSummary = serverRedactText(
+      readString(rawEvidence.summary, MAX_COMPLETION_SUMMARY_LENGTH) ?? "",
+      MAX_COMPLETION_SUMMARY_LENGTH,
+      recorder
+    );
+    const evidenceSource = readString(rawEvidence.source, 16);
+    const evidenceCompletedAt = readString(rawEvidence.completedAt, 64);
+    if (
+      evidenceSummary &&
+      evidenceSource === "cli" &&
+      evidenceCompletedAt &&
+      !Number.isNaN(Date.parse(evidenceCompletedAt))
+    ) {
+      completedEvidence = {
+        verified: evidenceVerified,
+        summary: evidenceSummary,
+        source: "cli",
+        completedAt: evidenceCompletedAt,
+      };
+    }
+  }
   if (!Array.isArray(input.elements)) return null;
   const elements: ElementCapture[] = [];
   for (const rawElement of input.elements.slice(0, MAX_ELEMENTS)) {
@@ -916,6 +949,7 @@ function sanitizeAnnotation(
     createdAt,
     status,
     ...(completedAt ? { completedAt } : {}),
+    ...(completedEvidence ? { completedEvidence } : {}),
     ...(hidden !== undefined ? { hidden } : {}),
     elements,
     ...(region ? { region } : {}),
@@ -974,6 +1008,70 @@ export function readActiveTask(
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Goal 05: server-owned monotonic taskRevision
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the current server-owned taskRevision from the active task file
+ * (0 when absent). The revision is persisted IN the artifact so CLI and
+ * server writes share one monotonic sequence regardless of which process
+ * performed the last mutation (Goal 06 makes this path fully atomic).
+ */
+export function readTaskRevision(studioRoot: string): number {
+  const task = readActiveTask(studioRoot);
+  const revision = task?.taskRevision;
+  return typeof revision === "number" && Number.isFinite(revision)
+    ? revision
+    : 0;
+}
+
+/**
+ * Stamp the next monotonic taskRevision onto a task object in place and
+ * return the stamped revision. Pure bookkeeping — does not write.
+ *
+ * NOTE (review): the counter is file-derived (read current + 1), so the
+ * stored sequence never decreases even with stale task objects, but two
+ * CONCURRENT writers (CLI + dev server) can stamp equal revisions —
+ * last-writer-wins on the whole artifact. Goal 06's fully-atomic write
+ * path is the planned hardening for that window.
+ */
+export function stampTaskRevision(
+  task: PortalStudioTask,
+  studioRoot: string
+): number {
+  const next = readTaskRevision(studioRoot) + 1;
+  task.taskRevision = next;
+  return next;
+}
+
+/**
+ * Atomically write the active task with a freshly incremented
+ * taskRevision. Shared by the dev-server middleware and the agent CLI so
+ * every successful mutation bumps the revision exactly once (single
+ * atomic write path — Goal 06 can harden it further).
+ */
+export function writeActiveTaskWithRevision(
+  studioRoot: string,
+  task: PortalStudioTask
+): {
+  ok: boolean;
+  error?: "artifact_too_large" | "write_failed";
+  revision?: number;
+} {
+  const revision = stampTaskRevision(task, studioRoot);
+  const serialized = JSON.stringify(task, null, 2);
+  if (Buffer.byteLength(serialized, "utf8") > MAX_ARTIFACT_BYTES) {
+    return { ok: false, error: "artifact_too_large" };
+  }
+  try {
+    atomicWriteTaskFile(studioRoot, "active-task.json", serialized);
+  } catch {
+    return { ok: false, error: "write_failed" };
+  }
+  return { ok: true, revision };
 }
 
 /** Validate a base64 PNG payload and extract IHDR dimensions. */

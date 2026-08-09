@@ -159,6 +159,18 @@ export type Annotation = {
   createdAt: string;
   status: "open" | "completed";
   completedAt?: string;
+  /**
+   * Additive completion evidence (Goal 05): recorded by studio:complete
+   * with --verified and a bounded summary. ADDITIVE on purpose — legacy
+   * readers keep working (status/completedAt still the source of truth
+   * for "completed"); never inferred from HMR/source/timestamps/tests.
+   */
+  completedEvidence?: {
+    verified: boolean;
+    summary: string;
+    source: "cli";
+    completedAt: string;
+  };
   /** Hidden without deletion (D-033 #11; used by G03). */
   hidden?: boolean;
   /** Element captures for element/multi kinds (schema-v2-shaped). */
@@ -187,6 +199,14 @@ export type PortalStudioTask = {
   heartbeat?: HeartbeatReport;
   /** Update-verification bookkeeping (schema v4). */
   revision?: RevisionInfo;
+  /**
+   * Server-owned monotonic task revision (Goal 05): incremented by the
+   * server/CLI on every successful task write; DISTINCT from the
+   * source/browser revision bookkeeping above. Browsers poll this value
+   * (via the lightweight revision read) to decide when to re-fetch the
+   * task. Never inferred from HMR, source revision, timestamps or tests.
+   */
+  taskRevision?: number;
 };
 
 /**

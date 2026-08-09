@@ -110,7 +110,10 @@
     "test:all": "pnpm typecheck && pnpm test && pnpm test:sdk && pnpm build && pnpm test:e2e",
     "start": "refine start",
     "refine": "refine",
-    "sdk:check": "pnpm exec portal-sdk check"
+    "sdk:check": "pnpm exec portal-sdk check",
+    "studio:list": "node ./scripts/portal-studio-agent.mjs list",
+    "studio:complete": "node ./scripts/portal-studio-agent.mjs complete",
+    "studio:reopen": "node ./scripts/portal-studio-agent.mjs reopen"
   },
   "browserslist": {
     "production": [

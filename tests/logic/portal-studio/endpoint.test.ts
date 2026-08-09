@@ -24,7 +24,10 @@ import {
   parseHeartbeatPayload,
   readActiveTask,
   readReferencedScreenshot,
+  readTaskRevision,
   removeScreenshotFile,
+  stampTaskRevision,
+  writeActiveTaskWithRevision,
   sanitizeDiagnostics,
   updateActiveTaskEvidence,
   generateSessionToken,
@@ -250,6 +253,81 @@ describe("task sanitization", () => {
     expect(task?.screenshot?.capturedAt).toBe("2026-08-07T12:00:05.000Z");
     expect(task?.heartbeat?.state).toBe("online");
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("preserves additive completedEvidence through sanitizeTask (browser POST path, G05)", () => {
+    const base = {
+      schemaVersion: TASK_SCHEMA_VERSION,
+      taskId: "task-evidence-keep",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations: [
+        {
+          annotationId: "ann-done",
+          kind: "element",
+          comment: "fixed",
+          createdAt: "2026-08-07T12:00:00.000Z",
+          status: "completed",
+          completedAt: "2026-08-07T12:30:00.000Z",
+          completedEvidence: {
+            verified: true,
+            summary: "Fixed header; verified via reload",
+            source: "cli",
+            completedAt: "2026-08-07T12:30:00.000Z",
+          },
+          extra: "must-be-dropped",
+          elements: [],
+        },
+      ],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    };
+    const task = sanitizeTask(base);
+    expect(task).not.toBeNull();
+    const annotation = task?.annotations[0];
+    expect(annotation?.completedEvidence).toEqual({
+      verified: true,
+      summary: "Fixed header; verified via reload",
+      source: "cli",
+      completedAt: "2026-08-07T12:30:00.000Z",
+    });
+    // status/completedAt still the canonical fields; unknown fields dropped.
+    expect(annotation?.status).toBe("completed");
+    expect(annotation?.completedAt).toBe("2026-08-07T12:30:00.000Z");
+    expect((annotation as Record<string, unknown>).extra).toBeUndefined();
+  });
+
+  it("drops malformed completedEvidence but keeps the annotation (defensive)", () => {
+    const base = {
+      schemaVersion: TASK_SCHEMA_VERSION,
+      taskId: "task-evidence-drop",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations: [
+        {
+          annotationId: "ann-1",
+          kind: "element",
+          comment: "c",
+          createdAt: "2026-08-07T12:00:00.000Z",
+          status: "completed",
+          completedAt: "2026-08-07T12:30:00.000Z",
+          completedEvidence: {
+            verified: true,
+            summary: "   ",
+            source: "unknown-source",
+            completedAt: "not-a-date",
+          },
+          elements: [],
+        },
+      ],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    };
+    const task = sanitizeTask(base);
+    expect(task?.annotations[0].completedEvidence).toBeUndefined();
+    expect(task?.annotations[0].status).toBe("completed");
   });
 
   it("rejects invalid v5 annotation fields (G05 security coverage)", () => {
@@ -1255,6 +1333,77 @@ describe("clear lifecycle", () => {
     const result = clearActiveTask(root);
     expect(result.clearedTask).toBe(true);
     expect(result.clearedScreenshot).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+describe("Goal 05 — server-owned monotonic taskRevision", () => {
+  const sampleTask = () => ({
+    schemaVersion: 5,
+    taskId: "rev-test-1",
+    createdAt: "2026-08-09T00:00:00.000Z",
+    url: "http://127.0.0.1:4173/users",
+    title: "Users",
+    annotations: [
+      {
+        annotationId: "ann-1",
+        kind: "element" as const,
+        comment: "c",
+        createdAt: "2026-08-09T00:00:00.000Z",
+        status: "open" as const,
+        elements: [],
+      },
+    ],
+    businessContext: [],
+    redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+  });
+
+  it("readTaskRevision returns 0 when no task exists", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ps-rev-"));
+    expect(readTaskRevision(root)).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("writeActiveTaskWithRevision stamps 1, then 2, ... monotonically", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ps-rev-"));
+    mkdirSync(path.join(root, "tasks"), { recursive: true });
+    const first = writeActiveTaskWithRevision(root, sampleTask());
+    expect(first.ok).toBe(true);
+    expect(first.revision).toBe(1);
+    expect(readTaskRevision(root)).toBe(1);
+    const second = writeActiveTaskWithRevision(root, sampleTask());
+    expect(second.revision).toBe(2);
+    expect(readTaskRevision(root)).toBe(2);
+    // The stamped value is persisted in the artifact.
+    const task = readActiveTask(root);
+    expect(task?.taskRevision).toBe(2);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("updateActiveTaskEvidence bumps the revision on successful evidence mutations", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ps-rev-"));
+    mkdirSync(path.join(root, "tasks"), { recursive: true });
+    writeActiveTaskWithRevision(root, sampleTask());
+    expect(readTaskRevision(root)).toBe(1);
+    const update = updateActiveTaskEvidence(root, {
+      heartbeat: {
+        state: "online",
+        reportedAt: "2026-08-09T00:00:01.000Z",
+        checkedAt: "2026-08-09T00:00:01.000Z",
+      },
+    });
+    expect(update.ok).toBe(true);
+    expect(readTaskRevision(root)).toBe(2);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("stampTaskRevision mutates the task in place with the next value", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ps-rev-"));
+    mkdirSync(path.join(root, "tasks"), { recursive: true });
+    writeActiveTaskWithRevision(root, sampleTask());
+    const task = sampleTask();
+    const stamped = stampTaskRevision(task, root);
+    expect(stamped).toBe(2);
+    expect(task.taskRevision).toBe(2);
     rmSync(root, { recursive: true, force: true });
   });
 });
