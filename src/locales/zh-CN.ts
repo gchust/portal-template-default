@@ -169,4 +169,10 @@ export const starter = {
   "studio.saveComment": "保存评论",
   "studio.reopen": "重新打开",
   "studio.saveError": "保存失败，请重试。",
+  "studio.viewOpen": "打开中",
+  "studio.viewAll": "全部",
+  "studio.removeCompleted": "移除已完成（{{count}}）",
+  "studio.confirmRemoveCompleted": "移除 {{count}} 条已完成标注？未完成项保留。",
+  "studio.remove": "移除",
+  "studio.emptyOpenView": "没有未完成标注——切换到“全部”查看已完成项。",
 } as const;

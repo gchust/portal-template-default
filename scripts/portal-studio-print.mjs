@@ -77,7 +77,8 @@ function main() {
     const studioRoot = resolveStudioRoot();
     const task = readTask(studioRoot, options.taskId);
     if (options.format === "markdown") {
-      process.stdout.write(formatTaskMarkdown(task));
+      // Goal 04: explicit all-mode for the CLI (one shared formatter).
+      process.stdout.write(formatTaskMarkdown(task, { includeCompleted: true }));
     } else {
       process.stdout.write(formatTaskJson(task));
     }

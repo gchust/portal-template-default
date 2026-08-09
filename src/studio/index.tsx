@@ -76,6 +76,7 @@ const TOOLBAR_STYLES = `
 .ps-command-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 8px;
 }
@@ -293,6 +294,15 @@ const TOOLBAR_STYLES = `
   border-color: #fbbf24;
   background: rgba(251, 191, 36, 0.12);
   pointer-events: none;
+}
+/* Goal 04: view-filter toggle in the command row (aria-pressed = All). */
+.ps-view-toggle {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.ps-view-toggle[aria-pressed="true"] {
+  border-color: var(--ps-accent, #6366f1);
+  color: var(--ps-accent, #6366f1);
 }
 /* Goal 03: marker-local editor dialog. max-width/max-height + overflow
    make it FIT viewports smaller than its nominal 264x232 size, keeping

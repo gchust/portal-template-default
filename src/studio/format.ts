@@ -105,12 +105,26 @@ const formatAnnotation = (annotation: Annotation): string[] => {
 /**
  * Render the canonical (v5-normalized) task as Markdown — the single
  * agent-facing format shared by Copy, the print CLI, and MCP.
+ *
+ * Goal 04: one shared formatter with an explicit all-mode option.
+ * The DEFAULT (no option) renders ALL annotations (existing behavior —
+ * golden output and the print CLI unchanged). `includeCompleted: false`
+ * renders only OPEN annotations (the browser Copy default); the print
+ * CLI passes `{ includeCompleted: true }` explicitly for all-mode (MCP's
+ * print_task renders the artifact as JSON via formatTaskJson).
  */
-export function formatTaskMarkdown(input: unknown): string {
+export function formatTaskMarkdown(
+  input: unknown,
+  options: { includeCompleted?: boolean } = {}
+): string {
   const task = normalizeTask(input);
   if (!task) {
     throw new Error("cannot format: unrecognized task artifact");
   }
+  const annotations =
+    options.includeCompleted === false
+      ? task.annotations.filter((annotation) => annotation.status === "open")
+      : task.annotations;
   const lines: string[] = [
     `# Task ${task.taskId}`,
     "",
@@ -181,8 +195,8 @@ export function formatTaskMarkdown(input: unknown): string {
       }`
     );
   }
-  lines.push("", `## Annotations (${task.annotations.length})`, "");
-  task.annotations.forEach((annotation, index) => {
+  lines.push("", `## Annotations (${annotations.length})`, "");
+  annotations.forEach((annotation, index) => {
     lines.push(
       `### Annotation ${index + 1}: [${annotation.kind}] ${annotation.annotationId}`,
       ""

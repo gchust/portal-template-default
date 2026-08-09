@@ -11,10 +11,15 @@ import {
   clearAnnotations,
   completeAllAnnotations,
   completeAnnotation,
+  countOpenAnnotations,
   groupToggleElement,
   MAX_ANNOTATIONS,
   removeAnnotation,
+  removeCompletedAnnotations,
   reopenAnnotation,
+  selectCompletedAnnotations,
+  selectOpenAnnotations,
+  selectVisibleAnnotations,
   toggleAnnotationHidden,
   updateAnnotationComment,
 } from "@/studio/task-model";
@@ -157,5 +162,57 @@ describe("reopenAnnotation (Goal 03 marker editor)", () => {
     const annotations = [makeAnnotation("a"), makeAnnotation("b")];
     expect(reopenAnnotation(annotations, "a")).toEqual(annotations);
     expect(reopenAnnotation(annotations, "zzz")).toEqual(annotations);
+  });
+});
+describe("Goal 04 — view-filter selectors", () => {
+  const completed = (id: string, comment = "c") =>
+    ({
+      ...makeAnnotation(id, comment),
+      status: "completed" as const,
+      completedAt: "2026-08-08T00:00:00.000Z",
+    });
+
+  const list = [makeAnnotation("open-a"), completed("done-a"), makeAnnotation("open-b")];
+
+  it("selectOpenAnnotations returns only open items, preserving order", () => {
+    expect(selectOpenAnnotations(list).map((a) => a.annotationId)).toEqual([
+      "open-a",
+      "open-b",
+    ]);
+  });
+
+  it("selectCompletedAnnotations returns only completed items", () => {
+    expect(selectCompletedAnnotations(list).map((a) => a.annotationId)).toEqual([
+      "done-a",
+    ]);
+  });
+
+  it("selectVisibleAnnotations: open view filters completed; all view returns everything", () => {
+    expect(
+      selectVisibleAnnotations(list, "open").map((a) => a.annotationId)
+    ).toEqual(["open-a", "open-b"]);
+    expect(
+      selectVisibleAnnotations(list, "all").map((a) => a.annotationId)
+    ).toEqual(["open-a", "done-a", "open-b"]);
+  });
+
+  it("countOpenAnnotations counts open only, independent of the view", () => {
+    expect(countOpenAnnotations(list)).toBe(2);
+    expect(countOpenAnnotations([])).toBe(0);
+    expect(countOpenAnnotations([completed("only-done")])).toBe(0);
+  });
+
+  it("removeCompletedAnnotations removes ONLY completed items", () => {
+    const remaining = removeCompletedAnnotations(list);
+    expect(remaining.map((a) => a.annotationId)).toEqual(["open-a", "open-b"]);
+    // Empty + all-completed lists behave sanely.
+    expect(removeCompletedAnnotations([])).toEqual([]);
+    expect(removeCompletedAnnotations([completed("x")])).toEqual([]);
+  });
+
+  it("hidden is independent: selectors do not consider the hidden flag", () => {
+    const hiddenOpen = { ...makeAnnotation("h"), hidden: true };
+    expect(selectOpenAnnotations([hiddenOpen])).toHaveLength(1);
+    expect(selectVisibleAnnotations([hiddenOpen], "open")).toHaveLength(1);
   });
 });

@@ -279,3 +279,56 @@ export function reopenAnnotation(
       : annotation
   );
 }
+
+/**
+ * ---- Goal 04: view-filter selectors (D-033 view filter) ----
+ * Pure selectors over the annotations list. hidden, completed and
+ * viewFilter are INDEPENDENT concepts: the view filter selects by status
+ * only; hidden is a per-annotation flag applied at render time.
+ */
+
+export type ViewFilter = "open" | "all";
+
+/** Only open annotations (the default view). */
+export function selectOpenAnnotations(
+  annotations: Annotation[]
+): Annotation[] {
+  return annotations.filter((annotation) => annotation.status === "open");
+}
+
+/** Only completed annotations. */
+export function selectCompletedAnnotations(
+  annotations: Annotation[]
+): Annotation[] {
+  return annotations.filter(
+    (annotation) => annotation.status === "completed"
+  );
+}
+
+/**
+ * The annotations visible in a given view: all in "all", open-only in
+ * "open". Hidden annotations are NOT excluded here (hidden is applied
+ * separately at render time, D-033 #11).
+ */
+export function selectVisibleAnnotations(
+  annotations: Annotation[],
+  viewFilter: ViewFilter
+): Annotation[] {
+  return viewFilter === "all"
+    ? annotations
+    : selectOpenAnnotations(annotations);
+}
+
+/** Launcher count: ALWAYS the open count, independent of the view. */
+export function countOpenAnnotations(annotations: Annotation[]): number {
+  return selectOpenAnnotations(annotations).length;
+}
+
+/** Remove ONLY completed annotations (never open); pure. */
+export function removeCompletedAnnotations(
+  annotations: Annotation[]
+): Annotation[] {
+  return annotations.filter(
+    (annotation) => annotation.status !== "completed"
+  );
+}

@@ -19,6 +19,7 @@ import {
   EyeOff,
   GripVertical,
   Pencil,
+  RotateCcw,
   Trash2,
   Wrench,
   X,
@@ -63,12 +64,17 @@ import { newTaskId } from "./task-id";
 import {
   annotationDisplayNumber,
   completeAnnotation,
+  countOpenAnnotations,
   groupToggleElement,
   normalizeTask,
   removeAnnotation,
+  removeCompletedAnnotations,
   reopenAnnotation,
+  selectCompletedAnnotations,
+  selectVisibleAnnotations,
   toggleAnnotationHidden,
   updateAnnotationComment,
+  type ViewFilter,
 } from "./task-model";
 import {
   commitRegion,
@@ -285,6 +291,10 @@ export function StudioToolbar({
   const [editorError, setEditorError] = useState<string | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorDeleteConfirm, setEditorDeleteConfirm] = useState(false);
+  // Goal 04: view filter (presentation state, independent of hidden and
+  // completed) + the Remove-completed confirmation.
+  const [viewFilter, setViewFilter] = useState<ViewFilter>("open");
+  const [removeCompletedConfirm, setRemoveCompletedConfirm] = useState(false);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const markerButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const editorSavingRef = useRef(false);
@@ -1105,16 +1115,10 @@ export function StudioToolbar({
       setCopyText("");
       return;
     }
-    // Goal 02: Copy carries only OPEN annotations. The canonical formatter
-    // (CLI/MCP parity) is untouched — we pass a task copy whose annotations
-    // are filtered to status open (D-033 #7: completed items are done work).
-    const openOnlyTask: PortalStudioTask = {
-      ...task,
-      annotations: task.annotations.filter(
-        (annotation) => annotation.status === "open"
-      ),
-    };
-    const markdown = formatTaskMarkdown(openOnlyTask);
+    // Goal 02/04: browser Copy defaults to OPEN annotations only — the
+    // one shared formatter filters via its explicit option (completed
+    // items are done work; CLI/MCP callers opt into all-mode explicitly).
+    const markdown = formatTaskMarkdown(task, { includeCompleted: false });
     setCopyText(markdown);
     try {
       if (
@@ -1593,6 +1597,12 @@ export function StudioToolbar({
 
   const panelVisible = open;
 
+  // Goal 04: view-filter derived values (launcher count is ALWAYS the open
+  // count, independent of the view; the list/markers use the visible list).
+  const openCount = countOpenAnnotations(annotations);
+  const completedCount = selectCompletedAnnotations(annotations).length;
+  const visibleAnnotations = selectVisibleAnnotations(annotations, viewFilter);
+
   // Goal 03: marker-local editor anchor — prefer bottom-right of the
   // marker/region rect, flip + clamp inside the viewport (pure math).
   const editorAnnotation = editorAnnotationId
@@ -1639,11 +1649,11 @@ export function StudioToolbar({
           aria-label={
             open
               ? t("studio.toggle.close", "Close Portal Studio")
-              : annotations.length > 0
+              : openCount > 0
                 ? t(
                     "studio.toggle.openCount",
                     "Open Portal Studio ({{count}} annotations)",
-                  ).replace("{{count}}", String(annotations.length))
+                  ).replace("{{count}}", String(openCount))
                 : t("studio.toggle.open", "Open Portal Studio")
           }
           title={getHotkey("toggle")?.shortcutLabel}
@@ -1658,9 +1668,9 @@ export function StudioToolbar({
           onKeyDown={handleToggleKeyDown}
         >
           <Wrench size={18} aria-hidden="true" />
-          {annotations.length > 0 ? (
+          {openCount > 0 ? (
             <span className="ps-launcher-count" aria-hidden="true">
-              {annotations.length > 99 ? "99+" : annotations.length}
+              {openCount > 99 ? "99+" : openCount}
             </span>
           ) : null}
         </button>
@@ -1791,6 +1801,72 @@ export function StudioToolbar({
                 )}
               </button>
             ) : null}
+            {/* Goal 04: view filter + Remove completed — DIRECT controls in
+                the expanded dock (no ellipsis menu). Two buttons with
+                aria-pressed on the ACTIVE view; changing the view closes
+                any open marker editor so it cannot linger over a
+                now-filtered annotation. */}
+            <button
+              type="button"
+              className="ps-button ps-view-toggle"
+              aria-pressed={viewFilter === "open"}
+              onClick={() => {
+                setViewFilter("open");
+                setRemoveCompletedConfirm(false);
+                closeMarkerEditor();
+              }}
+            >
+              {t("studio.viewOpen", "Open")}
+            </button>
+            <button
+              type="button"
+              className="ps-button ps-view-toggle"
+              aria-pressed={viewFilter === "all"}
+              onClick={() => {
+                setViewFilter("all");
+                setRemoveCompletedConfirm(false);
+                closeMarkerEditor();
+              }}
+            >
+              {t("studio.viewAll", "All")}
+            </button>
+            <button
+              type="button"
+              className="ps-button ps-danger"
+              disabled={completedCount === 0}
+              onClick={() => setRemoveCompletedConfirm((current) => !current)}
+            >
+              {t("studio.removeCompleted", "Remove completed ({{count}})").replace(
+                "{{count}}",
+                String(completedCount)
+              )}
+            </button>
+            {removeCompletedConfirm ? (
+              <span className="ps-annotation-confirm" role="alert">
+                {t(
+                  "studio.confirmRemoveCompleted",
+                  "Remove {{count}} completed annotation(s)? Open items stay."
+                ).replace("{{count}}", String(completedCount))}{" "}
+                <button
+                  type="button"
+                  className="ps-button ps-danger"
+                  disabled={editorSaving}
+                  onClick={() => {
+                    persistAnnotations(removeCompletedAnnotations(annotations));
+                    setRemoveCompletedConfirm(false);
+                  }}
+                >
+                  {t("studio.remove", "Remove")}
+                </button>
+                <button
+                  type="button"
+                  className="ps-button"
+                  onClick={() => setRemoveCompletedConfirm(false)}
+                >
+                  {t("studio.cancel", "Cancel")}
+                </button>
+              </span>
+            ) : null}
             <button
               type="button"
               className="ps-icon-button"
@@ -1801,16 +1877,19 @@ export function StudioToolbar({
             </button>
           </div>
 
-          {annotations.length > 0 ? (
+          {visibleAnnotations.length > 0 ? (
             <div className="ps-section">
               <p className="ps-label">
                 {t("studio.annotationsList", "Annotations")} (
-                {annotations.length})
+                {visibleAnnotations.length})
               </p>
               <ul className="ps-annotation-list">
-                {annotations.map((annotation) => {
+                {visibleAnnotations.map((annotation) => {
+                  // Display numbers derive from the CURRENT VISIBLE list
+                  // order (D-034 #4), so the Open view renumbers 1..N and
+                  // All shows the full order.
                   const number = annotationDisplayNumber(
-                    annotations,
+                    visibleAnnotations,
                     annotation.annotationId
                   );
                   const unresolved = isAnnotationUnresolved(annotation);
@@ -1923,26 +2002,45 @@ export function StudioToolbar({
                             >
                               <Pencil size={12} aria-hidden="true" />
                             </button>
-                            <button
-                              type="button"
-                              className="ps-icon-button"
-                              aria-label={t(
-                                "studio.completeAnnotation",
-                                "Complete"
-                              )}
-                              aria-pressed={completed}
-                              disabled={editorSaving}
-                              onClick={() =>
-                                persistAnnotations(
-                                  completeAnnotation(
-                                    annotations,
-                                    annotation.annotationId
+                            {completed ? (
+                              <button
+                                type="button"
+                                className="ps-icon-button"
+                                aria-label={t("studio.reopen", "Reopen")}
+                                disabled={editorSaving}
+                                onClick={() =>
+                                  persistAnnotations(
+                                    reopenAnnotation(
+                                      annotations,
+                                      annotation.annotationId
+                                    )
                                   )
-                                )
-                              }
-                            >
-                              <CheckCircle2 size={12} aria-hidden="true" />
-                            </button>
+                                }
+                              >
+                                <RotateCcw size={12} aria-hidden="true" />
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="ps-icon-button"
+                                aria-label={t(
+                                  "studio.completeAnnotation",
+                                  "Complete"
+                                )}
+                                aria-pressed={completed}
+                                disabled={editorSaving}
+                                onClick={() =>
+                                  persistAnnotations(
+                                    completeAnnotation(
+                                      annotations,
+                                      annotation.annotationId
+                                    )
+                                  )
+                                }
+                              >
+                                <CheckCircle2 size={12} aria-hidden="true" />
+                              </button>
+                            )}
                             <button
                               type="button"
                               className="ps-icon-button"
@@ -1995,6 +2093,16 @@ export function StudioToolbar({
                   );
                 })}
               </ul>
+            </div>
+          ) : null}
+          {visibleAnnotations.length === 0 && annotations.length > 0 ? (
+            <div className="ps-section">
+              <p className="ps-hint" role="status">
+                {t(
+                  "studio.emptyOpenView",
+                  "No open annotations — switch to All to review completed items."
+                )}
+              </p>
             </div>
           ) : null}
 
@@ -2274,10 +2382,12 @@ export function StudioToolbar({
           mounting rule) so markers never pollute evidence screenshots and
           can never be annotated by Studio itself. Unresolved targets stay
           in the list (grey chip) with no page anchor. */}
-      {annotations.map((annotation) => {
+      {visibleAnnotations.map((annotation) => {
         if (annotation.hidden === true) return null;
+        // Display numbers derive from the CURRENT VISIBLE list (D-034 #4),
+        // so marker numbers match the list chips in every view.
         const number = annotationDisplayNumber(
-          annotations,
+          visibleAnnotations,
           annotation.annotationId
         );
         const completed = annotation.status === "completed";

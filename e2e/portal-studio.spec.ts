@@ -1059,7 +1059,13 @@ test("marker-local editor (G03): element marker save, complete/reopen, delete, E
     .poll(() => readActiveTask().annotations[0]?.status)
     .toBe("completed");
 
-  // Reopen from the marker editor (completed → open).
+  // Reopen from the marker editor (completed → open). Goal 04: the
+  // completed marker is hidden from the default Open view — switch the
+  // dock to All first so the marker is reachable again.
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "All", exact: true })
+    .click();
   await marker.click();
   await expect(editor).toBeVisible();
   await editor
@@ -1069,6 +1075,11 @@ test("marker-local editor (G03): element marker save, complete/reopen, delete, E
   await expect
     .poll(() => readActiveTask().annotations[0]?.status)
     .toBe("open");
+  // Back to the default Open view for the remaining assertions.
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Open", exact: true })
+    .click();
 
   // Esc closes the editor and restores focus to the marker button.
   await marker.click();
@@ -1454,13 +1465,34 @@ test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04
   const verifyPayload = JSON.parse(verify) as { completed?: boolean };
   expect(verifyPayload.completed).toBe(true);
 
-  // Completed rendering survives reload.
+  // Completed rendering survives reload. Goal 04: the launcher counts OPEN
+  // only — with the single annotation completed, the count is gone (Wrench)
+  // and the item is hidden from the default Open view.
   await page.reload();
-  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
   await openStudio(page);
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(0);
+  // It is NOT deleted: the All view shows the completed item.
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "All", exact: true })
+    .click();
   await expect(root.locator(".ps-annotation-item")).toContainText(
     /completed/i
   );
+  // Cleanup: remove the completed item via the dock control.
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: /Remove completed \(1\)/ })
+    .click();
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Remove", exact: true })
+    .click();
+  await expect
+    .poll(() => readActiveTask().annotations.length)
+    .toBe(0);
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
 });
 
 test("a11y keyboard walkthrough: dock, command row, Esc focus return (G05)", async ({
@@ -1511,6 +1543,129 @@ test("a11y keyboard walkthrough: dock, command row, Esc focus return (G05)", asy
   await expect(
     root.locator(".ps-annotation-item [aria-label='Delete']")
   ).toBeFocused();
+});
+
+test("completed visibility and cleanup semantics (G04): open-count launcher, All view, reopen, remove confirm, open-only Copy", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+
+  // Two OPEN annotations.
+  await startPicking(page);
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G04 open one");
+  await page.keyboard.press("Control+Enter");
+  await root.getByRole("button", { name: "Done" }).click();
+  await startPicking(page);
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G04 open two");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("2");
+
+  // Complete ONE via the list → launcher counts OPEN only (1).
+  await root.locator(".ps-annotation-item [aria-label='Complete']").first().click();
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+  // Open view hides the completed item; All shows both with Reopen.
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "All", exact: true })
+    .click();
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(2);
+  await expect(root.locator(".ps-annotation-item-completed")).toHaveCount(1);
+  await expect(
+    root.locator(".ps-annotation-item [aria-label='Reopen']")
+  ).toHaveCount(1);
+
+  // Reopen moves it back → launcher back to 2 open.
+  await root.locator(".ps-annotation-item [aria-label='Reopen']").click();
+  await expect
+    .poll(() => readActiveTask().annotations.filter((a) => a.status === "open").length)
+    .toBe(2);
+
+  // Browser Copy is OPEN-ONLY while print --markdown is explicit ALL-mode.
+  // Complete one item first so the Copy assertion is discriminating
+  // (mixed open + completed data).
+  await root.locator(".ps-annotation-item [aria-label='Complete']").first().click();
+  await expect
+    .poll(() => readActiveTask().annotations.filter((a) => a.status === "open").length)
+    .toBe(1);
+  // Poll Copy until the async clipboard/fallback settles (like the G04
+  // copy-parity flow); the OPEN-only output must include the open item
+  // and exclude the completed one.
+  let copied = "";
+  await expect
+    .poll(
+      async () => {
+        await page
+          .locator("#portal-studio-root")
+          .getByRole("button", { name: "Copy" })
+          .click();
+        const fb = root.locator(".ps-copy-fallback textarea");
+        if (await fb.isVisible().catch(() => false)) {
+          copied = await fb.inputValue();
+        } else {
+          copied = await page.evaluate(() =>
+            navigator.clipboard.readText().catch(() => "")
+          );
+        }
+        return copied;
+      },
+      { timeout: 15000 }
+    )
+    .toContain("G04 open two");
+  expect(copied).not.toContain("G04 open one");
+  await page.keyboard.press("Escape");
+  // All-mode print output contains every annotation (mixed data).
+  const printed = execFileSync(
+    process.execPath,
+    ["scripts/portal-studio-print.mjs", "--markdown"],
+    { encoding: "utf8" }
+  );
+  expect(printed).toContain("G04 open one");
+  expect(printed).toContain("G04 open two");
+
+  // Complete the FINAL open item → launcher back to Wrench; item hidden
+  // from the default Open view but NOT deleted (All view still shows it).
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Open", exact: true })
+    .click();
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+  await root.locator(".ps-annotation-item [aria-label='Complete']").click();
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(0);
+  await expect(root.locator(".ps-hint")).toContainText(/No open annotations/);
+
+  // Remove completed: cancel keeps items; confirm removes ONLY completed.
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "All", exact: true })
+    .click();
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Remove completed (2)" })
+    .click();
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Cancel" })
+    .click();
+  await expect.poll(() => readActiveTask().annotations.length).toBe(2);
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Remove completed (2)" })
+    .click();
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Remove", exact: true })
+    .click();
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
 });
 
 test("large task (>64KB) mutations persist via the plain POST (D-043 regression)", async ({

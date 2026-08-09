@@ -177,4 +177,10 @@ export const starter = {
   "studio.saveComment": "Save comment",
   "studio.reopen": "Reopen",
   "studio.saveError": "Unable to save — try again.",
+  "studio.viewOpen": "Open",
+  "studio.viewAll": "All",
+  "studio.removeCompleted": "Remove completed ({{count}})",
+  "studio.confirmRemoveCompleted": "Remove {{count}} completed annotation(s)? Open items stay.",
+  "studio.remove": "Remove",
+  "studio.emptyOpenView": "No open annotations — switch to All to review completed items.",
 } as const;

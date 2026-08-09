@@ -639,21 +639,6 @@ describe("StudioToolbar", () => {
     },
   });
 
-  const pageWait = (count: number) =>
-    new Promise<void>((resolve) => {
-      const check = () => {
-        const posts = (globalThis.fetch as unknown as ReturnType<
-          typeof vi.fn
-        >)?.mock?.calls?.filter(
-          (call: unknown[]) =>
-            (call[1] as { method?: string } | undefined)?.method === "POST"
-        );
-        if (!posts || posts.length > count) resolve();
-        else setTimeout(check, 20);
-      };
-      check();
-    });
-
   const loadThen = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.click(
       screen.getByRole("button", { name: "Open Portal Studio" })
@@ -1060,29 +1045,37 @@ describe("StudioToolbar", () => {
         })
       ).toBe(true);
     });
-    // Distinct completed rendering.
+    // Goal 04: completing the final open item hides it from the default
+    // Open view (not deleted). Switch to All to see the distinct completed
+    // rendering with a Reopen action.
+    await waitFor(() => {
+      expect(screen.queryByText("finish me")).not.toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "All" }));
     await waitFor(() => {
       expect(screen.getByText("Completed")).toBeInTheDocument();
     });
-    // Second click must NOT double-stamp (status stays completed).
-    const postsAfterFirst = fetchMock.mock.calls.filter(
-      (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
-    ).length;
-    await user.click(screen.getByRole("button", { name: "Complete" }));
-    await pageWait(postsAfterFirst);
-    const completedPayloads = fetchMock.mock.calls
-      .filter(
-        (call) =>
-          (call[1] as { method?: string } | undefined)?.method === "POST"
-      )
-      .map((call) => JSON.parse((call[1] as { body: string }).body));
+    // The completed item offers Reopen (not Complete) in the list.
     expect(
-      completedPayloads.some(
-        (payload) =>
-          (payload.annotations as { completedAt?: string }[])[0].completedAt !==
-          undefined
-      )
-    ).toBe(true);
+      screen.queryByRole("button", { name: "Complete" })
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reopen" }));
+    await waitFor(() => {
+      const payloads = fetchMock.mock.calls
+        .filter(
+          (call) =>
+            (call[1] as { method?: string } | undefined)?.method === "POST"
+        )
+        .map((call) => JSON.parse((call[1] as { body: string }).body));
+      expect(
+        payloads.some(
+          (payload) =>
+            (payload.annotations as { status: string }[])[0].status === "open"
+        )
+      ).toBe(true);
+    });
+    // Double-stamp protection for completeAnnotation stays covered by the
+    // pure annotation-ops unit tests (no duplicate Complete button exists).
   });
 
   // ---- G05 acceptance-found defect (D-043): keepalive mutation bug ----
@@ -1450,8 +1443,12 @@ describe("StudioToolbar", () => {
     expect(copied).not.toContain("hotkey completed comment");
     // Annotations count reflects ONLY the open one.
     expect(copied).toContain("## Annotations (1)");
-    // Neither annotation was cleared or mutated — both still in the list.
+    // Goal 04: nothing was cleared or mutated — the OPEN comment is in the
+    // default Open view; the COMPLETED one is hidden there (view filter)
+    // but still present in All.
     expect(screen.getByText("hotkey open comment")).toBeInTheDocument();
+    expect(screen.queryByText("hotkey completed comment")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "All" }));
     expect(screen.getByText("hotkey completed comment")).toBeInTheDocument();
   });
 
@@ -2089,6 +2086,10 @@ describe("StudioToolbar", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+    // Goal 04: the just-completed marker is now hidden from the default
+    // Open view — open the panel and switch to All to reach it.
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: "All" }));
     // Completed annotation → Reopen button.
     const doneMarker = await screen.findByRole("button", {
       name: "Annotation 2: open editor",
@@ -2325,6 +2326,207 @@ describe("StudioToolbar", () => {
     const style = (dialog as HTMLElement).style;
     expect(Number(style.top.replace("px", ""))).toBe(300 + 120 + 8);
     expect(Number(style.left.replace("px", ""))).toBe(400 + 200 - 264);
+  });
+
+  // ---- Goal 04: completed visibility and cleanup semantics ----
+
+  const viewRoutes = (annotations: unknown[]) =>
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse(makeLoadTask(annotations)),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true }),
+      },
+    ]);
+
+  const openAnn = (id: string, comment: string) => ({
+    annotationId: id,
+    kind: "element" as const,
+    comment,
+    createdAt: "2026-08-08T12:00:00.000Z",
+    status: "open" as const,
+    elements: [],
+  });
+
+  const doneAnn = (id: string, comment: string) => ({
+    ...openAnn(id, comment),
+    status: "completed" as const,
+    completedAt: "2026-08-08T13:00:00.000Z",
+  });
+
+  it("launcher count is ALWAYS the open count, independent of the view", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("a", "open one"), doneAnn("b", "done one")]);
+    render(<StudioToolbar config={config} />);
+    // 1 open + 1 completed → launcher shows 1 (open only).
+    await waitFor(() => {
+      expect(screen.getByText("1", { selector: ".ps-launcher-count" })).toBeInTheDocument();
+    });
+    // Switching to All must NOT change the launcher count.
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("1", { selector: ".ps-launcher-count" })).toBeInTheDocument();
+  });
+
+  it("default Open view hides completed items; All shows them with distinct styling and Reopen", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("a", "open one"), doneAnn("b", "done one")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // Open view: only the open item is listed.
+    await waitFor(() => {
+      expect(screen.getByText("open one")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("done one")).not.toBeInTheDocument();
+    // All view: both listed, completed styled + Reopen action (no Complete).
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("done one")).toBeInTheDocument();
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
+    // Reopen moves the item back to open: in Open view it reappears.
+    await user.click(screen.getByRole("button", { name: "Reopen" }));
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    expect(screen.getByText("done one")).toBeInTheDocument();
+  });
+
+  it("Remove completed is disabled at zero and requires confirmation; removes ONLY completed", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("a", "keep open"), doneAnn("b", "remove done")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // All view so the completed item is visible during the flow.
+    await user.click(screen.getByRole("button", { name: "All" }));
+    await waitFor(() => {
+      expect(screen.getByText("remove done")).toBeInTheDocument();
+    });
+    const removeButton = await screen.findByRole("button", {
+      name: "Remove completed (1)",
+    });
+    await user.click(removeButton);
+    // Confirmation appears before anything is removed.
+    expect(screen.getByRole("alert")).toHaveTextContent(/Open items stay/);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("remove done")).toBeInTheDocument();
+    // Confirm removes ONLY the completed item.
+    await user.click(screen.getByRole("button", { name: "Remove completed (1)" }));
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => {
+      expect(screen.queryByText("remove done")).not.toBeInTheDocument();
+      expect(screen.getByText("keep open")).toBeInTheDocument();
+    });
+  });
+
+  it("Remove completed with zero completed items is disabled", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("a", "only open")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    const removeButton = await screen.findByRole("button", {
+      name: "Remove completed (0)",
+    });
+    expect(removeButton).toBeDisabled();
+  });
+
+  it("completing the FINAL open item returns the launcher to Wrench and hides it in Open view (not deleted)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("a", "last open")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await waitFor(() => {
+      expect(screen.getByText("last open")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Complete" }));
+    // The item leaves the Open view and the launcher shows no count.
+    await waitFor(() => {
+      expect(screen.queryByText("last open")).not.toBeInTheDocument();
+    });
+    expect(
+      document.querySelector(".ps-launcher-count")
+    ).not.toBeInTheDocument();
+    // Not deleted: present in All with Reopen.
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("last open")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
+  });
+
+  it("zero states: open view with only completed shows the empty hint", async () => {
+    const user = userEvent.setup();
+    viewRoutes([doneAnn("b", "only done")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent(/No open annotations/);
+    });
+    expect(screen.queryByText("only done")).not.toBeInTheDocument();
+  });
+
+  it("marker labels renumber to the VISIBLE order in the Open view (P1 review)", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    viewRoutes([
+      { ...openAnn("open-1", "first open"), elements: [elementCapture("row-a")] },
+      { ...doneAnn("done-1", "middle done"), elements: [elementCapture("row-a")] },
+      { ...openAnn("open-2", "second open"), elements: [elementCapture("row-a")] },
+    ]);
+    render(<StudioToolbar config={config} />);
+    // Open view: the two OPEN items are numbered 1 and 2 in BOTH the list
+    // and the marker labels (previously the marker showed 1 and 3).
+    const markers = await screen.findAllByRole("button", {
+      name: /open editor/,
+    });
+    expect(markers).toHaveLength(2);
+    expect(
+      screen.getByRole("button", { name: "Annotation 1: open editor" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Annotation 2: open editor" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Annotation 3: open editor" })
+    ).not.toBeInTheDocument();
+    // All view restores the full 1..3 numbering.
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(
+      screen.getByRole("button", { name: "Annotation 3: open editor" })
+    ).toBeInTheDocument();
+  });
+
+  it("mixed hidden + completed + open data stays independent across views and markers", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    viewRoutes([
+      { ...openAnn("open-1", "mixed open"), hidden: true, elements: [elementCapture("row-a")] },
+      { ...doneAnn("done-1", "mixed done"), elements: [elementCapture("row-a")] },
+      { ...openAnn("open-2", "mixed open two"), elements: [elementCapture("row-a")] },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // Open view: both OPEN items listed (the hidden one keeps its Hidden
+    // badge — hidden is independent of the view filter), completed hidden.
+    await waitFor(() => {
+      expect(screen.getByText("mixed open")).toBeInTheDocument();
+      expect(screen.getByText("mixed open two")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("mixed done")).not.toBeInTheDocument();
+    expect(screen.getByText(/Hidden/)).toBeInTheDocument();
+    // Launcher counts the two OPEN items only.
+    expect(screen.getByText("2", { selector: ".ps-launcher-count" })).toBeInTheDocument();
+    // All view: completed appears; hidden item still listed with its badge.
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("mixed done")).toBeInTheDocument();
+    expect(screen.getByText(/Hidden/)).toBeInTheDocument();
+    // Visible-order numbering: All shows 1..3, Open renumbers to 1..2.
+    expect(screen.getByText("Annotations (3)")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    await waitFor(() => {
+      expect(screen.getByText("Annotations (2)")).toBeInTheDocument();
+    });
   });
 
 });

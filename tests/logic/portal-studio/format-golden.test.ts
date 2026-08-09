@@ -150,6 +150,41 @@ describe("formatTaskJson — golden v5 output", () => {
   });
 });
 
+describe("formatTaskMarkdown — Goal 04 includeCompleted option", () => {
+  it("default renders ALL annotations (existing golden behavior)", () => {
+    const markdown = formatTaskMarkdown(v5Fixture);
+    expect(markdown).toContain("## Annotations (2)");
+    expect(markdown).toContain("Bold the header");
+    expect(markdown).toContain("Highlight the table");
+    expect(markdown).toContain("- status: completed @ 2026-08-08T10:05:00.000Z");
+  });
+
+  it("includeCompleted:true is the explicit all-mode option (identical to default)", () => {
+    const all = formatTaskMarkdown(v5Fixture, { includeCompleted: true });
+    expect(all).toBe(formatTaskMarkdown(v5Fixture));
+    expect(all).toContain("## Annotations (2)");
+  });
+
+  it("includeCompleted:false renders ONLY open annotations (browser Copy default)", () => {
+    const openOnly = formatTaskMarkdown(v5Fixture, { includeCompleted: false });
+    expect(openOnly).toContain("## Annotations (1)");
+    expect(openOnly).toContain("Highlight the table");
+    expect(openOnly).not.toContain("Bold the header");
+    expect(openOnly).not.toContain("status: completed");
+  });
+
+  it("includeCompleted:false with only completed annotations renders an empty list", () => {
+    const onlyDone = {
+      ...v5Fixture,
+      annotations: v5Fixture.annotations.filter(
+        (annotation) => annotation.status === "completed"
+      ),
+    };
+    const markdown = formatTaskMarkdown(onlyDone, { includeCompleted: false });
+    expect(markdown).toContain("## Annotations (0)");
+  });
+});
+
 describe("formatTaskMarkdown — v4 normalize-on-read (D-033 #17)", () => {
   it("renders a v4 artifact as its normalized v5 single annotation", () => {
     const markdown = formatTaskMarkdown(v4Fixture);
