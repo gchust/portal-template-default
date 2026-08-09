@@ -298,6 +298,84 @@ describe("task sanitization", () => {
     expect((annotation as Record<string, unknown>).extra).toBeUndefined();
   });
 
+  it("preserves the Goal 06 pageContext through sanitizeTask (server round trip)", () => {
+    const base = {
+      schemaVersion: TASK_SCHEMA_VERSION,
+      taskId: "task-ctx-keep",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations: [
+        {
+          annotationId: "ann-ctx",
+          kind: "element",
+          comment: "c",
+          createdAt: "2026-08-09T00:00:00.000Z",
+          status: "open",
+          elements: [],
+          pageContext: {
+            url: "http://127.0.0.1:4173/users?page=2",
+            routeKey: "/users",
+            title: "Users",
+            viewport: { width: 1280, height: 720 },
+            scroll: { x: 10, y: 20 },
+            businessContext: [
+              { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
+            ],
+          },
+        },
+      ],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    };
+    const task = sanitizeTask(base);
+    expect(task).not.toBeNull();
+    expect(task?.annotations[0].pageContext).toEqual({
+      // Query strings are redacted by the server whitelist (security).
+      url: "http://127.0.0.1:4173/users?[REDACTED]",
+      routeKey: "/users",
+      title: "Users",
+      viewport: { width: 1280, height: 720 },
+      scroll: { x: 10, y: 20 },
+      businessContext: [
+        { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
+      ],
+    });
+  });
+
+  it("drops a malformed pageContext but keeps the annotation (defensive)", () => {
+    const base = {
+      schemaVersion: TASK_SCHEMA_VERSION,
+      taskId: "task-ctx-drop",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      url: "http://127.0.0.1:4173/users",
+      title: "Users",
+      annotations: [
+        {
+          annotationId: "ann-ctx",
+          kind: "element",
+          comment: "c",
+          createdAt: "2026-08-09T00:00:00.000Z",
+          status: "open",
+          elements: [],
+          pageContext: {
+            url: "http://127.0.0.1:4173/users",
+            routeKey: "/users",
+            title: "Users",
+            viewport: { width: "wide", height: 720 },
+            scroll: { x: 0, y: 0 },
+            businessContext: [],
+          },
+        },
+      ],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    };
+    const task = sanitizeTask(base);
+    expect(task?.annotations[0].pageContext).toBeUndefined();
+    expect(task?.annotations[0].status).toBe("open");
+  });
+
   it("drops malformed completedEvidence but keeps the annotation (defensive)", () => {
     const base = {
       schemaVersion: TASK_SCHEMA_VERSION,

@@ -13,7 +13,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { expect, test } from "@playwright/test";
@@ -996,11 +996,18 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
   await closeStudio(page);
 
   // Route change → targets gone → annotations RETAINED as unresolved.
+  // Goal 06: the server-persisted annotations carry their pageContext
+  // routeKey ("/users"), so markers are ALSO route-gated — they must not
+  // render on /dev/ai-chat even if a target could resolve.
   await page.goto(resolvePortalTestURL(environment, "/dev/ai-chat"));
   await openStudio(page);
   await expect(root.locator(".ps-annotation-item")).toHaveCount(2);
   await expect(root.locator(".ps-unresolved")).toHaveCount(2);
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(0);
+  const routed = readActiveTask();
+  expect(routed.annotations.every((a) => a.pageContext?.routeKey === "/users")).toBe(
+    true
+  );
 });
 
 test("marker-local editor (G03): element marker save, complete/reopen, delete, Esc focus return", async ({
@@ -1190,7 +1197,7 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
   await expect(root.locator(".ps-marker-highlight")).toHaveCount(0);
 
   // Save failure: the POST is intercepted → error shown, text preserved.
-  await page.route("**/__portal-studio/tasks", async (route) => {
+  await page.route("**/__portal-studio/mutate", async (route) => {
     if (route.request().method() === "POST") {
       await route.fulfill({
         status: 200,
@@ -1212,7 +1219,7 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
   await expect
     .poll(() => readActiveTask().annotations[0]?.comment)
     .toBe("G03 multi marker");
-  await page.unroute("**/__portal-studio/tasks");
+  await page.unroute("**/__portal-studio/mutate");
   await page.keyboard.press("Escape");
 
   // Event isolation: typing a hotkey combo inside the editor textarea must
@@ -1365,7 +1372,12 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   await expect(root.locator(".ps-unresolved")).toContainText(/hidden/i);
   // Persisted before the reload (debounced mutation).
   await expect
-    .poll(() => readActiveTask().annotations[0]?.hidden)
+    .poll(
+      () =>
+        (readActiveTask() as unknown as {
+          annotations?: Array<{ hidden?: boolean }>;
+        }).annotations?.[0]?.hidden
+    )
     .toBe(true);
   await page.reload();
   await expect(root.locator(".ps-launcher-count")).toHaveText("1");
@@ -1640,7 +1652,9 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   await root.locator(".ps-annotation-item [aria-label='Complete']").click();
   await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
   await expect(root.locator(".ps-annotation-item")).toHaveCount(0);
-  await expect(root.locator(".ps-hint")).toContainText(/No open annotations/);
+  await expect(
+    root.locator(".ps-section .ps-hint", { hasText: "No open annotations" })
+  ).toBeVisible();
 
   // Remove completed: cancel keeps items; confirm removes ONLY completed.
   await page
@@ -1770,6 +1784,147 @@ test("agent CLI complete/reopen sync to the browser within two seconds (G05)", a
     .locator(".ps-annotation-confirm button", { hasText: "Delete" })
     .click();
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+});
+
+test("mutating a legacy v1-v4 artifact through the typed endpoint does not crash (G06 P2-2)", async ({
+  page,
+}) => {
+  // Seed a v4 artifact directly (like the pre-upgrade agent flow), then
+  // mutate it from the BROWSER through the mutate endpoint — the server
+  // must normalize on read instead of crashing on a missing annotations[].
+  const v4 = {
+    schemaVersion: 4,
+    taskId: "legacy-v4-mutate",
+    createdAt: "2026-08-09T00:00:00.000Z",
+    url: resolvePortalTestURL(environment, "/users"),
+    title: "Users",
+    instruction: "Legacy annotation",
+    elements: [],
+    businessContext: [],
+    redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+  };
+  mkdirSync(path.dirname(taskFile), { recursive: true });
+  writeFileSync(taskFile, JSON.stringify(v4, null, 2));
+
+  await signIn(page);
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+  // The browser normalized the v4 artifact on read — the annotation is in
+  // the list even though the FILE is still v4.
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
+  // Hide the normalized annotation — the mutate endpoint must normalize on
+  // read and apply the op (no 500), persisting a v5 artifact with hidden.
+  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
+  await expect
+    .poll(
+      () =>
+        (readActiveTask() as unknown as {
+          annotations?: Array<{ hidden?: boolean }>;
+        }).annotations?.[0]?.hidden
+    )
+    .toBe(true);
+  expect(readActiveTask().schemaVersion).toBe(5);
+  expect(readActiveTask().annotations[0].annotationId).toBe(
+    "legacy-v4-mutate-v4"
+  );
+
+  // Cleanup: delete the annotation so later tests start empty.
+  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
+  await root.locator(".ps-annotation-confirm").waitFor();
+  await root
+    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+    .click();
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+});
+
+test("interleaved browser/CLI mutations keep stable taskId and revision-aware consistency (G06)", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+
+  // Browser creates the first annotation (taskId A).
+  await startPicking(page);
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G06 browser one");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+  const taskIdA = readActiveTask().taskId;
+
+  // Browser adds a second annotation — SAME taskId A.
+  await root.getByRole("button", { name: "Done" }).click();
+  await startPicking(page);
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G06 browser two");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("2");
+  expect(readActiveTask().taskId).toBe(taskIdA);
+
+  // CLI completes one annotation through the SAME typed mutation
+  // semantics; the browser picks it up via revision polling within 2s.
+  const cliEnv = { ...process.env, PORTAL_STUDIO_DIR: studioDir };
+  const firstId = readActiveTask().annotations[0].annotationId;
+  execFileSync(
+    process.execPath,
+    ["scripts/portal-studio-agent.mjs", "complete", "--", firstId, "--verified", "--summary", "G06 interleaved"],
+    { encoding: "utf8", env: cliEnv }
+  );
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1", {
+    timeout: 2000,
+  });
+
+  // Browser mutates while the CLI-completed state exists (hide the open
+  // one) — the typed mutation preserves the CLI evidence and taskId.
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "All", exact: true })
+    .click();
+  await root.locator(".ps-annotation-item [aria-label='Hide']").last().click();
+  await expect
+    .poll(() => readActiveTask().annotations[1]?.hidden)
+    .toBe(true);
+  const after = readActiveTask();
+  expect(after.taskId).toBe(taskIdA);
+  expect(after.annotations[0].completedEvidence?.summary).toContain(
+    "G06 interleaved"
+  );
+  // The server whitelist round trip PRESERVES the per-annotation page
+  // context (audit fix): the persisted artifact carries the routeKey that
+  // gates marker rendering.
+  expect(after.annotations[0].pageContext?.routeKey).toBe(
+    new URL(page.url()).pathname
+  );
+  expect(typeof after.annotations[0].pageContext?.viewport.width).toBe(
+    "number"
+  );
+  expect(typeof after.taskRevision).toBe("number");
+
+  // Cleanup: delete both annotations so later tests start empty.
+  await root.locator(".ps-annotation-item [aria-label='Hide']").last().click();
+  await expect.poll(() => readActiveTask().annotations[1]?.hidden).toBe(false);
+  await closeStudio(page);
+  await openStudio(page);
+  const deleteButtons = root.locator(
+    ".ps-annotation-item [aria-label='Delete']"
+  );
+  const count = await deleteButtons.count();
+  for (let index = 0; index < count; index += 1) {
+    await deleteButtons.first().click();
+    await root.locator(".ps-annotation-confirm").waitFor();
+    await root
+      .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+      .click();
+    await expect
+      .poll(() => readActiveTask().annotations.length)
+      .toBe(count - index - 1);
+  }
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
 });
 
 test("large task (>64KB) mutations persist via the plain POST (D-043 regression)", async ({

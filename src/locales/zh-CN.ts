@@ -168,6 +168,7 @@ export const starter = {
   "studio.editorTitle": "标注编辑器",
   "studio.saveComment": "保存评论",
   "studio.reopen": "重新打开",
+  "studio.conflict": "任务已在服务器上变更——你的修改未被应用。请查看当前状态后重试。",
   "studio.saveError": "保存失败，请重试。",
   "studio.viewOpen": "打开中",
   "studio.viewAll": "全部",

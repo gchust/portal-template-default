@@ -63,9 +63,15 @@ import {
   stampTaskRevision,
   updateActiveTaskEvidence,
   verifySessionToken,
+  writeActiveTaskWithRevision,
 } from "./endpoint";
 import { existsSync, readFileSync } from "node:fs";
 import { isTaskCompleted } from "./format.ts";
+import { normalizeTask } from "./task-model.ts";
+import {
+  applyMutationOperations,
+  parseMutationRequest,
+} from "./mutation";
 import type {
   ElementCapture,
   PortalStudioTask,
@@ -80,6 +86,7 @@ const PENDING_ENDPOINT_PATH = "/__portal-studio/screenshot/pending";
 const BOOTSTRAP_ENDPOINT_PATH = "/__portal-studio/bootstrap";
 const VERIFY_ENDPOINT_PATH = "/__portal-studio/verify";
 const REVISION_ENDPOINT_PATH = "/__portal-studio/revision";
+const MUTATE_ENDPOINT_PATH = "/__portal-studio/mutate";
 const MAX_VERIFY_BODY_BYTES = 1024;
 const TOKEN_HEADER = "x-portal-studio-token";
 const MAX_HEARTBEAT_BODY_BYTES = 1024;
@@ -92,10 +99,12 @@ const MAX_TOTAL_SOURCE_CANDIDATES = 40;
 export type PortalStudioPluginOptions = {
   root?: string;
   /**
-   * Opt-in (D-031): allow Studio endpoints from ANY remote address instead
-   * of dev-machine addresses only (loopback + the server's own interface
-   * IPs). The session token is still required; this only relaxes the
-   * transport-level source check. Default false.
+   * Goal 06: remote access is EXPLICITLY opt-in via
+   * NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE === "true" (default false) — never
+   * hard-coded. When enabled, Studio endpoints accept non-loopback sources
+   * but the session token is STILL required; host/origin source checks are
+   * retained for the default (disabled) path. A clear dev-only warning is
+   * printed when enabled.
    */
   allowRemote?: boolean;
 };
@@ -310,9 +319,26 @@ export function assignSourceCandidates(
   });
 }
 
+/**
+ * Goal 06: remote access is EXPLICITLY opt-in via
+ * NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE === "true" (exact string; default
+ * false). Pure and testable.
+ */
+export function resolveAllowRemote(envValue: string | undefined): boolean {
+  return envValue === "true";
+}
+
 export function portalStudioPlugin(
   options: PortalStudioPluginOptions = {}
 ): Plugin {
+  const allowRemote = options.allowRemote === true;
+  if (allowRemote) {
+    // Goal 06: clear dev-only warning when remote access is opted in —
+    // never includes the session token or any other secret.
+    console.warn(
+      "[portal-studio] remote access ENABLED (NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE=true): Studio endpoints accept non-loopback clients; the per-session token is still required. Development use only."
+    );
+  }
   const root = path.resolve(options.root ?? process.cwd());
   const studioRoot = path.resolve(root, ".portal-studio");
   let sessionToken = "";
@@ -438,6 +464,7 @@ export function portalStudioPlugin(
         endpoint: TASKS_ENDPOINT_PATH,
         screenshotsEndpoint: SCREENSHOTS_ENDPOINT_PATH,
         revisionEndpoint: REVISION_ENDPOINT_PATH,
+        mutateEndpoint: MUTATE_ENDPOINT_PATH,
       });
       // Inline module scripts in dev index.html are processed by Vite, so the
       // studio entry import resolves through the dev transform pipeline. The
@@ -511,6 +538,8 @@ export function portalStudioPlugin(
             request.method === "POST" && request.url === VERIFY_ENDPOINT_PATH;
           const isRevisionGet =
             request.method === "GET" && request.url === REVISION_ENDPOINT_PATH;
+          const isMutatePost =
+            request.method === "POST" && request.url === MUTATE_ENDPOINT_PATH;
           if (
             !isTaskPost &&
             !isTaskGet &&
@@ -521,7 +550,8 @@ export function portalStudioPlugin(
             !isPendingGet &&
             !isBootstrapPost &&
             !isVerifyPost &&
-            !isRevisionGet
+            !isRevisionGet &&
+            !isMutatePost
           ) {
             next();
             return;
@@ -540,7 +570,7 @@ export function portalStudioPlugin(
           // server's own interface IPs; remote machines stay rejected unless
           // the plugin opts in via allowRemote (still token-protected).
           if (
-            !options.allowRemote &&
+            !allowRemote &&
             !isTrustedStudioSource(request.socket.remoteAddress)
           ) {
             writeJsonResponse(response, 404, { error: "not_found" });
@@ -611,8 +641,10 @@ export function portalStudioPlugin(
 
           const bodyLimit = isScreenshotPost
             ? MAX_SCREENSHOT_BODY_BYTES
-            : isVerifyPost
-              ? MAX_VERIFY_BODY_BYTES
+            : isMutatePost
+              ? MAX_TASK_BODY_BYTES
+              : isVerifyPost
+                ? MAX_VERIFY_BODY_BYTES
               : isHeartbeatPost
                 ? MAX_HEARTBEAT_BODY_BYTES
                 : isScreenshotCommandPost
@@ -713,6 +745,82 @@ export function portalStudioPlugin(
             }
             lastHeartbeatAtMs = receipt.receivedAtMs;
             writeJsonResponse(response, 200, { ok: true });
+            return;
+          }
+
+          // Goal 06: typed revision-aware atomic mutation endpoint. The
+          // browser/CLI send {taskId, expectedTaskRevision, operations};
+          // the server applies the operations atomically and increments
+          // taskRevision. A revision mismatch returns 409 with the current
+          // metadata/task so the client can refresh, retry once, then show
+          // explicit conflict feedback. Never silently overwrite another
+          // client's completed state.
+          if (isMutatePost) {
+            const request = parseMutationRequest(raw);
+            if (!request) {
+              writeJsonResponse(response, 400, { error: "invalid_mutation_request" });
+              return;
+            }
+            const current = readActiveTask(studioRoot);
+            if (!current) {
+              writeJsonResponse(response, 404, { error: "no_active_task" });
+              return;
+            }
+            // P2-2 review: the typed ops apply against the NORMALIZED v5
+            // task (legacy v1–v4 artifacts have no annotations[] and would
+            // crash the pure apply). normalizeTask is lossless (D-033 #17)
+            // and rejects unrecognized payloads.
+            const normalizedCurrent = normalizeTask(current);
+            if (!normalizedCurrent) {
+              writeJsonResponse(response, 400, { error: "invalid_task" });
+              return;
+            }
+            if (request.taskId !== normalizedCurrent.taskId) {
+              writeJsonResponse(response, 400, { error: "task_id_mismatch" });
+              return;
+            }
+            const currentRevision = readTaskRevision(studioRoot);
+            if (request.expectedTaskRevision !== currentRevision) {
+              // 409 + current metadata/task → refresh + retry + conflict UI.
+              writeJsonResponse(response, 409, {
+                ok: false,
+                error: "revision_conflict",
+                taskRevision: currentRevision,
+                task: current,
+              });
+              return;
+            }
+            const applied = applyMutationOperations(
+              normalizedCurrent,
+              request.operations
+            );
+            if (!applied.ok) {
+              writeJsonResponse(response, 400, {
+                error:
+                  applied.error === "annotation_not_found"
+                    ? "annotation_not_found"
+                    : "invalid_mutation",
+              });
+              return;
+            }
+            // Defense in depth: the merged task passes the same server
+            // whitelist sanitizer as the create path (redaction, bounds,
+            // additive evidence, pageContext preserved).
+            const sanitized = sanitizeTask(applied.task, { studioRoot });
+            if (!sanitized) {
+              writeJsonResponse(response, 400, { error: "invalid_task" });
+              return;
+            }
+            const written = writeActiveTaskWithRevision(studioRoot, sanitized);
+            if (!written.ok) {
+              writeJsonResponse(response, 400, { error: "write_failed" });
+              return;
+            }
+            writeJsonResponse(response, 200, {
+              ok: true,
+              taskRevision: written.revision,
+              task: sanitized,
+            });
             return;
           }
 
@@ -825,6 +933,30 @@ export function portalStudioPlugin(
             return;
           }
 
+          // P2-3 review: the create/save POST is revision-aware when the
+          // client supplies its last-known taskRevision. If the artifact
+          // moved (another client, or an agent-side DELETE/CLI completion
+          // between the browser's last fetch and this save), return 409
+          // with the current state instead of silently overwriting it.
+          const rawRecord = isRecordLike(raw) ? raw : {};
+          const expectedCreateRevision =
+            typeof rawRecord.expectedTaskRevision === "number"
+              ? rawRecord.expectedTaskRevision
+              : undefined;
+          if (expectedCreateRevision !== undefined) {
+            const currentOnDisk = readActiveTask(studioRoot);
+            const currentRevision = readTaskRevision(studioRoot);
+            if (expectedCreateRevision !== currentRevision) {
+              writeJsonResponse(response, 409, {
+                ok: false,
+                error: "revision_conflict",
+                taskRevision: currentRevision,
+                task: currentOnDisk,
+              });
+              return;
+            }
+          }
+
           const names = task.annotations.flatMap((annotation) =>
             annotation.elements.flatMap((element) =>
               element.componentCandidates
@@ -884,6 +1016,9 @@ export function portalStudioPlugin(
             writtenAt: new Date().toISOString(),
             file: resolveActiveTaskPath(studioRoot),
             sourceCandidates: resolved,
+            // P2-3 review: the create response carries the stamped revision
+            // so the client keeps its baseline in sync.
+            taskRevision: readTaskRevision(studioRoot),
           });
         }
       );

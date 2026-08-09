@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StudioToolbar } from "@/studio/toolbar";
+import { applyMutationOperations } from "@/studio/mutation";
 
 vi.mock("@/studio/screenshot", () => ({
   captureViewportPng: vi.fn(async () => ({
@@ -16,6 +17,7 @@ const config = {
   token: "test-token",
   endpoint: "/__portal-studio/tasks",
   screenshotsEndpoint: "/__portal-studio/screenshots",
+  mutateEndpoint: "/__portal-studio/mutate",
 };
 
 const makePageElement = (text = "Hello row", id = "") => {
@@ -27,8 +29,9 @@ const makePageElement = (text = "Hello row", id = "") => {
   return row;
 };
 
-const jsonResponse = (payload: unknown, ok = true) => ({
+const jsonResponse = (payload: unknown, ok = true, status?: number) => ({
   ok,
+  status: status ?? (ok ? 200 : 400),
   json: async () => payload,
 });
 
@@ -42,6 +45,7 @@ const mockFetchRoutes = (
     method: string;
     respond: (init?: { method?: string; body?: string }) => Promise<{
       ok: boolean;
+      status?: number;
       json: () => Promise<unknown>;
     }>;
   }>
@@ -64,6 +68,19 @@ const mockFetchRoutes = (
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 };
+
+/** Extract typed mutation operations from captured mutate-endpoint calls. */
+const mutateOperationsFrom = (fetchMock: ReturnType<typeof vi.fn>) =>
+  fetchMock.mock.calls
+    .filter((call) => String(call[0]).includes("/mutate"))
+    .map(
+      (call) =>
+        (
+          JSON.parse((call[1] as { body: string }).body) as {
+            operations: Array<Record<string, unknown>>;
+          }
+        ).operations
+    );
 
 const openAndPick = async (
   user: ReturnType<typeof userEvent.setup>,
@@ -648,17 +665,80 @@ describe("StudioToolbar", () => {
     });
   };
 
+  /**
+   * Stateful fetch helper: GET serves the current task; the typed mutate
+   * endpoint applies operations with the SAME pure contract as the real
+   * server (applyMutationOperations) and bumps a revision counter.
+   */
   const makeRoutedFetch = (annotations: unknown[]) => {
+    let current = makeLoadTask(annotations);
+    let revision = 1;
     return mockFetchRoutes([
       {
         url: "/__portal-studio/tasks",
         method: "GET",
-        respond: async () => jsonResponse(makeLoadTask(annotations)),
+        respond: async () => jsonResponse(current),
       },
       {
         url: "/__portal-studio/tasks",
         method: "POST",
         respond: async () => jsonResponse({ ok: true }),
+      },
+      {
+        url: "/__portal-studio/mutate",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          const request = JSON.parse(init?.body ?? "{}") as {
+            taskId: string;
+            expectedTaskRevision: number;
+            operations: unknown[];
+          };
+          const baseTask = (current.task ?? {}) as {
+            taskId?: string;
+            annotations?: unknown[];
+          };
+          const task = {
+            schemaVersion: 5,
+            taskId: baseTask.taskId ?? "task-routed-1",
+            createdAt: "2026-08-07T12:00:00.000Z",
+            url: "http://127.0.0.1:4173/users",
+            title: "Users",
+            annotations: (baseTask.annotations ?? []) as never[],
+            businessContext: [],
+            redaction: {
+              droppedKeys: [],
+              redactedValues: 0,
+              truncatedValues: 0,
+            },
+            taskRevision: revision,
+          } as never;
+          if (request.expectedTaskRevision !== revision) {
+            return jsonResponse(
+              {
+                ok: false,
+                error: "revision_conflict",
+                taskRevision: revision,
+                task,
+              },
+              false,
+              409
+            );
+          }
+          const applied = applyMutationOperations(
+            task,
+            request.operations as never
+          );
+          if (!applied.ok) {
+            return jsonResponse({ ok: false, error: applied.error });
+          }
+          revision += 1;
+          current = makeLoadTask(applied.task.annotations as never[]);
+          return jsonResponse({
+            ok: true,
+            taskRevision: revision,
+            task: applied.task,
+          });
+        },
       },
     ]);
   };
@@ -687,33 +767,22 @@ describe("StudioToolbar", () => {
     await waitFor(() => {
       expect(screen.getByText("old comment!")).toBeInTheDocument();
     });
-    // The mutation POST rewrites the task with the edited comment (debounced).
+    // The typed mutation sends an updateComment op (debounced).
     await waitFor(() => {
-      const posts = fetchMock.mock.calls.filter(
-        (call) =>
-          (call[1] as { method?: string } | undefined)?.method === "POST"
-      );
+      const ops = mutateOperationsFrom(fetchMock).flat();
       expect(
-        posts.some(
-          (call) =>
-            (JSON.parse((call[1] as { body: string }).body).annotations[0]
-              ?.comment as string) === "old comment!"
+        ops.some(
+          (op) =>
+            op.op === "updateComment" &&
+            op.annotationId === "ann-1" &&
+            op.comment === "old comment!"
         )
       ).toBe(true);
     });
-    const editPosts = fetchMock.mock.calls.filter(
-      (call) =>
-        (call[1] as { method?: string } | undefined)?.method === "POST" &&
-        (
-          JSON.parse((call[1] as { body: string }).body).annotations[0]
-            ?.comment as string
-        ) === "old comment!"
-    );
-    expect(
-      (JSON.parse((editPosts[0][1] as { body: string }).body) as {
-        taskId: string;
-      }).taskId
-    ).toBe("task-actions-1");
+    const editRequests = fetchMock.mock.calls
+      .filter((call) => String(call[0]).includes("/mutate"))
+      .map((call) => JSON.parse((call[1] as { body: string }).body) as { taskId: string });
+    expect(editRequests[0].taskId).toBe("task-actions-1");
   });
 
   it("deletes an annotation with inline confirmation; numbers renumber", async () => {
@@ -752,20 +821,10 @@ describe("StudioToolbar", () => {
     const chips = screen.getAllByText("1", { selector: "span" });
     expect(chips.length).toBeGreaterThanOrEqual(1);
     await waitFor(() => {
-      const posts = fetchMock.mock.calls.filter(
-        (call) =>
-          (call[1] as { method?: string } | undefined)?.method === "POST"
-      );
+      const ops = mutateOperationsFrom(fetchMock).flat();
       expect(
-        posts.some(
-          (call) =>
-            JSON.stringify(
-              (
-                JSON.parse((call[1] as { body: string }).body).annotations as {
-                  annotationId: string;
-                }[]
-              ).map((a) => a.annotationId)
-            ) === JSON.stringify(["ann-2"])
+        ops.some(
+          (op) => op.op === "remove" && op.annotationId === "ann-1"
         )
       ).toBe(true);
     });
@@ -790,18 +849,10 @@ describe("StudioToolbar", () => {
       expect(screen.getByText("Hidden")).toBeInTheDocument();
     });
     await waitFor(() => {
-      const posts = fetchMock.mock.calls.filter(
-        (call) =>
-          (call[1] as { method?: string } | undefined)?.method === "POST"
-      );
+      const ops = mutateOperationsFrom(fetchMock).flat();
       expect(
-        posts.some(
-          (call) =>
-            (
-              JSON.parse((call[1] as { body: string }).body).annotations as {
-                hidden?: boolean;
-              }[]
-            )[0]?.hidden === true
+        ops.some(
+          (op) => op.op === "setHidden" && op.annotationId === "ann-1" && op.hidden === true
         )
       ).toBe(true);
     });
@@ -873,17 +924,10 @@ describe("StudioToolbar", () => {
     // mutation must flush with keepalive instead of being lost.
     unmount();
     await waitFor(() => {
-      const posts = fetchMock.mock.calls.filter(
-        (call) =>
-          (call[1] as { method?: string } | undefined)?.method === "POST"
-      );
+      const ops = mutateOperationsFrom(fetchMock).flat();
       expect(
-        posts.some(
-          (call) =>
-            (
-              JSON.parse((call[1] as { body: string }).body)
-                .annotations as { hidden?: boolean }[]
-            )[0]?.hidden === true
+        ops.some(
+          (op) => op.op === "setHidden" && op.annotationId === "ann-1" && op.hidden === true
         )
       ).toBe(true);
     });
@@ -1015,6 +1059,14 @@ describe("StudioToolbar", () => {
           return jsonResponse({ ok: true });
         },
       },
+      {
+        url: "/__portal-studio/mutate",
+        method: "POST",
+        respond: async () => {
+          posted = true;
+          return jsonResponse({ ok: true });
+        },
+      },
     ]);
     render(<StudioToolbar config={config} />);
     await user.click(
@@ -1025,24 +1077,11 @@ describe("StudioToolbar", () => {
     });
     await user.click(screen.getByRole("button", { name: "Complete" }));
     await waitFor(() => {
-      const posts = fetchMock.mock.calls.filter(
-        (call) =>
-          (call[1] as { method?: string } | undefined)?.method === "POST"
-      );
+      const ops = mutateOperationsFrom(fetchMock).flat();
       expect(
-        posts.some((call) => {
-          const annotation = (
-            JSON.parse((call[1] as { body: string }).body)
-              .annotations as {
-              status: string;
-              completedAt?: string;
-            }[]
-          )[0];
-          return (
-            annotation.status === "completed" &&
-            typeof annotation.completedAt === "string"
-          );
-        })
+        ops.some(
+          (op) => op.op === "complete" && op.annotationId === "ann-1"
+        )
       ).toBe(true);
     });
     // Goal 04: completing the final open item hides it from the default
@@ -1061,17 +1100,9 @@ describe("StudioToolbar", () => {
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Reopen" }));
     await waitFor(() => {
-      const payloads = fetchMock.mock.calls
-        .filter(
-          (call) =>
-            (call[1] as { method?: string } | undefined)?.method === "POST"
-        )
-        .map((call) => JSON.parse((call[1] as { body: string }).body));
+      const ops = mutateOperationsFrom(fetchMock).flat();
       expect(
-        payloads.some(
-          (payload) =>
-            (payload.annotations as { status: string }[])[0].status === "open"
-        )
+        ops.some((op) => op.op === "reopen" && op.annotationId === "ann-1")
       ).toBe(true);
     });
     // Double-stamp protection for completeAnnotation stays covered by the
@@ -1116,14 +1147,13 @@ describe("StudioToolbar", () => {
     });
   });
 
-  it("the unload flush skips oversized payloads with a warning (D-043)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("the unload flush sends pending typed operations (reload safety, D-043 regression)", async () => {
     const user = userEvent.setup();
     const fetchMock = makeRoutedFetch([
       {
         annotationId: "ann-1",
         kind: "element",
-        comment: "x".repeat(1200), // large-ish comment
+        comment: "x".repeat(1200),
         createdAt: "2026-08-07T12:00:00.000Z",
         status: "open",
         elements: Array.from({ length: 40 }, (_, i) => ({
@@ -1146,26 +1176,153 @@ describe("StudioToolbar", () => {
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
-    // Force an oversized payload: the loaded task is large enough that the
-    // keepalive flush must skip it (guard fires) instead of failing.
+    // Hide, then unmount before the 300 ms debounce fires: the pending
+    // typed operation must be flushed by the unload path instead of lost.
     await user.click(screen.getByRole("button", { name: "Hide" }));
-    unmount(); // triggers the unload flush path
+    unmount();
     await waitFor(() => {
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("keepalive budget")
-      );
+      const ops = mutateOperationsFrom(fetchMock).flat();
+      expect(
+        ops.some(
+          (op) =>
+            op.op === "setHidden" &&
+            op.annotationId === "ann-1" &&
+            op.hidden === true
+        )
+      ).toBe(true);
     });
-    // The oversized payload was NOT sent via keepalive (it would fail with
-    // "Failed to fetch" — the D-043 defect); only the regular debounce may
-    // write, and the flush consumed the pending payload.
-    const keepalivePosts = fetchMock.mock.calls.filter(
-      (call) =>
-        (call[1] as { method?: string; keepalive?: boolean } | undefined)
-          ?.method === "POST" &&
-        (call[1] as { keepalive?: boolean }).keepalive === true
+    // P1-1 review: the unload flush MUST use keepalive, otherwise the
+    // browser terminates the request during unload and the mutation is
+    // silently lost (the original D-043 defect class).
+    const mutateCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes("/mutate")
     );
-    expect(keepalivePosts).toHaveLength(0);
-    warn.mockRestore();
+    expect(
+      mutateCalls.some(
+        (call) => (call[1] as { keepalive?: boolean }).keepalive === true
+      )
+    ).toBe(true);
+  });
+
+  it("Copy uses the async Clipboard API, never mutates, and announces feedback", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "copy me",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    const postsBefore = fetchMock.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
+    ).length;
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalled();
+    });
+    const copied = writeText.mock.calls[0][0] as string;
+    expect(copied).toContain("Comment: copy me");
+    expect(copied).toContain("# Task task-actions-1");
+    // aria-live feedback announced (the dock badge is also role=status).
+    expect(
+      screen.getByText("Copied to clipboard")
+    ).toBeInTheDocument();
+    // Copy NEVER clears or mutates annotations (no POST, list intact).
+    const postsAfter = fetchMock.mock.calls.filter(
+      (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
+    ).length;
+    expect(postsAfter).toBe(postsBefore);
+    expect(screen.getByText("copy me")).toBeInTheDocument();
+  });
+
+  it("falls back to a selectable textarea when the Clipboard API fails", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error("denied")),
+      },
+    });
+    makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "manual copy",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Copy" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Copy manually",
+    });
+    const textarea = within(dialog).getByRole("textbox");
+    expect((textarea as HTMLTextAreaElement).value).toContain(
+      "Comment: manual copy"
+    );
+    // The annotation is still there — Copy did not clear anything.
+    expect(screen.getByText("manual copy")).toBeInTheDocument();
+  });
+
+  // ---- Goal 04 Complete (D-033 #13) ----
+
+  it("the debounced mutation POST does NOT use keepalive (D-043)", async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "will hide",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      );
+      expect(posts.length).toBeGreaterThanOrEqual(1);
+      // keepalive:true would fail with "Failed to fetch" for bodies over
+      // the 64 KB budget — the regular path must NOT set it (D-043).
+      for (const call of posts) {
+        expect(
+          (call[1] as { keepalive?: boolean }).keepalive
+        ).toBeUndefined();
+      }
+    });
   });
 
   it("closes the panel via the Collapse button in the command row", async () => {
@@ -1502,6 +1659,32 @@ describe("StudioToolbar", () => {
         respond: async () => jsonResponse({ ok: true, taskId: "task-1", sourceCandidates: [] }),
       },
       {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse({
+            task: {
+              schemaVersion: 5,
+              taskId: "task-1",
+              createdAt: "2026-08-08T12:00:00.000Z",
+              url: "http://127.0.0.1:4173/users",
+              title: "Users",
+              annotations: [
+                {
+                  annotationId: "ann-1",
+                  kind: "element",
+                  comment: "saved note",
+                  createdAt: "2026-08-08T12:00:00.000Z",
+                  status: "open",
+                  elements: [],
+                },
+              ],
+              businessContext: [],
+              redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+            },
+          }),
+      },
+      {
         url: "/__portal-studio/screenshots",
         method: "POST",
         respond: async () => jsonResponse({ ok: true, file: "s.png", width: 100, height: 50 }),
@@ -1597,9 +1780,11 @@ describe("StudioToolbar", () => {
   });
 
   const markerRoutes = (annotations: unknown[], postOk = true) => {
-    // Stateful like the real server: the POST persists the submitted task,
-    // so the follow-up GET (refreshTask) returns the UPDATED annotations.
+    // Stateful like the real server: the typed mutate endpoint applies
+    // operations through the shared pure contract, and the follow-up GET
+    // (refreshTask) returns the UPDATED annotations.
     let current = [...annotations];
+    let revision = 1;
     return mockFetchRoutes([
       {
         url: "/__portal-studio/tasks",
@@ -1620,6 +1805,49 @@ describe("StudioToolbar", () => {
             current = payload.annotations;
           }
           return jsonResponse({ ok: true });
+        },
+      },
+      {
+        url: "/__portal-studio/mutate",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          if (!postOk) {
+            return jsonResponse({ ok: false, error: "boom" });
+          }
+          const request = JSON.parse(init?.body ?? "{}") as {
+            taskId: string;
+            expectedTaskRevision: number;
+            operations: never[];
+          };
+          const task = makeMarkerTask(current).task as {
+            taskId: string;
+            annotations: never[];
+            taskRevision?: number;
+          };
+          task.taskRevision = revision;
+          if (request.expectedTaskRevision !== revision) {
+            return jsonResponse(
+              {
+                ok: false,
+                error: "revision_conflict",
+                taskRevision: revision,
+                task,
+              },
+              false,
+              409
+            );
+          }
+          const applied = applyMutationOperations(task, request.operations);
+          if (!applied.ok) {
+            return jsonResponse({ ok: false, error: applied.error });
+          }
+          revision += 1;
+          current = applied.task.annotations as never[];
+          return jsonResponse({
+            ok: true,
+            taskRevision: revision,
+            task: applied.task,
+          });
         },
       },
     ]);
@@ -1754,20 +1982,23 @@ describe("StudioToolbar", () => {
         respond: async () => jsonResponse(makeMarkerTask(current)),
       },
       {
-        url: "/__portal-studio/tasks",
+        url: "/__portal-studio/mutate",
         method: "POST",
         respond: async (init?: { method?: string; body?: string }) => {
           if (failed) {
             failed = false;
             return jsonResponse({ ok: false, error: "boom" });
           }
-          const payload = JSON.parse(init?.body ?? "{}") as {
-            annotations?: unknown[];
+          const request = JSON.parse(init?.body ?? "{}") as {
+            operations: never[];
           };
-          if (Array.isArray(payload.annotations)) {
-            current = payload.annotations;
+          const task = makeMarkerTask(current).task as never;
+          const applied = applyMutationOperations(task, request.operations);
+          if (!applied.ok) {
+            return jsonResponse({ ok: false, error: applied.error });
           }
-          return jsonResponse({ ok: true });
+          current = applied.task.annotations as never[];
+          return jsonResponse({ ok: true, taskRevision: 2, task: applied.task });
         },
       },
     ]);
@@ -1801,24 +2032,23 @@ describe("StudioToolbar", () => {
     // The persisted artifact: comment "original", status completed — the
     // successful Complete mutation never carried the failed comment.
     await waitFor(() => {
-      const bodies = fetchMock.mock.calls
-        .filter(
-          (call) =>
-            (call[1] as { method?: string } | undefined)?.method === "POST"
-        )
+      const ops = mutateOperationsFrom(fetchMock).flat();
+      expect(ops.some((op) => op.op === "complete")).toBe(true);
+      const completeRequest = fetchMock.mock.calls
+        .filter((call) => String(call[0]).includes("/mutate"))
         .map((call) => (call[1] as { body?: string }).body ?? "");
-      expect(
-        bodies.some((body) => body.includes('"status":"completed"'))
-      ).toBe(true);
+      // The LAST (successful complete) request must not carry the comment.
+      expect(completeRequest[completeRequest.length - 1]).not.toContain(
+        "doomed leak"
+      );
     });
-    const postBodies = fetchMock.mock.calls
-      .filter((call) => (call[1] as { method?: string } | undefined)?.method === "POST")
+    // The successful Complete request still built on the confirmed comment.
+    const completeRequests = fetchMock.mock.calls
+      .filter((call) => String(call[0]).includes("/mutate"))
       .map((call) => (call[1] as { body?: string }).body ?? "");
-    const completedPost = postBodies.find((body) =>
-      body.includes('"status":"completed"')
-    )!;
-    expect(completedPost).not.toContain("doomed leak");
-    expect(completedPost).toContain("original");
+    const lastComplete = completeRequests[completeRequests.length - 1];
+    expect(lastComplete).not.toContain("doomed leak");
+    expect(lastComplete).toContain('"op":"complete"');
   });
 
   it("retry after a failed save succeeds and persists the corrected comment", async () => {
@@ -1843,20 +2073,23 @@ describe("StudioToolbar", () => {
         respond: async () => jsonResponse(makeMarkerTask(current)),
       },
       {
-        url: "/__portal-studio/tasks",
+        url: "/__portal-studio/mutate",
         method: "POST",
         respond: async (init?: { method?: string; body?: string }) => {
           if (failed) {
             failed = false;
             return jsonResponse({ ok: false, error: "boom" });
           }
-          const payload = JSON.parse(init?.body ?? "{}") as {
-            annotations?: unknown[];
+          const request = JSON.parse(init?.body ?? "{}") as {
+            operations: never[];
           };
-          if (Array.isArray(payload.annotations)) {
-            current = payload.annotations;
+          const task = makeMarkerTask(current).task as never;
+          const applied = applyMutationOperations(task, request.operations);
+          if (!applied.ok) {
+            return jsonResponse({ ok: false, error: applied.error });
           }
-          return jsonResponse({ ok: true });
+          current = applied.task.annotations as never[];
+          return jsonResponse({ ok: true, taskRevision: 2, task: applied.task });
         },
       },
     ]);
@@ -1892,7 +2125,7 @@ describe("StudioToolbar", () => {
     const gate = new Promise<void>((resolve) => {
       openGate = resolve;
     });
-    let current: unknown[] = [
+    const current: unknown[] = [
       {
         annotationId: "ann-1",
         kind: "element",
@@ -1917,16 +2150,10 @@ describe("StudioToolbar", () => {
         respond: async () => jsonResponse(makeMarkerTask(current)),
       },
       {
-        url: "/__portal-studio/tasks",
+        url: "/__portal-studio/mutate",
         method: "POST",
-        respond: async (init?: { method?: string; body?: string }) => {
+        respond: async () => {
           await gate;
-          const payload = JSON.parse(init?.body ?? "{}") as {
-            annotations?: unknown[];
-          };
-          if (Array.isArray(payload.annotations)) {
-            current = payload.annotations;
-          }
           return jsonResponse({ ok: false, error: "boom" });
         },
       },
@@ -1990,17 +2217,20 @@ describe("StudioToolbar", () => {
         respond: async () => jsonResponse(makeMarkerTask(current)),
       },
       {
-        url: "/__portal-studio/tasks",
+        url: "/__portal-studio/mutate",
         method: "POST",
         respond: async (init?: { method?: string; body?: string }) => {
           await gate;
-          const payload = JSON.parse(init?.body ?? "{}") as {
-            annotations?: unknown[];
+          const request = JSON.parse(init?.body ?? "{}") as {
+            operations: never[];
           };
-          if (Array.isArray(payload.annotations)) {
-            current = payload.annotations;
+          const task = makeMarkerTask(current).task as never;
+          const applied = applyMutationOperations(task, request.operations);
+          if (!applied.ok) {
+            return jsonResponse({ ok: false, error: applied.error });
           }
-          return jsonResponse({ ok: true });
+          current = applied.task.annotations as never[];
+          return jsonResponse({ ok: true, taskRevision: 2, task: applied.task });
         },
       },
     ]);
@@ -2026,8 +2256,8 @@ describe("StudioToolbar", () => {
     ) as HTMLButtonElement;
     expect(listComplete.disabled).toBe(true);
     await user.click(listComplete);
-    const postsDuringSave = fetchMock.mock.calls.filter(
-      (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
+    const postsDuringSave = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes("/mutate")
     ).length;
     expect(postsDuringSave).toBe(1);
     // Complete the save — the marker comment is persisted.
@@ -2041,15 +2271,8 @@ describe("StudioToolbar", () => {
     ) as HTMLButtonElement;
     await user.click(listCompleteAfter);
     await waitFor(() => {
-      const bodies = fetchMock.mock.calls
-        .filter(
-          (call) =>
-            (call[1] as { method?: string } | undefined)?.method === "POST"
-        )
-        .map((call) => (call[1] as { body?: string }).body ?? "");
-      expect(
-        bodies.some((body) => body.includes('"status":"completed"'))
-      ).toBe(true);
+      const ops = mutateOperationsFrom(fetchMock).flat();
+      expect(ops.some((op) => op.op === "complete")).toBe(true);
     });
   });
 
@@ -2330,19 +2553,62 @@ describe("StudioToolbar", () => {
 
   // ---- Goal 04: completed visibility and cleanup semantics ----
 
-  const viewRoutes = (annotations: unknown[]) =>
-    mockFetchRoutes([
+  const viewRoutes = (annotations: unknown[]) => {
+    let current = [...annotations];
+    let revision = 1;
+    return mockFetchRoutes([
       {
         url: "/__portal-studio/tasks",
         method: "GET",
-        respond: async () => jsonResponse(makeLoadTask(annotations)),
+        respond: async () => jsonResponse(makeLoadTask(current)),
       },
       {
         url: "/__portal-studio/tasks",
         method: "POST",
         respond: async () => jsonResponse({ ok: true }),
       },
+      {
+        url: "/__portal-studio/mutate",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          const request = JSON.parse(init?.body ?? "{}") as {
+            taskId: string;
+            expectedTaskRevision: number;
+            operations: never[];
+          };
+          const task = makeLoadTask(current).task as {
+            taskId: string;
+            annotations: never[];
+            taskRevision?: number;
+          };
+          task.taskRevision = revision;
+          if (request.expectedTaskRevision !== revision) {
+            return jsonResponse(
+              {
+                ok: false,
+                error: "revision_conflict",
+                taskRevision: revision,
+                task,
+              },
+              false,
+              409
+            );
+          }
+          const applied = applyMutationOperations(task, request.operations);
+          if (!applied.ok) {
+            return jsonResponse({ ok: false, error: applied.error });
+          }
+          revision += 1;
+          current = applied.task.annotations as never[];
+          return jsonResponse({
+            ok: true,
+            taskRevision: revision,
+            task: applied.task,
+          });
+        },
+      },
     ]);
+  };
 
   const openAnn = (id: string, comment: string) => ({
     annotationId: id,
@@ -2700,5 +2966,558 @@ describe("StudioToolbar", () => {
     },
     15000
   );
+
+  // ---- Goal 06: explicit-clear lifecycle (agent DELETE → fresh taskId) ----
+
+  it("after the active task is cleared server-side, the next save starts a FRESH taskId", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    const postedTaskIds: string[] = [];
+    const postedTaskBodies: unknown[] = [];
+    let taskExists = true;
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse(taskExists ? { task: null } : { task: null }),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          const body = JSON.parse(init?.body ?? "{}") as {
+            taskId: string;
+            annotations: Array<{ comment: string }>;
+          };
+          postedTaskIds.push(body.taskId);
+          postedTaskBodies.push(body);
+          taskExists = true;
+          return jsonResponse({ ok: true, taskId: body.taskId, sourceCandidates: [] });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({ ok: true, file: "s.png", width: 100, height: 50 }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    const saveOne = async (comment: string) => {
+      await user.click(screen.getByRole("button", { name: "Pick element" }));
+      row.focus();
+      await user.keyboard("{Enter}");
+      await user.type(screen.getByLabelText("Annotation comment"), comment);
+      await user.click(screen.getByRole("button", { name: "Save task" }));
+      await waitFor(() => {
+        expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: "Done" }));
+    };
+    // Annotation 1 → taskId A.
+    await saveOne("first");
+    expect(postedTaskIds).toHaveLength(1);
+    // An agent-side DELETE clears the task: refreshTask (panel close/open)
+    // now finds no task and must DROP the stale snapshot.
+    taskExists = false;
+    await user.click(screen.getByRole("button", { name: /Close Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await waitFor(() => {
+      // refreshTask nulled the stale snapshot (GET serves no task).
+    });
+    // Annotation 2 → a FRESH taskId, carrying ONLY the new annotation.
+    await saveOne("second");
+    expect(postedTaskIds).toHaveLength(2);
+    expect(postedTaskIds[1]).not.toBe(postedTaskIds[0]);
+    expect(
+      (postedTaskBodies[1] as { annotations: Array<{ comment: string }> })
+        .annotations
+    ).toHaveLength(1);
+    expect(
+      (postedTaskBodies[1] as { annotations: Array<{ comment: string }> })
+        .annotations[0].comment
+    ).toBe("second");
+  });
+
+  // ---- Goal 06: create/save path is revision-aware (P2-3 review) ----
+
+  it("the save POST carries the last-known taskRevision and surfaces a 409 conflict instead of overwriting", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    let createRevision: number | undefined;
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse({
+            task: {
+              schemaVersion: 5,
+              taskId: "task-save-conflict",
+              createdAt: "2026-08-09T00:00:00.000Z",
+              url: "http://127.0.0.1:4173/users",
+              title: "Users",
+              annotations: [
+                {
+                  annotationId: "ann-1",
+                  kind: "element",
+                  comment: "existing",
+                  createdAt: "2026-08-09T00:00:00.000Z",
+                  status: "open",
+                  elements: [],
+                },
+              ],
+              businessContext: [],
+              redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+              taskRevision: 2,
+            },
+          }),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          const body = JSON.parse(init?.body ?? "{}") as {
+            taskId: string;
+            expectedTaskRevision?: number;
+          };
+          createRevision = body.expectedTaskRevision;
+          // The server moved to revision 3 (another client completed the
+          // last annotation) — the save must NOT silently overwrite.
+          return jsonResponse(
+            {
+              ok: false,
+              error: "revision_conflict",
+              taskRevision: 3,
+              task: null,
+            },
+            false,
+            409
+          );
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({ ok: true, file: "s.png", width: 100, height: 50 }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await waitFor(() => {
+      expect(screen.getByText("existing")).toBeInTheDocument();
+    });
+    // Save a new annotation — the POST must carry the last-known revision.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(screen.getByLabelText("Annotation comment"), "conflicted save");
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      expect(createRevision).toBe(2);
+    });
+    // The 409 surfaces as explicit conflict feedback — no silent overwrite.
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/changed on the server/);
+    });
+    expect(screen.queryByText(/Task saved/)).not.toBeInTheDocument();
+  });
+
+  // ---- Goal 06: 409 revision conflict — refresh, retry once, feedback ----
+
+  it("409: refreshes from the conflict payload, retries the still-valid op ONCE, then shows conflict feedback", async () => {
+    const user = userEvent.setup();
+    let mutateCalls = 0;
+    const serverTask: unknown = {
+      schemaVersion: 5,
+      taskId: "task-conflict-1",
+      annotations: [
+        {
+          annotationId: "ann-1",
+          kind: "element",
+          comment: "server changed me",
+          createdAt: "2026-08-08T12:00:00.000Z",
+          status: "open",
+          elements: [],
+        },
+      ],
+    };
+    const serverRevision = 2; // the server already moved past the client's 1
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse({ task: serverTask }),
+      },
+      {
+        url: "/__portal-studio/mutate",
+        method: "POST",
+        respond: async () => {
+          mutateCalls += 1;
+          // Always conflict: the server keeps moving ahead of the client.
+          return jsonResponse(
+            {
+              ok: false,
+              error: "revision_conflict",
+              taskRevision: serverRevision,
+              task: serverTask,
+            },
+            false,
+            409
+          );
+        },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await waitFor(() => {
+      expect(screen.getByText(/server changed me/)).toBeInTheDocument();
+    });
+    // The client's revision baseline is 1 (serverRevision 2 was never seen
+    // by the client's fetch? No — the GET serves revision 2 in taskRevision
+    // if present; seed it explicitly via the task payload).
+    // Attempt a hide mutation.
+    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await waitFor(() => {
+      expect(mutateCalls).toBeGreaterThanOrEqual(2);
+    });
+    // Both attempts conflicted → explicit conflict feedback, and the UI
+    // adopted the SERVER state (the server comment is shown, not hidden).
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/changed on the server/);
+    });
+    expect(screen.getByText("server changed me")).toBeInTheDocument();
+  });
+
+  it("409: the retry succeeds after the server state is adopted (retry-once happy path)", async () => {
+    const user = userEvent.setup();
+    let mutateCalls = 0;
+    let serverTask: unknown = {
+      schemaVersion: 5,
+      taskId: "task-conflict-2",
+      annotations: [
+        {
+          annotationId: "ann-1",
+          kind: "element",
+          comment: "original",
+          createdAt: "2026-08-08T12:00:00.000Z",
+          status: "open",
+          elements: [],
+        },
+      ],
+    };
+    let serverRevision = 2;
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse({ task: serverTask }),
+      },
+      {
+        url: "/__portal-studio/mutate",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          mutateCalls += 1;
+          const request = JSON.parse(init?.body ?? "{}") as {
+            expectedTaskRevision: number;
+            operations: Array<{ op: string; annotationId?: string; hidden?: boolean }>;
+          };
+          if (request.expectedTaskRevision !== serverRevision) {
+            return jsonResponse(
+              {
+                ok: false,
+                error: "revision_conflict",
+                taskRevision: serverRevision,
+                task: serverTask,
+              },
+              false,
+              409
+            );
+          }
+          // Retry succeeded: apply the op.
+          const task = serverTask as {
+            taskId: string;
+            annotations: Array<Record<string, unknown>>;
+          };
+          const updated = task.annotations.map((a) =>
+            a.annotationId === "ann-1"
+              ? { ...a, hidden: request.operations[0].hidden }
+              : a
+          );
+          serverRevision += 1;
+          serverTask = { ...task, annotations: updated };
+          return jsonResponse({
+            ok: true,
+            taskRevision: serverRevision,
+            task: serverTask,
+          });
+        },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await waitFor(() => {
+      expect(screen.getByText("original")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await waitFor(() => {
+      expect(screen.getByText("Hidden")).toBeInTheDocument();
+    });
+    // Exactly two mutate attempts: the initial (409) + the retry (ok).
+    await waitFor(() => {
+      expect(mutateCalls).toBe(2);
+    });
+    expect(
+      screen.queryByRole("alert")
+    ).not.toBeInTheDocument();
+  });
+
+  // ---- Goal 06: stable task identity, page context, route-key gating ----
+
+  it("taskId lifecycle: created with the first annotation and preserved across adds", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    const postedTaskIds: string[] = [];
+    const postedTaskBodies: unknown[] = [];
+    let currentTask: { taskId: string; annotations: unknown[] } | null = null;
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse(currentTask ? { task: currentTask } : { task: null }),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          const body = JSON.parse(init?.body ?? "{}") as {
+            taskId: string;
+            annotations: unknown[];
+          };
+          postedTaskIds.push(body.taskId);
+          postedTaskBodies.push(body);
+          currentTask = body;
+          return jsonResponse({ ok: true, taskId: body.taskId, sourceCandidates: [] });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({ ok: true, file: "s.png", width: 100, height: 50 }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // Annotation 1.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(screen.getByLabelText("Annotation comment"), "first");
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    // Annotation 2 — same active task, SAME taskId.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(screen.getByLabelText("Annotation comment"), "second");
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+    });
+    expect(postedTaskIds).toHaveLength(2);
+    expect(postedTaskIds[0]).toBe(postedTaskIds[1]);
+    expect((postedTaskBodies[1] as { annotations: unknown[] }).annotations).toHaveLength(2);
+  });
+
+  it("taskId lifecycle: a new batch after FULL completion starts a fresh taskId", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    const postedTaskIds: string[] = [];
+    const postedTaskBodies: unknown[] = [];
+    let currentTask: { taskId: string; annotations: Array<{ status: string }> } | null = null;
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse(currentTask ? { task: currentTask } : { task: null }),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          const body = JSON.parse(init?.body ?? "{}") as {
+            taskId: string;
+            annotations: Array<{ status: string }>;
+          };
+          postedTaskIds.push(body.taskId);
+          postedTaskBodies.push(body);
+          currentTask = body;
+          return jsonResponse({ ok: true, taskId: body.taskId, sourceCandidates: [] });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({ ok: true, file: "s.png", width: 100, height: 50 }),
+      },
+      {
+        url: "/__portal-studio/mutate",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          const request = JSON.parse(init?.body ?? "{}") as {
+            operations: never[];
+          };
+          const task = currentTask as never;
+          const applied = applyMutationOperations(task, request.operations);
+          if (!applied.ok) {
+            return jsonResponse({ ok: false, error: applied.error });
+          }
+          currentTask = applied.task as never;
+          return jsonResponse({ ok: true, taskRevision: 2, task: applied.task });
+        },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // Annotation 1.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(screen.getByLabelText("Annotation comment"), "one");
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    // Complete the only open annotation → task fully completed (the typed
+    // mutate flush must settle so taskRef reflects the completed task).
+    await user.click(screen.getByRole("button", { name: "Complete" }));
+    await waitFor(() => {
+      const ops = mutateOperationsFrom(fetchMock).flat();
+      expect(ops.some((op) => op.op === "complete")).toBe(true);
+    });
+    await waitFor(() => {
+      expect(postedTaskBodies.length).toBeGreaterThanOrEqual(1);
+    });
+    // Annotation 2 — a NEW batch → fresh taskId, only the new annotation.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(screen.getByLabelText("Annotation comment"), "batch two");
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      // save1 (taskId A) + save2 (new batch, taskId B); the Complete went
+      // through the typed mutate endpoint (no new task POST).
+      expect(postedTaskIds.length).toBeGreaterThanOrEqual(2);
+    });
+    const batchTwo = postedTaskBodies[postedTaskBodies.length - 1] as {
+      taskId: string;
+      annotations: Array<{ status: string; comment: string }>;
+    };
+    expect(batchTwo.taskId).not.toBe(postedTaskIds[0]);
+    expect(batchTwo.annotations).toHaveLength(1);
+    expect(batchTwo.annotations[0].comment).toBe("batch two");
+  });
+
+  it("markers render ONLY when the annotation routeKey matches the current route", async () => {
+    makeMarkerPageElement("Alice", "row-a");
+    window.history.pushState({}, "", "/");
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse(
+            makeLoadTask([
+              {
+                annotationId: "ann-route",
+                kind: "element",
+                comment: "users annotation",
+                createdAt: "2026-08-09T00:00:00.000Z",
+                status: "open",
+                elements: [elementCapture("row-a")],
+                pageContext: {
+                  url: "http://127.0.0.1:4173/users",
+                  routeKey: "/users",
+                  title: "Users",
+                  viewport: { width: 1280, height: 720 },
+                  scroll: { x: 0, y: 0 },
+                  businessContext: [],
+                },
+              },
+            ])
+          ),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    // Wrong route (jsdom "/") → no marker.
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /open editor/ })).not.toBeInTheDocument();
+    });
+    // Navigate to /users → the marker appears.
+    window.history.pushState({}, "", "/users");
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Annotation 1: open editor" })
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("route changes close a stale marker editor safely", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    window.history.pushState({}, "", "/users");
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse(
+            makeLoadTask([
+              {
+                annotationId: "ann-route",
+                kind: "element",
+                comment: "users annotation",
+                createdAt: "2026-08-09T00:00:00.000Z",
+                status: "open",
+                elements: [elementCapture("row-a")],
+                pageContext: {
+                  url: "http://127.0.0.1:4173/users",
+                  routeKey: "/users",
+                  title: "Users",
+                  viewport: { width: 1280, height: 720 },
+                  scroll: { x: 0, y: 0 },
+                  businessContext: [],
+                },
+              },
+            ])
+          ),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    await user.click(marker);
+    expect(screen.getByRole("dialog", { name: "Annotation editor" })).toBeInTheDocument();
+    // Navigate away → the editor closes (its annotation belongs to /users).
+    window.history.pushState({}, "", "/dev/ai-chat");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Annotation editor" })
+      ).not.toBeInTheDocument();
+    });
+  });
 
 });

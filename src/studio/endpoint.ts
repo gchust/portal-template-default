@@ -942,6 +942,52 @@ function sanitizeAnnotation(
     elements.push(element);
   }
   const region = sanitizeRegion(input.region);
+  // Goal 06: preserve the backward-compatible per-annotation page context
+  // (url, stable routeKey, title, viewport, scroll, businessContext) across
+  // the server whitelist — otherwise routeKey marker gating is inert after
+  // the first write. Sanitized and bounded like every other field; a
+  // malformed context is dropped without losing the annotation (legacy
+  // annotations without pageContext keep rendering everywhere).
+  let pageContext: Annotation["pageContext"];
+  const rawContext = isRecord(input.pageContext) ? input.pageContext : undefined;
+  if (rawContext) {
+    const url = serverRedactText(
+      readString(rawContext.url, MAX_URL_LENGTH) ?? "",
+      MAX_URL_LENGTH,
+      recorder
+    );
+    const routeKey = serverRedactText(
+      readString(rawContext.routeKey, 200) ?? "",
+      200,
+      recorder
+    );
+    const title = serverRedactText(
+      readString(rawContext.title, MAX_TITLE_LENGTH) ?? "",
+      MAX_TITLE_LENGTH,
+      recorder
+    );
+    const viewport = isRecord(rawContext.viewport) ? rawContext.viewport : undefined;
+    const scroll = isRecord(rawContext.scroll) ? rawContext.scroll : undefined;
+    if (
+      url &&
+      routeKey &&
+      viewport &&
+      scroll &&
+      typeof viewport.width === "number" &&
+      typeof viewport.height === "number" &&
+      typeof scroll.x === "number" &&
+      typeof scroll.y === "number"
+    ) {
+      pageContext = {
+        url,
+        routeKey,
+        title,
+        viewport: { width: viewport.width, height: viewport.height },
+        scroll: { x: scroll.x, y: scroll.y },
+        businessContext: sanitizeBusinessContext(rawContext.businessContext),
+      };
+    }
+  }
   return {
     annotationId,
     kind,
@@ -950,6 +996,7 @@ function sanitizeAnnotation(
     status,
     ...(completedAt ? { completedAt } : {}),
     ...(completedEvidence ? { completedEvidence } : {}),
+    ...(pageContext ? { pageContext } : {}),
     ...(hidden !== undefined ? { hidden } : {}),
     elements,
     ...(region ? { region } : {}),

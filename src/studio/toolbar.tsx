@@ -29,6 +29,16 @@ import { translate } from "@nocobase/portal-sdk/i18n";
 
 import { sessionErrorMessage } from "./errors";
 import { matchHotkey, getHotkey } from "./hotkeys";
+import {
+  applyMutationOperations,
+  type MutationOp,
+} from "./mutation";
+import {
+  annotationMatchesRoute,
+  capturePageContext,
+  currentRouteKey,
+} from "./route-context";
+import { postMutation } from "./task-client";
 
 import {
   clampDockPosition,
@@ -63,17 +73,11 @@ import {
 import { newTaskId } from "./task-id";
 import {
   annotationDisplayNumber,
-  completeAnnotation,
   countOpenAnnotations,
   groupToggleElement,
   normalizeTask,
-  removeAnnotation,
-  removeCompletedAnnotations,
-  reopenAnnotation,
   selectCompletedAnnotations,
   selectVisibleAnnotations,
-  toggleAnnotationHidden,
-  updateAnnotationComment,
   type ViewFilter,
 } from "./task-model";
 import {
@@ -101,6 +105,8 @@ export type PortalStudioConfig = {
   screenshotsEndpoint?: string;
   /** Goal 05: lightweight same-origin revision read endpoint. */
   revisionEndpoint?: string;
+  /** Goal 06: typed revision-aware mutation endpoint. */
+  mutateEndpoint?: string;
 };
 
 export type PortalStudioSaveResult = {
@@ -118,9 +124,6 @@ const STACK_DEPTH = 4;
 const MAX_REGION_SCAN_ELEMENTS = 5000;
 /** Position threshold for above/below-anchored copy fallback dialog. */
 const COPY_FLIP_MIN_ABOVE = 60;
-/** Keepalive fetch bodies are limited to 64 KB by Chromium (D-043). */
-const KEEPALIVE_SAFE_BYTES = 60 * 1024;
-
 const readDockStorage = (): DockStorage | null => {
   try {
     return typeof window !== "undefined" ? window.localStorage : null;
@@ -669,7 +672,16 @@ export function StudioToolbar({
             task?: PortalStudioTask | PortalStudioTaskV4 | null;
           } | null
         ) => {
-          if (!payload?.task) return;
+          if (!payload?.task) {
+            // Goal 06: the active task no longer exists (explicit clear or
+            // an agent-side DELETE) — drop the stale local snapshot so the
+            // NEXT save creates a FRESH taskId instead of resurrecting the
+            // cleared task with its old annotations.
+            taskRef.current = null;
+            setAnnotations([]);
+            lastTaskRevisionRef.current = null;
+            return;
+          }
           const normalized = normalizeTask(payload.task);
           if (!normalized) return;
           taskRef.current = normalized;
@@ -1015,71 +1027,111 @@ export function StudioToolbar({
     setHoverName(null);
   };
 
+  /** The typed operations of the debounced mutation currently pending. */
+  const pendingOpsRef = useRef<MutationOp[] | null>(null);
+  const pendingOpsRevisionRef = useRef<number | null>(null);
+
   /**
-   * Persist annotation mutations through the existing atomic POST rewrite
-   * (D-033 #10/#11; no new endpoints): the last-known task is re-POSTed
-   * with the mutated annotations (same taskId/screenshot ref, so the
-   * replace lifecycle keeps the evidence). Debounced 300 ms.
-   *
-   * ACCEPTANCE-DISCOVERED DEFECT (G05, D-043): keepalive bodies are limited
-   * to 64 KB by the browser, but the artifact cap is 256 KB — a task with
-   * several annotations routinely exceeds 64 KB, so the ALWAYS-keepalive
-   * mutation POST failed with "TypeError: Failed to fetch" and the
-   * mutation was silently swallowed. The regular (debounced) path now
-   * sends a PLAIN fetch (like saveTask, which always worked); only the
-   * unload flush uses keepalive, and only when the payload fits the
-   * keepalive budget (otherwise it warns and skips — the debounced write
-   * already persisted unless the edit was < 300 ms before unload).
+   * Goal 06: flush the pending typed operations through the mutation
+   * endpoint with refresh + retry-once on 409, then explicit conflict
+   * feedback. Never silently overwrite another client's completed state.
    */
-  const sendMutation = useCallback(
-    (
-      payload: PortalStudioTask,
-      options: { keepalive?: boolean; silent?: boolean } = {}
-    ): Promise<{ ok: boolean; error?: string }> => {
-      const body = JSON.stringify(payload);
-      const useKeepalive = options.keepalive === true;
-      if (
-        useKeepalive &&
-        new TextEncoder().encode(body).length > KEEPALIVE_SAFE_BYTES
-      ) {
-        console.warn(
-          "[portal-studio] task exceeds the keepalive budget; the unload save was skipped (D-043)"
-        );
-        return Promise.resolve({ ok: true });
+  /**
+   * Flush the pending typed operations. `keepalive` is used by the unload
+   * path ONLY (single attempt): per the fetch spec, non-keepalive requests
+   * are terminated during document unload, which would silently lose a
+   * mutation made <300 ms before a reload (D-043/G03 regression class).
+   * Returns false when the flush was skipped or failed outright (callers
+   * should abort dependent work); the 409 retry-once + conflict feedback
+   * applies to the normal (non-unload) path.
+   */
+  const flushPendingOps = useCallback(
+    async (options: { keepalive?: boolean } = {}): Promise<boolean> => {
+      const ops = pendingOpsRef.current;
+      if (!ops || ops.length === 0) return true;
+      pendingOpsRef.current = null;
+      const base = taskRef.current;
+      if (!base) return true;
+      const mutateEndpoint = config.mutateEndpoint;
+      if (!mutateEndpoint) {
+        // No typed endpoint configured (dev-only injection absent): the
+        // optimistic local state is the best available outcome.
+        return true;
       }
-      return fetch(config.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Portal-Studio-Token": config.token,
-        },
-        body,
-        ...(useKeepalive ? { keepalive: true } : {}),
-      })
-        .then((response) => response.json())
-        .then((result: { ok?: boolean; error?: string }) => {
-          if (result.ok !== true) {
-            const error = result.error ?? "annotation update failed";
-            if (options.silent !== true) {
-              setMode({ kind: "error", message: error });
-            }
-            return { ok: false, error };
+      let expected = pendingOpsRevisionRef.current ?? 0;
+      pendingOpsRevisionRef.current = null;
+      const maxAttempts = options.keepalive ? 1 : 2;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const result = await postMutation(
+          { token: config.token, mutateEndpoint },
+          { taskId: base.taskId, expectedTaskRevision: expected, operations: ops },
+          { keepalive: options.keepalive === true }
+        );
+        if (result.ok) {
+          taskRef.current = result.task;
+          lastTaskRevisionRef.current = result.taskRevision;
+          // Re-sync after the mutation settles (server artifact is
+          // authoritative for screenshot/heartbeat merges).
+          refreshTask();
+          return true;
+        }
+        if (result.conflict) {
+          if (options.keepalive) {
+            // Unload path: no retry (the page is going away) — the refresh
+            // + conflict UI cannot help; the op is dropped intentionally.
+            return false;
           }
-          return { ok: true };
-        })
-        .catch(() => {
-          // Dev server restarting; the caller decides retry behavior.
-          return {
-            ok: false,
-            error: "network error — dev server restarting",
-          };
-        });
+          // 409: adopt the server's current task + revision and retry the
+          // still-valid operation once against it.
+          taskRef.current = result.conflict.task;
+          lastTaskRevisionRef.current = result.conflict.taskRevision;
+          setAnnotations(result.conflict.task.annotations);
+          expected = result.conflict.taskRevision;
+          continue;
+        }
+        setMode({ kind: "error", message: result.error ?? "mutation failed" });
+        return false;
+      }
+      // Both attempts conflicted: explicit conflict feedback.
+      setMode({
+        kind: "error",
+        message: t(
+          "studio.conflict",
+          "The task changed on the server — your change was not applied. Review the current state and retry."
+        ),
+      });
+      return false;
     },
-    [config.endpoint, config.token]
+    [config.mutateEndpoint, config.token, refreshTask]
   );
 
-  /** The payload of the debounced mutation currently pending (if any). */
-  const pendingPayloadRef = useRef<PortalStudioTask | null>(null);
+  /**
+   * Goal 06: optimistic local apply (same pure contract as the server) +
+   * accumulate typed operations + debounced typed send with 409 handling.
+   */
+  const enqueueMutation = useCallback(
+    (operations: MutationOp[]) => {
+      const base = taskRef.current;
+      if (!base) return;
+      const applied = applyMutationOperations(base, operations);
+      if (!applied.ok) return;
+      setAnnotations(applied.task.annotations);
+      // P3-2 review: keep taskRef in sync with the optimistic state so a
+      // second enqueue inside the debounce window applies against the
+      // CURRENT base (no transient revert on the flush).
+      taskRef.current = applied.task;
+      pendingOpsRef.current = [
+        ...(pendingOpsRef.current ?? []),
+        ...operations,
+      ];
+      pendingOpsRevisionRef.current ??= lastTaskRevisionRef.current ?? 0;
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = setTimeout(() => {
+        void flushPendingOps();
+      }, 300);
+    },
+    [flushPendingOps]
+  );
 
   /** Flush a pending mutation immediately (unload/reload safety). */
   const flushPendingMutation = useCallback(() => {
@@ -1087,39 +1139,12 @@ export function StudioToolbar({
       clearTimeout(persistTimerRef.current);
       persistTimerRef.current = null;
     }
-    const payload = pendingPayloadRef.current;
-    if (payload) {
-      pendingPayloadRef.current = null;
-      taskRef.current = payload;
-      // Same ordering as the debounced path: refresh after the POST
-      // settles (audit race fix). The unload flush uses keepalive when
-      // the payload fits the budget (D-043).
-      void sendMutation(payload, { keepalive: true }).then(() =>
-        refreshTask()
-      );
+    if (pendingOpsRef.current) {
+      // Reload safety (P1-1 review): the unload flush MUST use keepalive
+      // or the browser terminates the request mid-unload.
+      void flushPendingOps({ keepalive: true });
     }
-  }, [refreshTask, sendMutation]);
-
-  const persistAnnotations = useCallback(
-    (next: Annotation[]) => {
-      setAnnotations(next);
-      const base = taskRef.current;
-      if (!base) return;
-      const payload: PortalStudioTask = { ...base, annotations: next };
-      pendingPayloadRef.current = payload;
-      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
-      persistTimerRef.current = setTimeout(async () => {
-        pendingPayloadRef.current = null;
-        taskRef.current = payload;
-        // Re-sync ONLY after the mutation POST settles — refreshing
-        // earlier could revert the optimistic UI to stale state (audit
-        // race), and refreshing later could make Copy stale (F-3).
-        await sendMutation(payload);
-        refreshTask();
-      }, 300);
-    },
-    [refreshTask, sendMutation]
-  );
+  }, [flushPendingOps]);
 
   // Flush pending mutations on unmount AND on beforeunload (reloads) —
   // otherwise an edit made <300 ms before a reload would be lost (found
@@ -1224,16 +1249,16 @@ export function StudioToolbar({
 
   const saveEdit = () => {
     if (!editingId) return;
-    persistAnnotations(
-      updateAnnotationComment(annotations, editingId, editValue)
-    );
+    enqueueMutation([
+      { op: "updateComment", annotationId: editingId, comment: editValue },
+    ]);
     setEditingId(null);
     setEditValue("");
   };
 
   const confirmDelete = () => {
     if (!confirmDeleteId) return;
-    persistAnnotations(removeAnnotation(annotations, confirmDeleteId));
+    enqueueMutation([{ op: "remove", annotationId: confirmDeleteId }]);
     setConfirmDeleteId(null);
   };
 
@@ -1252,21 +1277,48 @@ export function StudioToolbar({
     setEditorDeleteConfirm(false);
   };
 
-  const closeMarkerEditor = () => {
+  const closeMarkerEditor = useCallback(() => {
     setEditorAnnotationId(null);
     setEditorError(null);
     setEditorSaving(false);
     setEditorDeleteConfirm(false);
-  };
+  }, []);
+
+  // Goal 06: route changes close a stale marker editor safely. The editor
+  // stays open only while its annotation's routeKey matches the current
+  // route; navigating away re-resolves markers for the new route and closes
+  // an editor whose annotation belongs to the previous one.
+  const routeKeyRef = useRef(currentRouteKey());
+  useEffect(() => {
+    const checkRoute = () => {
+      const key = currentRouteKey();
+      if (key === routeKeyRef.current) return;
+      routeKeyRef.current = key;
+      setMarkerTick((tick) => tick + 1);
+      if (editorAnnotationId) {
+        const annotation = annotations.find(
+          (candidate) => candidate.annotationId === editorAnnotationId
+        );
+        if (annotation && !annotationMatchesRoute(annotation)) {
+          closeMarkerEditor();
+        }
+      }
+    };
+    checkRoute();
+    // SPA navigations either fire popstate or mutate the body (which bumps
+    // markerTick via the observer above → this effect re-runs).
+    window.addEventListener("popstate", checkRoute);
+    return () => window.removeEventListener("popstate", checkRoute);
+  }, [annotations, closeMarkerEditor, editorAnnotationId, markerTick]);
 
   /**
-   * Save the editor comment via the SAME mutation functions/client path as
-   * the list editor (updateAnnotationComment + sendMutation). The shared
-   * annotations state, taskRef and the server artifact stay at the last
-   * CONFIRMED value until the POST succeeds: a failed save must never leak
-   * the unsaved comment into the list or a later unrelated mutation. On
-   * failure the draft text is preserved (editorDraft untouched) and
-   * error/retry feedback is shown.
+   * Save the editor comment via the typed mutation client (updateComment
+   * op). The shared annotations state, taskRef and the server artifact
+   * stay at the last CONFIRMED value until the mutation succeeds: a failed
+   * save must never leak the unsaved comment into the list or a later
+   * unrelated mutation. On failure the draft text is preserved
+   * (editorDraft untouched) and error/retry feedback is shown; a 409 is
+   * retried once after refresh, then reported as a conflict.
    */
   const saveEditorComment = async () => {
     if (!editorAnnotationId || editorSaving) return;
@@ -1280,12 +1332,12 @@ export function StudioToolbar({
       clearTimeout(persistTimerRef.current);
       persistTimerRef.current = null;
     }
-    if (pendingPayloadRef.current) {
-      const pending = pendingPayloadRef.current;
-      pendingPayloadRef.current = null;
-      taskRef.current = pending;
-      const flushed = await sendMutation(pending, { silent: true });
-      if (!flushed.ok) {
+    if (pendingOpsRef.current) {
+      // P3-5 review: if the pending list mutation could not be flushed
+      // (network failure), abort the save — proceeding would send the
+      // comment op against a base the server never received.
+      const flushed = await flushPendingOps();
+      if (!flushed) {
         setEditorError(
           t("studio.saveError", "Unable to save — try again.")
         );
@@ -1299,60 +1351,78 @@ export function StudioToolbar({
       closeMarkerEditor();
       return;
     }
-    // Build the comment edit on the CURRENT (post-flush) annotations so an
-    // earlier pending edit is preserved, not overwritten.
-    const next = updateAnnotationComment(
-      base.annotations,
-      editorAnnotationId,
-      editorDraft
-    );
-    // No optimistic shared-state update here — the POST is the single
-    // observable mutation; failure leaves list/taskRef/server untouched.
-    const result = await sendMutation(
-      { ...base, annotations: next },
-      { silent: true }
-    );
-    if (!result.ok) {
-      // Draft text preserved in editorDraft; expose retry/error feedback.
+    const mutateEndpoint = config.mutateEndpoint;
+    if (!mutateEndpoint) {
+      setEditorSaving(false);
+      closeMarkerEditor();
+      return;
+    }
+    const operations: MutationOp[] = [
+      {
+        op: "updateComment",
+        annotationId: editorAnnotationId,
+        comment: editorDraft,
+      },
+    ];
+    // No optimistic shared-state update here — the mutation is the single
+    // observable change; failure leaves list/taskRef/server untouched.
+    let expected = lastTaskRevisionRef.current ?? 0;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await postMutation(
+        { token: config.token, mutateEndpoint },
+        { taskId: base.taskId, expectedTaskRevision: expected, operations }
+      );
+      if (result.ok) {
+        taskRef.current = result.task;
+        lastTaskRevisionRef.current = result.taskRevision;
+        setAnnotations(result.task.annotations);
+        refreshTask();
+        setEditorSaving(false);
+        closeMarkerEditor();
+        return;
+      }
+      if (result.conflict) {
+        taskRef.current = result.conflict.task;
+        lastTaskRevisionRef.current = result.conflict.taskRevision;
+        setAnnotations(result.conflict.task.annotations);
+        expected = result.conflict.taskRevision;
+        continue;
+      }
       setEditorError(
         result.error ?? t("studio.saveError", "Unable to save — try again.")
       );
       setEditorSaving(false);
       return;
     }
-    // Confirmed: only now sync the shared state to the server artifact.
-    const confirmed = { ...base, annotations: next };
-    setAnnotations(next);
-    taskRef.current = confirmed;
-    refreshTask();
+    // Both attempts conflicted — explicit conflict feedback; the draft is
+    // preserved in editorDraft for a manual retry.
+    setEditorError(
+      t(
+        "studio.conflict",
+        "The task changed on the server — your change was not applied. Review the current state and retry."
+      )
+    );
     setEditorSaving(false);
-    closeMarkerEditor();
   };
 
-  /** Complete an open annotation from the marker editor (shared path). */
+  /** Complete an open annotation from the marker editor (typed op). */
   const completeEditorAnnotation = () => {
     if (!editorAnnotationId) return;
-    persistAnnotations(
-      completeAnnotation(annotations, editorAnnotationId)
-    );
+    enqueueMutation([{ op: "complete", annotationId: editorAnnotationId }]);
     closeMarkerEditor();
   };
 
-  /** Reopen a completed annotation from the marker editor (shared path). */
+  /** Reopen a completed annotation from the marker editor (typed op). */
   const reopenEditorAnnotation = () => {
     if (!editorAnnotationId) return;
-    persistAnnotations(
-      reopenAnnotation(annotations, editorAnnotationId)
-    );
+    enqueueMutation([{ op: "reopen", annotationId: editorAnnotationId }]);
     closeMarkerEditor();
   };
 
-  /** Delete an annotation from the marker editor (shared path). */
+  /** Delete an annotation from the marker editor (typed op). */
   const deleteEditorAnnotation = () => {
     if (!editorAnnotationId) return;
-    persistAnnotations(
-      removeAnnotation(annotations, editorAnnotationId)
-    );
+    enqueueMutation([{ op: "remove", annotationId: editorAnnotationId }]);
     closeMarkerEditor();
   };
 
@@ -1373,7 +1443,7 @@ export function StudioToolbar({
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [editorAnnotationId]);
+  }, [closeMarkerEditor, editorAnnotationId]);
 
   // Outside click closes the marker editor safely. composedPath() crosses
   // the shadow boundary in real browsers (events inside the shadow are
@@ -1409,7 +1479,7 @@ export function StudioToolbar({
       document.removeEventListener("pointerdown", handlePointerDown, true);
       document.removeEventListener("mousedown", handlePointerDown, true);
     };
-  }, [editorAnnotationId]);
+  }, [closeMarkerEditor, editorAnnotationId]);
 
   // The button that opened the current delete confirmation (focus return).
   const confirmDeleteButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1439,7 +1509,22 @@ export function StudioToolbar({
   const saveTask = async () => {
     if (mode.kind !== "draft") return;
     setMode({ kind: "saving" });
-    const taskId = newTaskId();
+    // Goal 06 taskId lifecycle (documented): the active taskId is created
+    // with the FIRST annotation and preserved while annotations are added
+    // or changed. A NEW taskId is created only (a) after an explicit
+    // clear (task file gone → next save starts fresh) or (b) when the
+    // existing task is FULLY completed and a new batch begins — the new
+    // batch replaces the completed task with a fresh identity. Copy/CLI
+    // references stay valid during the active task lifecycle.
+    const existingTask = taskRef.current;
+    const fullyCompleted =
+      !!existingTask &&
+      existingTask.annotations.length > 0 &&
+      existingTask.annotations.every(
+        (annotation) => annotation.status === "completed"
+      );
+    const taskId =
+      existingTask && !fullyCompleted ? existingTask.taskId : newTaskId();
     // Annotation-first (D-033 #4/#7): the new annotation carries its own
     // comment; the task is the ordered list of annotations.
     // A marquee is an AREA annotation (D-033 #6) even when intersecting
@@ -1458,6 +1543,10 @@ export function StudioToolbar({
       status: "open",
       elements: mode.capture.elements,
       ...(mode.capture.region ? { region: mode.capture.region } : {}),
+      // Goal 06: per-annotation page context (url, stable routeKey, title,
+      // viewport, scroll, businessContext) — gates marker rendering to the
+      // route the annotation was created on.
+      pageContext: capturePageContext(mode.capture.businessContext),
     };
     const task: PortalStudioTask = {
       schemaVersion: TASK_SCHEMA_VERSION,
@@ -1465,7 +1554,9 @@ export function StudioToolbar({
       createdAt: new Date().toISOString(),
       url: window.location.href,
       title: document.title,
-      annotations: [...annotations, annotation],
+      // New batch after full completion: the completed task is superseded
+      // by a fresh one (only the new annotation is carried).
+      annotations: fullyCompleted ? [annotation] : [...annotations, annotation],
       businessContext: mode.capture.businessContext,
       diagnostics: snapshotDiagnostics(sharedDiagnosticsBuffer),
       redaction: {
@@ -1473,7 +1564,21 @@ export function StudioToolbar({
         redactedValues: 0,
         truncatedValues: 0,
       },
+      ...(lastTaskRevisionRef.current !== null
+        ? { expectedTaskRevision: lastTaskRevisionRef.current }
+        : {}),
     };
+    // P3-1 review: a fresh task (new batch or after an agent-side clear)
+    // supersedes any still-pending typed operations of the OLD task —
+    // flushing them against the new identity would 400 annotation_not_found.
+    if (fullyCompleted || !existingTask) {
+      pendingOpsRef.current = null;
+      pendingOpsRevisionRef.current = null;
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+    }
     try {
       // Order matters (D-034 #2): the task POST persists the annotation
       // FIRST, atomically; the screenshot POST then merges the fresh PNG
@@ -1489,7 +1594,23 @@ export function StudioToolbar({
         },
         body: JSON.stringify(task),
       });
-      const payload = (await response.json()) as PortalStudioSaveResult;
+      const payload = (await response.json()) as PortalStudioSaveResult & {
+        taskRevision?: number;
+      };
+      if (response.status === 409) {
+        // P2-3 review: another client (or the agent CLI/DELETE) moved the
+        // task between our last fetch and this save — never silently
+        // overwrite. Refresh and show explicit conflict feedback.
+        refreshTask();
+        setMode({
+          kind: "error",
+          message: t(
+            "studio.conflict",
+            "The task changed on the server — your change was not applied. Review the current state and retry."
+          ),
+        });
+        return;
+      }
       if (!response.ok || !payload.ok || !payload.taskId) {
         setMode({
           kind: "error",
@@ -1497,10 +1618,13 @@ export function StudioToolbar({
         });
         return;
       }
+      if (typeof payload.taskRevision === "number") {
+        lastTaskRevisionRef.current = payload.taskRevision;
+      }
       // The annotation is durably persisted — reflect it in the overlay
       // and the dock badge immediately, and keep the last-known task for
       // later mutation rewrites.
-      const savedAnnotations = [...annotations, annotation];
+      const savedAnnotations = fullyCompleted ? [annotation] : [...annotations, annotation];
       setAnnotations(savedAnnotations);
       taskRef.current = { ...task, annotations: savedAnnotations };
 
@@ -1860,10 +1984,11 @@ export function StudioToolbar({
                 }
                 onClick={() => {
                   const anyHidden = annotations.some((a) => a.hidden);
-                  persistAnnotations(
+                  enqueueMutation(
                     annotations.map((a) => ({
-                      ...a,
-                      hidden: anyHidden ? false : true,
+                      op: "setHidden",
+                      annotationId: a.annotationId,
+                      hidden: !anyHidden,
                     }))
                   );
                 }}
@@ -1926,7 +2051,7 @@ export function StudioToolbar({
                   className="ps-button ps-danger"
                   disabled={editorSaving}
                   onClick={() => {
-                    persistAnnotations(removeCompletedAnnotations(annotations));
+                    enqueueMutation([{ op: "removeCompleted" }]);
                     setRemoveCompletedConfirm(false);
                   }}
                 >
@@ -2083,12 +2208,12 @@ export function StudioToolbar({
                                 aria-label={t("studio.reopen", "Reopen")}
                                 disabled={editorSaving}
                                 onClick={() =>
-                                  persistAnnotations(
-                                    reopenAnnotation(
-                                      annotations,
-                                      annotation.annotationId
-                                    )
-                                  )
+                                  enqueueMutation([
+                                    {
+                                      op: "reopen",
+                                      annotationId: annotation.annotationId,
+                                    },
+                                  ])
                                 }
                               >
                                 <RotateCcw size={12} aria-hidden="true" />
@@ -2104,12 +2229,12 @@ export function StudioToolbar({
                                 aria-pressed={completed}
                                 disabled={editorSaving}
                                 onClick={() =>
-                                  persistAnnotations(
-                                    completeAnnotation(
-                                      annotations,
-                                      annotation.annotationId
-                                    )
-                                  )
+                                  enqueueMutation([
+                                    {
+                                      op: "complete",
+                                      annotationId: annotation.annotationId,
+                                    },
+                                  ])
                                 }
                               >
                                 <CheckCircle2 size={12} aria-hidden="true" />
@@ -2125,12 +2250,13 @@ export function StudioToolbar({
                               aria-pressed={hidden}
                               disabled={editorSaving}
                               onClick={() =>
-                                persistAnnotations(
-                                  toggleAnnotationHidden(
-                                    annotations,
-                                    annotation.annotationId
-                                  )
-                                )
+                                enqueueMutation([
+                                  {
+                                    op: "setHidden",
+                                    annotationId: annotation.annotationId,
+                                    hidden: !hidden,
+                                  },
+                                ])
                               }
                             >
                               {hidden ? (
@@ -2458,6 +2584,10 @@ export function StudioToolbar({
           in the list (grey chip) with no page anchor. */}
       {visibleAnnotations.map((annotation) => {
         if (annotation.hidden === true) return null;
+        // Goal 06: markers only render when the annotation's routeKey
+        // matches the current route (legacy annotations without pageContext
+        // always render).
+        if (!annotationMatchesRoute(annotation)) return null;
         // Display numbers derive from the CURRENT VISIBLE list (D-034 #4),
         // so marker numbers match the list chips in every view.
         const number = annotationDisplayNumber(

@@ -24,14 +24,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import {
-  ANNOTATION_ID_PATTERN,
-  completeAnnotationVerified,
-  MAX_COMPLETION_SUMMARY_LENGTH,
-  normalizeTask,
-  reopenAnnotation,
-} from "../src/studio/task-model.ts";
-import { writeActiveTaskWithRevision } from "../src/studio/endpoint.ts";
+import { ANNOTATION_ID_PATTERN, MAX_COMPLETION_SUMMARY_LENGTH, normalizeTask } from "../src/studio/task-model.ts";
+import { readTaskRevision, writeActiveTaskWithRevision } from "../src/studio/endpoint.ts";
+import { applyMutationOperations } from "../src/studio/mutation.ts";
 
 const TASK_FILENAME = "active-task.json";
 
@@ -196,12 +191,35 @@ function main() {
       process.stdout.write(`annotation ${annotationId} is already completed (no change).\n`);
       return;
     }
-    const next = completeAnnotationVerified(task.annotations, annotationId, {
-      verified: true,
-      summary,
-      source: "cli",
-    });
-    const result = writeActiveTaskWithRevision(studioRoot(), { ...task, annotations: next });
+    // Same typed mutation semantics as the browser/server: build a
+    // MutationRequest and apply it through the shared pure contract.
+    const request = {
+      taskId: task.taskId,
+      expectedTaskRevision: readTaskRevision(studioRoot()),
+      operations: [
+        {
+          op: "complete",
+          annotationId,
+          evidence: { verified: true, summary, source: "cli" },
+        },
+      ],
+    };
+    const applied = applyMutationOperations(task, request.operations);
+    if (!applied.ok) {
+      fail(`apply failed: ${applied.error}`, 1);
+      return;
+    }
+    // P2-1 review: compare-and-swap — re-read the artifact's revision
+    // immediately before writing; if another writer (the dev server or a
+    // browser client) moved it, FAIL instead of silently overwriting.
+    if (readTaskRevision(studioRoot()) !== request.expectedTaskRevision) {
+      fail(
+        `revision conflict: the task changed on disk since this command read it (expected ${request.expectedTaskRevision}). Re-run the command against the current state.`,
+        1
+      );
+      return;
+    }
+    const result = writeActiveTaskWithRevision(studioRoot(), applied.task);
     if (!result.ok) {
       fail(`write failed: ${result.error}`, 1);
       return;
@@ -233,8 +251,26 @@ function main() {
     process.stdout.write(`annotation ${annotationId} is already open (no change).\n`);
     return;
   }
-  const next = reopenAnnotation(task.annotations, annotationId);
-  const result = writeActiveTaskWithRevision(studioRoot(), { ...task, annotations: next });
+  // Same typed mutation semantics as the browser/server.
+  const request = {
+    taskId: task.taskId,
+    expectedTaskRevision: readTaskRevision(studioRoot()),
+    operations: [{ op: "reopen", annotationId }],
+  };
+  const applied = applyMutationOperations(task, request.operations);
+  if (!applied.ok) {
+    fail(`apply failed: ${applied.error}`, 1);
+    return;
+  }
+  // P2-1 review: compare-and-swap before writing (see complete).
+  if (readTaskRevision(studioRoot()) !== request.expectedTaskRevision) {
+    fail(
+      `revision conflict: the task changed on disk since this command read it (expected ${request.expectedTaskRevision}). Re-run the command against the current state.`,
+      1
+    );
+    return;
+  }
+  const result = writeActiveTaskWithRevision(studioRoot(), applied.task);
   if (!result.ok) {
     fail(`write failed: ${result.error}`, 1);
     return;

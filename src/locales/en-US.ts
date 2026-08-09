@@ -176,6 +176,7 @@ export const starter = {
   "studio.editorTitle": "Annotation editor",
   "studio.saveComment": "Save comment",
   "studio.reopen": "Reopen",
+  "studio.conflict": "The task changed on the server — your change was not applied. Review the current state and retry.",
   "studio.saveError": "Unable to save — try again.",
   "studio.viewOpen": "Open",
   "studio.viewAll": "All",

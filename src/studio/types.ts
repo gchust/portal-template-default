@@ -177,6 +177,21 @@ export type Annotation = {
   elements: ElementCapture[];
   /** Viewport rect for the region kind (marquee). */
   region?: Region;
+  /**
+   * Goal 06: page context captured when the annotation was created
+   * (backward-compatible — absent on legacy annotations). routeKey gates
+   * marker rendering: markers only resolve/render when the current route
+   * matches. url/title/viewport/scroll/businessContext describe the page
+   * state the annotation refers to.
+   */
+  pageContext?: {
+    url: string;
+    routeKey: string;
+    title: string;
+    viewport: { width: number; height: number };
+    scroll: { x: number; y: number };
+    businessContext: BusinessContextItem[];
+  };
 };
 
 /**
