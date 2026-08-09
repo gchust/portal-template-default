@@ -13,7 +13,6 @@ import {
   SidebarRail as ShadcnSidebarRail,
   Sidebar as ShadcnSidebar,
   SidebarContent as ShadcnSidebarContent,
-  SidebarFooter as ShadcnSidebarFooter,
   SidebarHeader as ShadcnSidebarHeader,
   useSidebar as useShadcnSidebar,
 } from "@/components/ui/sidebar";
@@ -29,7 +28,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { ChevronRight, ListIcon, ShieldCheck } from "lucide-react";
+import { ChevronRight, ListIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Brand } from "@/components/app-shell/brand";
 import { getResourceLabel } from "@/components/resources/resource-label";
@@ -88,7 +87,6 @@ export function SidebarNavigation({
           />
         ))}
       </ShadcnSidebarContent>
-      <SidebarFooter />
     </ShadcnSidebar>
   );
 }
@@ -287,48 +285,6 @@ function SidebarHeader() {
   );
 }
 
-function SidebarFooter() {
-  const { open } = useShadcnSidebar();
-  const translate = useTranslate();
-
-  return (
-    <ShadcnSidebarFooter className="border-t border-sidebar-border/70 p-0">
-      <div
-        title={`${__PORTAL_TEMPLATE_NAME__} v${__PORTAL_TEMPLATE_VERSION__}`}
-        className={cn(
-          "flex min-h-16 items-center",
-          open ? "gap-3 px-5 py-3" : "justify-center px-2"
-        )}
-      >
-        <ShieldCheck className="size-4 shrink-0 text-muted-foreground" />
-        {open && (
-          <div className="min-w-0 text-xs leading-4">
-            <div className="font-semibold text-sidebar-foreground">
-              {translate("shell.footer.freedom", "AI builds freely.")}
-            </div>
-            <div className="text-muted-foreground">
-              <a
-                href="https://nocobase.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-medium text-sidebar-foreground hover:underline"
-              >
-                NocoBase
-              </a>{" "}
-              {translate(
-                "shell.footer.reliabilitySuffix",
-                "keeps it reliable."
-              )}
-            </div>
-            <div className="mt-1 font-mono text-[10px] text-muted-foreground/70">
-              {__PORTAL_TEMPLATE_NAME__} v{__PORTAL_TEMPLATE_VERSION__}
-            </div>
-          </div>
-        )}
-      </div>
-    </ShadcnSidebarFooter>
-  );
-}
 
 function useMenuItemLabel(item: TreeMenuItem) {
   const translate = useTranslate();

@@ -1,8 +1,6 @@
 export const starter = {
   "shell.workspace": "AI application workspace",
   "shell.settings": "Settings",
-  "shell.footer.freedom": "AI builds freely.",
-  "shell.footer.reliabilitySuffix": "keeps it reliable.",
   "auth.signOut": "Sign out",
   "auth.signingOut": "Signing out...",
   "acl.portalAccessDenied.title": "You do not have access to this Portal",

@@ -74,7 +74,7 @@ export default defineConfig(({ mode }) => {
       portalRawIndexHtmlPlugin({ root: __dirname, base: portalBase }),
       // Dev-only Portal Studio: session token, task endpoint, and dev
       // bootstrap injection. apply: "serve" keeps it out of production builds.
-      portalStudioPlugin({ root: __dirname }),
+      portalStudioPlugin({ root: __dirname, allowRemote: true }),
     ],
     resolve: {
       alias: {

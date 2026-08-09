@@ -1,6 +1,7 @@
 import type { Role } from "@nocobase/portal-sdk/acl";
 import { Badge } from "@/components/ui/badge";
 import { ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { resolveRoleLabel } from "./role-utils";
 
 export function RoleBadges({
@@ -30,7 +31,12 @@ export function RoleBadges({
           >
             <Badge
               variant="secondary"
-              className="cursor-pointer transition-colors hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_8%)]"
+              className={cn(
+                "cursor-pointer transition-colors",
+                role.name === "root"
+                  ? "bg-green-500/15 text-green-700 hover:bg-green-500/25 dark:bg-green-500/20 dark:text-green-400"
+                  : "hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_8%)]"
+              )}
             >
               {label}
               <ChevronRight data-icon="inline-end" />

@@ -139,8 +139,11 @@ export const UserList = () => {
           </UserColumnHeader>
         ),
         enableSorting: true,
-        cell: ({ row, getValue }) =>
-          getValue() || row.original.username || row.original.email || "-",
+        cell: ({ row, getValue }) => {
+          const value =
+            getValue() || row.original.username || row.original.email || "-";
+          return <span className="font-semibold">{value}</span>;
+        },
       }),
       columnHelper.accessor("username", {
         id: "username",
