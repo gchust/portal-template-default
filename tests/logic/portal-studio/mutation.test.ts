@@ -46,6 +46,18 @@ describe("isFullyCompletedTask", () => {
     expect(isFullyCompletedTask(baseTask([openAnn(), doneAnn()]))).toBe(false);
     expect(isFullyCompletedTask(baseTask([]))).toBe(false);
   });
+
+  it("sticky completedAt keeps a removed-clean task fully completed", () => {
+    expect(
+      isFullyCompletedTask({
+        ...baseTask([]),
+        completedAt: "2026-08-09T02:00:00.000Z",
+      })
+    ).toBe(true);
+    expect(isFullyCompletedTask({ ...baseTask([]), completedAt: "" })).toBe(
+      false
+    );
+  });
 });
 
 describe("applyMutationOperations — every operation", () => {
@@ -146,6 +158,99 @@ describe("applyMutationOperations — every operation", () => {
       "a",
       "c",
     ]);
+  });
+
+  it("completing the last open annotation stamps the sticky task completedAt", () => {
+    const result = applyMutationOperations(baseTask([openAnn("a")]), [
+      { op: "complete", annotationId: "a" },
+    ]);
+    if (!result.ok) return;
+    expect(result.task.annotations[0].status).toBe("completed");
+    expect(typeof result.task.completedAt).toBe("string");
+    expect(isFullyCompletedTask(result.task)).toBe(true);
+  });
+
+  it("removeCompleted preserves the sticky completedAt of a fully completed task", () => {
+    const completed = applyMutationOperations(baseTask([openAnn("a")]), [
+      { op: "complete", annotationId: "a" },
+    ]);
+    if (!completed.ok) return;
+    const removed = applyMutationOperations(completed.task, [
+      { op: "removeCompleted" },
+    ]);
+    if (!removed.ok) return;
+    expect(removed.task.annotations).toEqual([]);
+    expect(removed.task.completedAt).toBe(completed.task.completedAt);
+    expect(isFullyCompletedTask(removed.task)).toBe(true);
+  });
+
+  it("a batched complete+removeCompleted request still stamps the sticky marker", () => {
+    // The browser debounces the final Complete and Remove completed into
+    // ONE atomic request — the completed state never exists in an
+    // intermediate result, so the transition must be inferred from the
+    // operations themselves.
+    const result = applyMutationOperations(baseTask([openAnn("a")]), [
+      { op: "complete", annotationId: "a" },
+      { op: "removeCompleted" },
+    ]);
+    if (!result.ok) return;
+    expect(result.task.annotations).toEqual([]);
+    expect(typeof result.task.completedAt).toBe("string");
+    expect(isFullyCompletedTask(result.task)).toBe(true);
+  });
+
+  it("removeCompleted on a partially completed task never stamps completedAt", () => {
+    const result = applyMutationOperations(
+      baseTask([openAnn("a"), doneAnn("b")]),
+      [{ op: "removeCompleted" }]
+    );
+    if (!result.ok) return;
+    expect(result.task.annotations.map((a) => a.annotationId)).toEqual(["a"]);
+    expect(result.task.completedAt).toBeUndefined();
+    expect(isFullyCompletedTask(result.task)).toBe(false);
+  });
+
+  it("reopen after a sticky completion clears the task completedAt", () => {
+    const completed = applyMutationOperations(baseTask([openAnn("a")]), [
+      { op: "complete", annotationId: "a" },
+    ]);
+    if (!completed.ok) return;
+    const reopened = applyMutationOperations(completed.task, [
+      { op: "reopen", annotationId: "a" },
+    ]);
+    if (!reopened.ok) return;
+    expect(reopened.task.annotations[0].status).toBe("open");
+    expect(reopened.task.completedAt).toBeUndefined();
+    expect(isFullyCompletedTask(reopened.task)).toBe(false);
+  });
+
+  it("add and clear after a sticky completion clear the task completedAt", () => {
+    const completed = applyMutationOperations(baseTask([openAnn("a")]), [
+      { op: "complete", annotationId: "a" },
+    ]);
+    if (!completed.ok) return;
+    const added = applyMutationOperations(completed.task, [
+      { op: "add", annotation: openAnn("b", "fresh") },
+    ]);
+    if (!added.ok) return;
+    expect(added.task.completedAt).toBeUndefined();
+    const cleared = applyMutationOperations(completed.task, [{ op: "clear" }]);
+    if (!cleared.ok) return;
+    expect(cleared.task.completedAt).toBeUndefined();
+  });
+
+  it("bookkeeping ops on a sticky task preserve completedAt (complete no-op)", () => {
+    const completed = applyMutationOperations(baseTask([openAnn("a")]), [
+      { op: "complete", annotationId: "a" },
+    ]);
+    if (!completed.ok) return;
+    const noop = applyMutationOperations(completed.task, [
+      { op: "complete", annotationId: "a" },
+      { op: "setHidden", annotationId: "a", hidden: true },
+    ]);
+    if (!noop.ok) return;
+    expect(noop.task.completedAt).toBe(completed.task.completedAt);
+    expect(isFullyCompletedTask(noop.task)).toBe(true);
   });
 
   it("clear produces a valid empty annotation list", () => {

@@ -51,8 +51,12 @@ export type MutationResult =
 /** All annotations of the active task are completed (new-batch condition). */
 export function isFullyCompletedTask(task: PortalStudioTask): boolean {
   return (
-    task.annotations.length > 0 &&
-    task.annotations.every((annotation) => annotation.status === "completed")
+    // Sticky marker: the task reached a fully completed state and the
+    // completed items were later removed (removeCompleted) — the next batch
+    // still starts a fresh taskId. Cleared by add/reopen/clear.
+    !!task.completedAt ||
+    (task.annotations.length > 0 &&
+      task.annotations.every((annotation) => annotation.status === "completed"))
   );
 }
 
@@ -168,7 +172,63 @@ export function applyMutationOperations(
         return { ok: false, error: "invalid_request" };
     }
   }
-  return { ok: true, task: { ...task, annotations } };
+  // Goal 06 taskId lifecycle: keep the fully-completed state sticky at the
+  // task level. A task is treated as fully completed when the final state
+  // has every annotation completed, when it ALREADY was fully completed
+  // (sticky marker, or all-completed before this batch), or when this
+  // batch completes every previously-open annotation — even if the same
+  // batch then removes the completed items (the browser debounces
+  // complete+removeCompleted into one atomic request). A task that becomes
+  // active again (add/reopen/clear) drops the stamp; pure bookkeeping
+  // operations preserve it so a fully completed task whose items were
+  // removed still starts a fresh taskId for the next batch.
+  const allCompleted =
+    annotations.length > 0 &&
+    annotations.every((annotation) => annotation.status === "completed");
+  const openBefore = task.annotations.filter(
+    (annotation) => annotation.status !== "completed"
+  );
+  const alreadyCompletedBefore =
+    task.annotations.length > 0 &&
+    task.annotations.every(
+      (annotation) => annotation.status === "completed"
+    );
+  const completesEveryOpen = operations.some(
+    (operation) => operation.op === "complete"
+  )
+    ? openBefore.length > 0 &&
+      openBefore.every((annotation) =>
+        operations.some(
+          (operation) =>
+            operation.op === "complete" &&
+            operation.annotationId === annotation.annotationId
+        )
+      )
+    : false;
+  const fullyCompleted =
+    allCompleted || alreadyCompletedBefore || completesEveryOpen;
+  const reactivates = operations.some(
+    (operation) =>
+      operation.op === "add" ||
+      operation.op === "reopen" ||
+      operation.op === "clear"
+  );
+  const completedAt =
+    reactivates && !allCompleted
+      ? undefined
+      : fullyCompleted
+        ? task.completedAt ?? new Date().toISOString()
+        : task.completedAt;
+  return {
+    ok: true,
+    task: {
+      ...task,
+      annotations,
+      // Explicit override: undefined drops the inherited sticky marker
+      // (JSON.stringify omits it from the persisted artifact).
+      completedAt,
+    },
+  };
 }
 
 /** Validate an unknown payload as a MutationRequest (server + tests). */

@@ -45,13 +45,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  */
 export function normalizeV4ToV5(task: PortalStudioTaskV4): PortalStudioTask {
   const { instruction, elements, region, ...rest } = task;
+  const upgradedElements = elements
+    .map(normalizeElementCaptureV5)
+    .filter((element): element is ElementCapture => element !== null);
   const annotation: Annotation = {
     annotationId: `${task.taskId}-v4`,
-    kind: elements.length > 0 ? "element" : "region",
+    kind: upgradedElements.length > 0 ? "element" : "region",
     comment: instruction,
     createdAt: task.createdAt,
     status: "open",
-    elements,
+    elements: upgradedElements,
     ...(region ? { region } : {}),
   };
   return {
@@ -63,6 +66,60 @@ export function normalizeV4ToV5(task: PortalStudioTaskV4): PortalStudioTask {
 
 const isElementCaptureArray = (value: unknown): value is ElementCapture[] =>
   Array.isArray(value);
+
+/**
+ * CSS-escape an id-derived selector value (D-044 pattern): ids containing
+ * `.`/`:`/leading digits would silently misresolve or throw otherwise.
+ * Falls back to the raw value outside browser contexts (node/CLI).
+ */
+const escapeCssSelectorValue = (value: string) =>
+  typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(value)
+    : value;
+
+/**
+ * Upgrade one legacy element record to the v5 ElementCapture shape without
+ * data loss. v5-shaped records pass through; pre-v5 records (id/tag/text/
+ * attributes era, or agent-seeded legacy artifacts) are mapped onto the
+ * v5 fields so marker resolution can never crash on a missing
+ * selectorCandidates array (the marker layer treats it as unresolved).
+ */
+export function normalizeElementCaptureV5(
+  raw: unknown
+): ElementCapture | null {
+  if (!isRecord(raw)) return null;
+  const selectorCandidates = Array.isArray(raw.selectorCandidates)
+    ? (raw.selectorCandidates as ElementCapture["selectorCandidates"])
+    : typeof raw.id === "string" && raw.id
+      ? [{ kind: "id" as const, selector: `#${escapeCssSelectorValue(raw.id)}` }]
+      : [];
+  const tagName =
+    typeof raw.tagName === "string" && raw.tagName
+      ? raw.tagName
+      : typeof raw.tag === "string" && raw.tag
+        ? raw.tag
+        : "div";
+  const snapshot = isRecord(raw.snapshot)
+    ? (raw.snapshot as ElementCapture["snapshot"])
+    : {
+        text: typeof raw.text === "string" ? raw.text : "",
+        attributes: isRecord(raw.attributes)
+          ? (raw.attributes as Record<string, string>)
+          : {},
+        childCount: 0,
+      };
+  return {
+    tagName,
+    selectorCandidates,
+    componentCandidates: Array.isArray(raw.componentCandidates)
+      ? (raw.componentCandidates as ElementCapture["componentCandidates"])
+      : [],
+    sourceCandidates: Array.isArray(raw.sourceCandidates)
+      ? (raw.sourceCandidates as ElementCapture["sourceCandidates"])
+      : [],
+    snapshot,
+  };
+}
 
 /** v1–v3 payloads (single `element` or `elements[]`) → v5. */
 function normalizeLegacyToV5(

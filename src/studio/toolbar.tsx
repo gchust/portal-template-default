@@ -31,6 +31,7 @@ import { sessionErrorMessage } from "./errors";
 import { matchHotkey, getHotkey } from "./hotkeys";
 import {
   applyMutationOperations,
+  isFullyCompletedTask,
   type MutationOp,
 } from "./mutation";
 import {
@@ -1517,12 +1518,11 @@ export function StudioToolbar({
     // batch replaces the completed task with a fresh identity. Copy/CLI
     // references stay valid during the active task lifecycle.
     const existingTask = taskRef.current;
-    const fullyCompleted =
-      !!existingTask &&
-      existingTask.annotations.length > 0 &&
-      existingTask.annotations.every(
-        (annotation) => annotation.status === "completed"
-      );
+    // Sticky task-level marker: a fully completed task whose completed
+    // items were removed (removeCompleted) still grants the next batch a
+    // fresh taskId — the current annotations alone would no longer show
+    // the completed state (single source of truth in mutation.ts).
+    const fullyCompleted = !!existingTask && isFullyCompletedTask(existingTask);
     const taskId =
       existingTask && !fullyCompleted ? existingTask.taskId : newTaskId();
     // Annotation-first (D-033 #4/#7): the new annotation carries its own

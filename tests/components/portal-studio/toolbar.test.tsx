@@ -3429,6 +3429,111 @@ describe("StudioToolbar", () => {
     expect(batchTwo.annotations[0].comment).toBe("batch two");
   });
 
+  it("taskId lifecycle: removeCompleted after FULL completion still grants a fresh taskId", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    const postedTaskIds: string[] = [];
+    const postedTaskBodies: unknown[] = [];
+    let currentTask: {
+      taskId: string;
+      annotations: Array<{ status: string }>;
+      completedAt?: string;
+    } | null = null;
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse(currentTask ? { task: currentTask } : { task: null }),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          const body = JSON.parse(init?.body ?? "{}") as {
+            taskId: string;
+            annotations: Array<{ status: string }>;
+          };
+          postedTaskIds.push(body.taskId);
+          postedTaskBodies.push(body);
+          currentTask = body;
+          return jsonResponse({ ok: true, taskId: body.taskId, sourceCandidates: [] });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({ ok: true, file: "s.png", width: 100, height: 50 }),
+      },
+      {
+        url: "/__portal-studio/mutate",
+        method: "POST",
+        respond: async (init?: { method?: string; body?: string }) => {
+          const request = JSON.parse(init?.body ?? "{}") as {
+            operations: never[];
+          };
+          const applied = applyMutationOperations(
+            currentTask as never,
+            request.operations
+          );
+          if (!applied.ok) {
+            return jsonResponse({ ok: false, error: applied.error });
+          }
+          currentTask = applied.task as never;
+          return jsonResponse({ ok: true, taskRevision: 2, task: applied.task });
+        },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // Annotation 1.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(screen.getByLabelText("Annotation comment"), "one");
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    const taskIdA = postedTaskIds[0];
+    // Complete the only open annotation → the sticky task-level
+    // completedAt is stamped by the typed mutate flush.
+    await user.click(screen.getByRole("button", { name: "Complete" }));
+    await waitFor(() => {
+      const ops = mutateOperationsFrom(fetchMock).flat();
+      expect(ops.some((op) => op.op === "complete")).toBe(true);
+    });
+    await waitFor(() => {
+      expect(currentTask?.completedAt).toBeTruthy();
+    });
+    // Remove completed through the dock control + confirm.
+    await user.click(
+      screen.getByRole("button", { name: /Remove completed \(1\)/ })
+    );
+    await user.click(screen.getByRole("button", { name: "Remove", exact: true }));
+    await waitFor(() => {
+      expect(currentTask?.annotations.length).toBe(0);
+    });
+    // The sticky marker survives removeCompleted → the task is STILL
+    // fully completed, so the next batch must start a fresh taskId
+    // (regression: the emptied task used to reuse the old id).
+    expect(currentTask?.completedAt).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(screen.getByLabelText("Annotation comment"), "batch after remove");
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      expect(postedTaskIds.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(postedTaskIds[1]).not.toBe(taskIdA);
+    expect(
+      (postedTaskBodies[1] as { annotations: unknown[] }).annotations
+    ).toHaveLength(1);
+  });
+
   it("markers render ONLY when the annotation routeKey matches the current route", async () => {
     makeMarkerPageElement("Alice", "row-a");
     window.history.pushState({}, "", "/");

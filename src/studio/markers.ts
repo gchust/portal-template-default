@@ -51,7 +51,10 @@ export function resolveAnnotationTargets(
 export function resolveElementTarget(
   element: ElementCapture
 ): Element | null {
-  for (const candidate of element.selectorCandidates) {
+  // Defense in depth: legacy pre-v5 element records (no selectorCandidates)
+  // normalize on read, but a malformed record must never crash the marker
+  // layer — treat it as unresolved instead.
+  for (const candidate of element.selectorCandidates ?? []) {
     try {
       const found = document.querySelector(candidate.selector);
       if (found) return found;

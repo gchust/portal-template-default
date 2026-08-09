@@ -1680,6 +1680,28 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
     .click();
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
   await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
+  // TaskId lifecycle (G06): the task was FULLY completed before
+  // removeCompleted; a new batch must still start a FRESH taskId (the
+  // sticky task-level completedAt survives removeCompleted).
+  const clearedTaskId = readActiveTask().taskId;
+  await startPicking(page);
+  await row.hover();
+  await row.click();
+  await page.locator("#portal-studio-root textarea").fill("G04 after remove");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
+  await expect
+    .poll(() => readActiveTask().taskId)
+    .not.toBe(clearedTaskId);
+  const fresh = readActiveTask();
+  expect(fresh.annotations).toHaveLength(1);
+  expect(fresh.completedAt).toBeUndefined();
+  // Cleanup: delete the fresh annotation so later tests start empty.
+  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
+  await root.locator(".ps-annotation-confirm").waitFor();
+  await root.locator(".ps-annotation-confirm button", { hasText: "Delete" }).click();
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
 });
 
 test("agent CLI complete/reopen sync to the browser within two seconds (G05)", async ({

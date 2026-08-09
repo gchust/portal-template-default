@@ -138,6 +138,18 @@ describe("resolveAnnotationTargets — multi-target resolution", () => {
     expect(resolveAnnotationTargets(annotation)).toEqual([a, b]);
   });
 
+  it("never crashes on a legacy element record without selectorCandidates", () => {
+    document.body.innerHTML = "<tr id='row-a'><td>Alice</td></tr>";
+    const legacy = {
+      tagName: "tr",
+      componentCandidates: [],
+      sourceCandidates: [],
+      snapshot: { text: "Alice", attributes: {} },
+    } as unknown as Annotation["elements"][number];
+    // Missing selectorCandidates → unresolved, not a throw.
+    expect(resolveAnnotationTargets(makeAnnotation([legacy]))).toEqual([]);
+  });
+
   it("skips members whose selector no longer matches", () => {
     const a = document.createElement("td");
     a.id = "a";

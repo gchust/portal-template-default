@@ -784,6 +784,13 @@ export function sanitizeTask(
     recorder
   );
   const businessContext = sanitizeBusinessContext(input.businessContext);
+  // Task-level sticky completion marker (taskId lifecycle): validated and
+  // preserved so mutation re-POSTs keep the fully-completed state that
+  // grants the next batch a fresh taskId.
+  const completedAt = readString(input.completedAt, 64);
+  if (completedAt !== undefined && Number.isNaN(Date.parse(completedAt))) {
+    return null;
+  }
   const screenshot = isV1
     ? undefined
     : options.studioRoot
@@ -868,6 +875,7 @@ export function sanitizeTask(
     ...(screenshot ? { screenshot } : {}),
     ...(diagnostics.length ? { diagnostics } : {}),
     ...(heartbeat ? { heartbeat } : {}),
+    ...(completedAt ? { completedAt } : {}),
   };
 
   const serialized = JSON.stringify(task);

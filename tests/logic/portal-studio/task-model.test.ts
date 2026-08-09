@@ -2,10 +2,11 @@
  * Goal 02 — task-model: v4→v5 normalize-on-read (D-033 #17), display
  * numbers as live order index (D-034 #4), element counting/flattening.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   annotationDisplayNumber,
+  normalizeElementCaptureV5,
   normalizeTask,
   normalizeV4ToV5,
 } from "@/studio/task-model";
@@ -87,6 +88,80 @@ describe("normalizeV4ToV5", () => {
     const task = normalizeV4ToV5(v4Task({ elements: [] }));
     expect(task.annotations[0].kind).toBe("region");
     expect(task.annotations[0].elements).toEqual([]);
+  });
+
+  it("upgrades pre-v5 element records (id/tag/text era) without data loss", () => {
+    const task = normalizeV4ToV5(
+      v4Task({
+        elements: [
+          {
+            id: "row-a",
+            tag: "tr",
+            text: "Alice",
+            attributes: {},
+            snapshot: { text: "Alice", attributes: {} },
+            sourceCandidates: [{ file: "src/pages/users.tsx", line: 12 }],
+          } as unknown as PortalStudioTaskV4["elements"][number],
+        ],
+      })
+    );
+    const element = task.annotations[0].elements[0];
+    expect(element.tagName).toBe("tr");
+    expect(element.selectorCandidates).toEqual([
+      { kind: "id", selector: "#row-a" },
+    ]);
+    expect(element.componentCandidates).toEqual([]);
+    expect(element.sourceCandidates).toEqual([
+      { file: "src/pages/users.tsx", line: 12 },
+    ]);
+    expect(element.snapshot.text).toBe("Alice");
+  });
+
+  it("preserves legacy attributes and CSS-escapes the id selector (P2 review)", () => {
+    const escapeSpy = vi.fn((value: string) => value.replace(/[^a-zA-Z0-9]/g, "\\$&"));
+    vi.stubGlobal("CSS", { escape: escapeSpy });
+    const task = normalizeV4ToV5(
+      v4Task({
+        elements: [
+          {
+            id: "row.a:1",
+            tag: "tr",
+            text: "Alice",
+            attributes: { "data-ai-page-element": "user-row" },
+            sourceCandidates: [],
+          } as unknown as PortalStudioTaskV4["elements"][number],
+        ],
+      })
+    );
+    const element = task.annotations[0].elements[0];
+    // The id-derived candidate is CSS-escaped (D-044 pattern) so dots and
+    // colons cannot misresolve or throw.
+    expect(element.selectorCandidates).toEqual([
+      { kind: "id", selector: "#row\\.a\\:1" },
+    ]);
+    expect(escapeSpy).toHaveBeenCalledWith("row.a:1");
+    // The legacy top-level attributes survive into the fallback snapshot.
+    expect(element.snapshot).toEqual({
+      text: "Alice",
+      attributes: { "data-ai-page-element": "user-row" },
+      childCount: 0,
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizeElementCaptureV5 passes v5 records through and maps missing arrays", () => {
+    const v5shape = v4Task().elements[0];
+    expect(normalizeElementCaptureV5(v5shape)).toEqual(v5shape);
+    const bare = normalizeElementCaptureV5({ tagName: "td" });
+    expect(bare).toEqual({
+      tagName: "td",
+      selectorCandidates: [],
+      componentCandidates: [],
+      sourceCandidates: [],
+      snapshot: { text: "", attributes: {}, childCount: 0 },
+    });
+    expect(normalizeElementCaptureV5(null)).toBeNull();
+    expect(normalizeElementCaptureV5("x")).toBeNull();
   });
 });
 

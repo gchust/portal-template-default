@@ -222,6 +222,15 @@ export type PortalStudioTask = {
    * task. Never inferred from HMR, source revision, timestamps or tests.
    */
   taskRevision?: number;
+  /**
+   * Sticky task-level completion marker (taskId lifecycle): stamped when the
+   * LAST open annotation is completed and PRESERVED by removeCompleted so a
+   * new annotation batch after a fully completed task still starts a fresh
+   * taskId (contract: new taskId after a fully completed task when a new
+   * batch begins), even when the completed items were removed first.
+   * Cleared by add/reopen/clear, which make the task active again.
+   */
+  completedAt?: string;
 };
 
 /**
