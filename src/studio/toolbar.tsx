@@ -27,6 +27,7 @@ import {
 import { translate } from "@nocobase/portal-sdk/i18n";
 
 import { sessionErrorMessage } from "./errors";
+import { matchHotkey, getHotkey } from "./hotkeys";
 
 import {
   clampDockPosition,
@@ -327,8 +328,7 @@ export function StudioToolbar({
     saveDockPosition(readDockStorage(), next);
   };
 
-  // Pointer drag (G01 AC1): starts on any dock surface (row, toggle,
-  // badge — More menu excluded). No pointer capture, so button clicks keep
+  // Pointer drag (G01 AC1): starts on any dock surface (row, toggle). No pointer capture, so button clicks keep
   // their natural semantics; movement past the threshold marks the gesture
   // as a drag (didDragRef suppresses the toggle's click action). Window-
   // capture listeners end the drag on pointerup/cancel. The page-level
@@ -1078,7 +1078,16 @@ export function StudioToolbar({
       setCopyText("");
       return;
     }
-    const markdown = formatTaskMarkdown(task);
+    // Goal 02: Copy carries only OPEN annotations. The canonical formatter
+    // (CLI/MCP parity) is untouched — we pass a task copy whose annotations
+    // are filtered to status open (D-033 #7: completed items are done work).
+    const openOnlyTask: PortalStudioTask = {
+      ...task,
+      annotations: task.annotations.filter(
+        (annotation) => annotation.status === "open"
+      ),
+    };
+    const markdown = formatTaskMarkdown(openOnlyTask);
     setCopyText(markdown);
     try {
       if (
@@ -1315,7 +1324,56 @@ export function StudioToolbar({
     setMode({ kind: "idle" });
   };
 
-  /** Reset all capture-session state (selection, draft text, mode). */
+  // -----------------------------------------------------------------------
+  // Goal 02: global hotkeys
+  // -----------------------------------------------------------------------
+  const startPickingRef = useRef(startPicking);
+  startPickingRef.current = startPicking;
+  const startMultiRef = useRef(startMulti);
+  startMultiRef.current = startMulti;
+  const startMarqueeRef = useRef(startMarquee);
+  startMarqueeRef.current = startMarquee;
+  const copyMarkdownRef = useRef(copyMarkdown);
+  copyMarkdownRef.current = copyMarkdown;
+
+  useEffect(() => {
+    const handleHotkey = (event: KeyboardEvent) => {
+      const matched = matchHotkey(event);
+      if (!matched) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      const action = matched.action;
+
+      // Toggle: open/close the dock.
+      if (action === "toggle") {
+        setOpen((prev) => !prev);
+        return;
+      }
+
+      // Copy: copy open annotations as markdown.
+      if (action === "copy") {
+        copyMarkdownRef.current();
+        return;
+      }
+
+      // Capture actions (pick/multi/area): expand first if collapsed,
+      // then safely exit the previous capture and enter the new mode.
+      setOpen(true);
+
+      if (action === "pick") {
+        startPickingRef.current();
+      } else if (action === "multi") {
+        startMultiRef.current();
+      } else if (action === "area") {
+        startMarqueeRef.current();
+      }
+    };
+
+    document.addEventListener("keydown", handleHotkey, true);
+    return () => document.removeEventListener("keydown", handleHotkey, true);
+  }, []);
+
   const panelVisible = open;
 
   return (
@@ -1339,6 +1397,7 @@ export function StudioToolbar({
                   ).replace("{{count}}", String(annotations.length))
                 : t("studio.toggle.open", "Open Portal Studio")
           }
+          title={getHotkey("toggle")?.shortcutLabel}
           aria-expanded={open}
           onClick={() => {
             if (didDragRef.current) {
@@ -1424,6 +1483,7 @@ export function StudioToolbar({
               type="button"
               className="ps-icon-button"
               aria-label={t("studio.pick", "Pick element")}
+              title={getHotkey("pick")?.shortcutLabel}
               onClick={startPicking}
             >
               <Wrench size={14} aria-hidden="true" />
@@ -1432,6 +1492,7 @@ export function StudioToolbar({
               type="button"
               className="ps-icon-button"
               aria-label={t("studio.multiSelect", "Multi-select")}
+              title={getHotkey("multi")?.shortcutLabel}
               onClick={startMulti}
             >
               <CheckCircle2 size={14} aria-hidden="true" />
@@ -1440,6 +1501,7 @@ export function StudioToolbar({
               type="button"
               className="ps-icon-button"
               aria-label={t("studio.selectRegion", "Select region")}
+              title={getHotkey("area")?.shortcutLabel}
               onClick={startMarquee}
             >
               <Eye size={14} aria-hidden="true" />
@@ -1449,6 +1511,7 @@ export function StudioToolbar({
               type="button"
               className="ps-icon-button"
               aria-label={t("studio.copy", "Copy")}
+              title={getHotkey("copy")?.shortcutLabel}
               onClick={copyMarkdown}
             >
               <Copy size={14} aria-hidden="true" />

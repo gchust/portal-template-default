@@ -103,9 +103,8 @@ const closeStudio = async (page: import("@playwright/test").Page) => {
 
 const startPicking = async (page: import("@playwright/test").Page) => {
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Pick element",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Pick element" })
     .click();
   await expect(
     page.locator("#portal-studio-root [role='toolbar']", {
@@ -120,7 +119,8 @@ const saveTask = async (
 ) => {
   await page.locator("#portal-studio-root textarea").fill(instruction);
   await page
-    .locator("#portal-studio-root button", { hasText: "Save task" })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Save task" })
     .click();
   await expect(
     page.locator("#portal-studio-root [role='toolbar']", {
@@ -262,9 +262,8 @@ test("users page: single, shift-multi, marquee, replace, screenshot (3 rounds)",
   // Round 3 — marquee region over the table body.
   await openStudio(page);
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Select region",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Select region" })
     .click();
   await expect(
     page.locator("#portal-studio-root [role='toolbar']", {
@@ -303,9 +302,8 @@ test("users page: single, shift-multi, marquee, replace, screenshot (3 rounds)",
   // old Clear-task button is gone; the agent-side DELETE endpoint still
   // clears the task and its screenshot.
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Done",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Done" })
     .click();
   await expect(
     page.locator("#portal-studio-root [role='toolbar'] button", {
@@ -540,9 +538,8 @@ test("runtime diagnostics: console.error read-back, heartbeat authority, screens
   // Baseline: capture a real element so an active task exists.
   await page.locator("#portal-studio-root .ps-toggle").click();
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Pick element",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Pick element" })
     .click();
   const row = page.locator("tbody tr").first();
   await row.hover();
@@ -551,7 +548,8 @@ test("runtime diagnostics: console.error read-back, heartbeat authority, screens
     .locator("#portal-studio-root textarea")
     .fill("diagnostics baseline");
   await page
-    .locator("#portal-studio-root button", { hasText: "Save task" })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Save task" })
     .click();
   await expect(
     page.locator("#portal-studio-root [role='toolbar']", {
@@ -648,9 +646,8 @@ test("update verification loop: real edit, HMR path, reload-bump path, MCP smoke
   // Capture a baseline task.
   await page.locator("#portal-studio-root .ps-toggle").click();
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Pick element",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Pick element" })
     .click();
   const row = page.locator("tbody tr").first();
   await row.hover();
@@ -659,7 +656,8 @@ test("update verification loop: real edit, HMR path, reload-bump path, MCP smoke
     .locator("#portal-studio-root textarea")
     .fill("verify loop baseline");
   await page
-    .locator("#portal-studio-root button", { hasText: "Save task" })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Save task" })
     .click();
   await expect(
     page.locator("#portal-studio-root [role='toolbar']", {
@@ -891,18 +889,16 @@ test("HMR re-injection: reloads and hot updates never duplicate the Studio mount
   }
 });
 
-test("dock: compact toolbar, drag persists across reload, More menu (G01)", async ({
+test("dock: compact toolbar, drag persists across reload, command row (G01)", async ({
   page,
 }) => {
   await signIn(page);
   const root = page.locator("#portal-studio-root");
   const dock = root.locator(".ps-dock");
 
-  // Collapsed = compact icon toolbar (toggle + badge + More), no large panel.
+  // Collapsed = compact icon toolbar (toggle only), no large panel.
   await expect(dock).toBeVisible();
   await expect(root.locator(".ps-toggle")).toBeVisible();
-  await expect(root.locator(".ps-badge")).toBeVisible();
-  await expect(root.locator("[aria-label='More']")).toBeVisible();
   await expect(root.locator("[role='toolbar']")).toHaveCount(0);
   // No emoji glyphs (D-034 #5).
   expect(await root.locator(".ps-toggle").innerText()).not.toContain("🛠");
@@ -926,47 +922,20 @@ test("dock: compact toolbar, drag persists across reload, More menu (G01)", asyn
   expect(Math.round(after.x)).toBe(Math.round(moved.x));
   expect(Math.round(after.y)).toBe(Math.round(moved.y));
 
-  // More menu opens, Esc closes.
-  await root.locator("[aria-label='More']").click();
-  await expect(root.locator(".ps-more-menu")).toBeVisible();
-  await expect(root.locator(".ps-more-menu")).toContainText(
-    "Reset dock position"
-  );
-  await page.keyboard.press("Escape");
-  await expect(root.locator(".ps-more-menu")).toHaveCount(0);
-
-  // Reset dock position via MOUSE (F1: outside-click must not swallow the
-  // menuitem click across the shadow boundary) restores the default anchor.
-  await root.locator("[aria-label='More']").click();
-  await root
-    .locator(".ps-more-menu [role='menuitem']", { hasText: "Reset dock position" })
-    .click();
-  await expect(root.locator(".ps-more-menu")).toHaveCount(0);
-  const reset = (await dock.boundingBox())!;
-  expect(Math.round(reset.x)).toBeGreaterThan(Math.round(moved.x) + 40);
-  expect(Math.round(reset.y)).toBeGreaterThan(Math.round(moved.y) + 40);
-
-  // Menu flips BELOW the dock at the top edge (F2) and stays on-screen.
-  const topBox = (await dock.boundingBox())!;
-  await page.mouse.move(topBox.x + 20, topBox.y + 20);
-  await page.mouse.down();
-  await page.mouse.move(topBox.x + 20, 5, { steps: 6 });
-  await page.mouse.up();
-  await root.locator("[aria-label='More']").click();
-  const menuBox = (await root.locator(".ps-more-menu").boundingBox())!;
-  expect(Math.round(menuBox.y)).toBeGreaterThanOrEqual(0);
-  expect(Math.round(menuBox.y)).toBeGreaterThan(
-    Math.round((await dock.boundingBox())!.y)
-  );
-  await page.keyboard.press("Escape");
-
-  // Expanded panel still works after the dock changes (aria-expanded).
+  // Expanded panel shows command row with direct controls.
   await root.locator(".ps-toggle").click();
   await expect(root.locator("[role='toolbar']")).toBeVisible();
   await expect(root.locator(".ps-toggle")).toHaveAttribute(
     "aria-expanded",
     "true"
   );
+  // Command row has Pick, Multi, Area, Copy, Collapse buttons.
+  await expect(
+    root.locator("[role='toolbar'] [aria-label='Pick element']")
+  ).toBeVisible();
+  await expect(
+    root.locator("[role='toolbar'] [aria-label='Collapse']")
+  ).toBeVisible();
 });
 
 test("annotations: continuous picks, Ctrl+Enter, markers persist across reload and routes (G02)", async ({
@@ -989,15 +958,14 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
     })
   ).toBeVisible();
   // Dock badge reflects the persisted count; list + page marker exist.
-  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
   await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(1);
   // Marker is INSIDE the shadow host: never in the page DOM.
   expect(await page.locator("body > .ps-marker-anchor").count()).toBe(0);
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Done",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Done" })
     .click();
 
   // Continuous annotation 2: every plain pick appends a NEW annotation
@@ -1010,7 +978,7 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
     .locator("#portal-studio-root textarea")
     .fill("Second annotation");
   await page.keyboard.press("Control+Enter");
-  await expect(root.locator(".ps-badge")).toHaveText("2");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("2");
   const task = readActiveTask();
   expect(task.schemaVersion).toBe(5);
   expect(task.annotations).toHaveLength(2);
@@ -1021,7 +989,7 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
 
   // Reload → markers persist and re-resolve against the live DOM.
   await page.reload();
-  await expect(root.locator(".ps-badge")).toHaveText("2");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("2");
   await openStudio(page);
   await expect(root.locator(".ps-annotation-item")).toHaveCount(2);
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(2);
@@ -1044,9 +1012,8 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
 
   // Multi-select group: seed pick + toggle a second element into ONE group.
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Multi-select",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Multi-select" })
     .click();
   const cellA = page.locator("tbody tr").first().locator("td").nth(0);
   const cellB = page.locator("tbody tr").first().locator("td").nth(1);
@@ -1055,30 +1022,27 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   await cellB.hover();
   await cellB.click();
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Finish group",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Finish group" })
     .click();
   await page
     .locator("#portal-studio-root textarea")
     .fill("G03 group annotation");
   await page.keyboard.press("Control+Enter");
-  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
   let task = readActiveTask();
   expect(task.annotations).toHaveLength(1);
   expect(task.annotations[0].kind).toBe("multi");
   expect(task.annotations[0].elements).toHaveLength(2);
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Done",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Done" })
     .click();
 
   // Second single annotation (delete target).
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Pick element",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Pick element" })
     .click();
   const row2 = page.locator("tbody tr").first().locator("td").nth(2);
   await row2.hover();
@@ -1087,7 +1051,7 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
     .locator("#portal-studio-root textarea")
     .fill("G03 second annotation");
   await page.keyboard.press("Control+Enter");
-  await expect(root.locator(".ps-badge")).toHaveText("2");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("2");
 
   // Delete annotation 2 (its delete button is the second in the list) with
   // the inline confirmation; the remaining marker renumbers to 1.
@@ -1122,26 +1086,22 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
     .poll(() => readActiveTask().annotations[0]?.hidden)
     .toBe(true);
   await page.reload();
-  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
   await openStudio(page);
   await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
   await expect(root.locator(".ps-annotation-item")).toContainText(/hidden/i);
 
-  // More → Clear all annotations (confirm) → valid empty v5 task.
-  await root.locator("[aria-label='More']").click();
-  await root
-    .locator(".ps-more-menu [role='menuitem']", {
-      hasText: "Clear all annotations",
-    })
-    .click();
-  await expect(root.locator(".ps-more-menu")).toContainText(
-    "Clear all annotations?"
+  // Delete the remaining annotation via inline confirm → valid empty v5 task.
+  const remainingDelete = root.locator(
+    ".ps-annotation-item [aria-label='Delete']"
   );
+  await remainingDelete.click();
+  await expect(root.locator(".ps-annotation-confirm")).toBeVisible();
   await root
-    .locator(".ps-more-menu button", { hasText: "Clear all" })
+    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
     .click();
-  await expect(root.locator(".ps-badge")).toHaveText("0");
   await expect(root.locator(".ps-annotation-item")).toHaveCount(0);
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
   await expect
     .poll(() => readActiveTask().annotations.length)
     .toBe(0);
@@ -1149,9 +1109,9 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   expect(task.schemaVersion).toBe(5);
   expect(task.annotations).toEqual([]);
 
-  // Reload after clear-all: still empty, nothing resurrects.
+  // Reload after delete-all: still empty, nothing resurrects.
   await page.reload();
-  await expect(root.locator(".ps-badge")).toHaveText("0");
+  await expect(root.locator(".ps-launcher-count")).toHaveCount(0);
 });
 
 test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04)", async ({
@@ -1168,11 +1128,11 @@ test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G04 complete me");
   await page.keyboard.press("Control+Enter");
-  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
 
   // The old Clear-task normal path is gone (Complete replaced it).
   await expect(
-    root.locator("[role='toolbar'] button", { hasText: "Clear task" })
+    root.getByRole("button", { name: "Clear task" })
   ).toHaveCount(0);
 
   // Copy parity: the copied Markdown equals `print --markdown` (the same
@@ -1225,14 +1185,14 @@ test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04
 
   // Completed rendering survives reload.
   await page.reload();
-  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
   await openStudio(page);
   await expect(root.locator(".ps-annotation-item")).toContainText(
     /completed/i
   );
 });
 
-test("a11y keyboard walkthrough: dock, More menu containment, Esc focus return (G05)", async ({
+test("a11y keyboard walkthrough: dock, command row, Esc focus return (G05)", async ({
   page,
 }) => {
   await signIn(page);
@@ -1253,44 +1213,18 @@ test("a11y keyboard walkthrough: dock, More menu containment, Esc focus return (
   await page.keyboard.press("Enter");
   await expect(root.locator("[role='toolbar']")).toBeVisible();
 
-  // More menu: open via keyboard, Tab cycles within the menu, Esc closes
-  // and returns focus to the More button.
-  await root.locator("[aria-label='More']").focus();
-  await page.keyboard.press("Enter");
-  await expect(root.locator(".ps-more-menu")).toBeVisible();
-  const menuItems = root.locator(".ps-more-menu [role='menuitem']");
-  await expect(menuItems).toHaveCount(3);
-  // Tab ADVANCES through the items (not just containment — P1-1): after
-  // each Tab the focused menuitem text changes.
-  await page.keyboard.press("Tab");
-  await expect(menuItems.nth(0)).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(menuItems.nth(1)).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(menuItems.nth(2)).toBeFocused();
-  // Wrap-around keeps focus inside the menu.
-  await page.keyboard.press("Tab");
-  await expect(menuItems.nth(0)).toBeFocused();
-  // Shift+Tab wraps backwards.
-  await page.keyboard.press("Shift+Tab");
-  await expect(menuItems.nth(2)).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(root.locator(".ps-more-menu")).toHaveCount(0);
-  await expect(root.locator("[aria-label='More']")).toBeFocused();
-
   // Delete-confirm Esc cancels and returns focus (F-1 path). The panel is
   // still open from the toggle above — create an annotation to act on.
   await page
-    .locator("#portal-studio-root [role='toolbar'] button", {
-      hasText: "Pick element",
-    })
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Pick element" })
     .click();
   const row = page.locator("tbody tr").first();
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G05 a11y");
   await page.keyboard.press("Control+Enter");
-  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
   // aria-pressed reflects the toggle states (P3-1): hide/complete are
   // not pressed initially.
   await expect(
@@ -1363,7 +1297,7 @@ test("large task (>64KB) mutations persist via the plain POST (D-043 regression)
   expect(seeded.status()).toBe(200);
   // The dock badge refreshes from the server on panel open.
   await openStudio(page);
-  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
   await closeStudio(page);
 
   // UI hide mutation must persist (the keepalive-only path would have
@@ -1374,7 +1308,7 @@ test("large task (>64KB) mutations persist via the plain POST (D-043 regression)
     .poll(() => readActiveTask().annotations[0]?.hidden)
     .toBe(true);
   await page.reload();
-  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await expect(root.locator(".ps-launcher-count")).toHaveText("1");
   await openStudio(page);
   await expect(root.locator(".ps-annotation-item")).toContainText(/hidden/i);
 });

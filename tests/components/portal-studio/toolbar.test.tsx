@@ -1358,4 +1358,196 @@ describe("StudioToolbar", () => {
     expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
   });
 
+  // ---- Goal 02: hotkey integration tests ----
+
+  it("Ctrl+Alt+K toggles the dock open/closed", async () => {
+    render(<StudioToolbar config={config} />);
+    expect(screen.queryByRole("toolbar", { name: "Portal Studio" })).not.toBeInTheDocument();
+    // Dispatch toggle hotkey — dock should open.
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true, altKey: true });
+    expect(screen.getByRole("toolbar", { name: "Portal Studio" })).toBeInTheDocument();
+    // Dispatch again — dock should close.
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true, altKey: true });
+    expect(screen.queryByRole("toolbar", { name: "Portal Studio" })).not.toBeInTheDocument();
+  });
+
+  it("Ctrl+Alt+P expands dock and enters Pick mode from collapsed", async () => {
+    render(<StudioToolbar config={config} />);
+    expect(screen.queryByRole("toolbar", { name: "Portal Studio" })).not.toBeInTheDocument();
+    // Dispatch Pick hotkey — dock expands and pick mode starts.
+    fireEvent.keyDown(document, { key: "p", ctrlKey: true, altKey: true });
+    expect(screen.getByRole("toolbar", { name: "Portal Studio" })).toBeInTheDocument();
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+  });
+
+  it("Ctrl+Alt+M switches from Pick to Multi mode safely", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    // Open and enter pick mode.
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    // Switch to multi via hotkey — pick mode exits, multi starts.
+    fireEvent.keyDown(document, { key: "m", ctrlKey: true, altKey: true });
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Multi-select/)).toBeInTheDocument();
+  });
+
+  it("Ctrl+Alt+A switches from Pick to Area mode safely", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    // Switch to area via hotkey.
+    fireEvent.keyDown(document, { key: "a", ctrlKey: true, altKey: true });
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Drag over the page/)).toBeInTheDocument();
+  });
+
+  it("Ctrl+Alt+C copies open annotations without clearing", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    makeRoutedFetch([
+      {
+        annotationId: "ann-open-1",
+        kind: "element",
+        comment: "hotkey open comment",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+      {
+        annotationId: "ann-done-1",
+        kind: "element",
+        comment: "hotkey completed comment",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "completed",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    // Dispatch Copy hotkey.
+    fireEvent.keyDown(document, { key: "c", ctrlKey: true, altKey: true });
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalled();
+    });
+    const copied = writeText.mock.calls[0][0] as string;
+    // Open annotation comment IS copied.
+    expect(copied).toContain("hotkey open comment");
+    // Completed annotation comment is NOT copied.
+    expect(copied).not.toContain("hotkey completed comment");
+    // Annotations count reflects ONLY the open one.
+    expect(copied).toContain("## Annotations (1)");
+    // Neither annotation was cleared or mutated — both still in the list.
+    expect(screen.getByText("hotkey open comment")).toBeInTheDocument();
+    expect(screen.getByText("hotkey completed comment")).toBeInTheDocument();
+  });
+
+  it("hotkey does not fire inside an input element", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    render(<StudioToolbar config={config} />);
+    // Open, pick an element to enter draft mode (textarea visible).
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    // Now in draft mode — textarea is visible.
+    const textarea = screen.getByLabelText("Annotation comment");
+    textarea.focus();
+    // Dispatch Pick hotkey while focused on textarea — should NOT re-enter pick mode.
+    fireEvent.keyDown(textarea, { key: "p", ctrlKey: true, altKey: true });
+    // Still in draft mode, not pick mode.
+    expect(screen.getByLabelText("Annotation comment")).toBeInTheDocument();
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+  });
+
+  it("hotkey does not fire during IME composition", async () => {
+    render(<StudioToolbar config={config} />);
+    // Dispatch Pick hotkey with isComposing=true — should NOT enter pick mode.
+    fireEvent.keyDown(document, { key: "p", ctrlKey: true, altKey: true, isComposing: true });
+    expect(screen.queryByRole("toolbar", { name: "Portal Studio" })).not.toBeInTheDocument();
+  });
+
+  it("unmatched key does not call preventDefault", () => {
+    render(<StudioToolbar config={config} />);
+    const event = new KeyboardEvent("keydown", {
+      key: "x",
+      ctrlKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const spy = vi.spyOn(event, "preventDefault");
+    document.dispatchEvent(event);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("hotkey switching preserves saved annotations", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, taskId: "task-1", sourceCandidates: [] }),
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, file: "s.png", width: 100, height: 50 }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    // Pick and save an annotation.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(screen.getByLabelText("Annotation comment"), "saved note");
+    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+    });
+    // Switch to multi via hotkey — saved annotation persists.
+    fireEvent.keyDown(document, { key: "m", ctrlKey: true, altKey: true });
+    expect(screen.getByText(/Multi-select/)).toBeInTheDocument();
+    // Re-enter pick — annotation still in list.
+    fireEvent.keyDown(document, { key: "p", ctrlKey: true, altKey: true });
+    expect(screen.getByText("saved note")).toBeInTheDocument();
+  });
+
+  it("unsaved draft comment survives switching capture modes by hotkey", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    // Enter pick mode and pick an element → draft mode with comment textarea.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    const textarea = screen.getByLabelText("Annotation comment");
+    await user.type(textarea, "unsaved draft survives");
+    expect((textarea as HTMLTextAreaElement).value).toBe("unsaved draft survives");
+    // Hotkey switch to multi mode — draft mode exits, draft text preserved.
+    fireEvent.keyDown(document, { key: "m", ctrlKey: true, altKey: true });
+    expect(screen.getByText(/Multi-select/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Annotation comment")).not.toBeInTheDocument();
+    // Hotkey back to pick, pick the element again → draft mode restored with text.
+    fireEvent.keyDown(document, { key: "p", ctrlKey: true, altKey: true });
+    row.focus();
+    await user.keyboard("{Enter}");
+    const restored = screen.getByLabelText("Annotation comment");
+    expect((restored as HTMLTextAreaElement).value).toBe("unsaved draft survives");
+  });
+
 });
