@@ -129,7 +129,11 @@ export function collectSelectorCandidates(
       ? `${tag}#${escapeCss(partId)}`
       : `${tag}${
           current.className
-            ? `.${String(current.className).trim().split(/\s+/)[0]}`
+            ? // The first class is CSS-escaped: classes such as Tailwind's
+              // "group/button" contain selector-special characters that
+              // otherwise produce an INVALID selector and make the marker
+              // unresolvable (acceptance-found, D-044).
+              `.${escapeCss(String(current.className).trim().split(/\s+/)[0])}`
             : ""
         }`;
     pathParts.unshift(part);

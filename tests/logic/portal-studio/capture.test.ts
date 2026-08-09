@@ -31,6 +31,31 @@ describe("collectSelectorCandidates", () => {
   });
 });
 
+describe("collectSelectorCandidates (D-044)", () => {
+  it("CSS-escapes the first class in the path candidate (D-044)", () => {
+    document.body.innerHTML = `
+      <div class="flex gap-2"><button class="group/button inline-flex">Sort</button></div>`;
+    const button = document.querySelector("button")!;
+    const candidates = collectSelectorCandidates(button);
+    const path = candidates.find((candidate) => candidate.kind === "path");
+    expect(path).toBeDefined();
+    // The slash class must be escaped so the selector is VALID.
+    expect(path!.selector).toContain("button.group\\/button");
+    // And it must actually resolve without throwing.
+    expect(() => document.querySelector(path!.selector)).not.toThrow();
+    expect(document.querySelector(path!.selector)).toBe(button);
+  });
+
+  it("still produces plain path candidates for normal classes", () => {
+    document.body.innerHTML = `<div class="row"><span class="cell">x</span></div>`;
+    const span = document.querySelector("span")!;
+    const plain = collectSelectorCandidates(span);
+    expect(
+      plain.find((candidate) => candidate.kind === "path")!.selector
+    ).toBe("body > div.row > span.cell");
+  });
+});
+
 describe("dom outline and computed styles", () => {
   it("builds a bounded outline with id, classes, and role", () => {
     document.body.innerHTML = `<button id="save" class="btn primary" role="button">Save</button>`;
