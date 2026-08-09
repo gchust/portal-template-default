@@ -1222,6 +1222,96 @@ describe("StudioToolbar", () => {
     });
   });
 
+  // ---- G05 acceptance-found defect (D-043): keepalive mutation bug ----
+
+  it("the debounced mutation POST does NOT use keepalive (D-043)", async () => {
+    const user = userEvent.setup();
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "will hide",
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: [],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await waitFor(() => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) =>
+          (call[1] as { method?: string } | undefined)?.method === "POST"
+      );
+      expect(posts.length).toBeGreaterThanOrEqual(1);
+      // keepalive:true would fail with "Failed to fetch" for bodies over
+      // the 64 KB budget — the regular path must NOT set it (D-043).
+      for (const call of posts) {
+        expect(
+          (call[1] as { keepalive?: boolean }).keepalive
+        ).toBeUndefined();
+      }
+    });
+  });
+
+  it("the unload flush skips oversized payloads with a warning (D-043)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const user = userEvent.setup();
+    const fetchMock = makeRoutedFetch([
+      {
+        annotationId: "ann-1",
+        kind: "element",
+        comment: "x".repeat(1200), // large-ish comment
+        createdAt: "2026-08-07T12:00:00.000Z",
+        status: "open",
+        elements: Array.from({ length: 40 }, (_, i) => ({
+          tagName: "div",
+          selectorCandidates: [{ kind: "path", selector: `x > div:nth(${i})` }],
+          componentCandidates: [],
+          sourceCandidates: [],
+          snapshot: {
+            text: "t".repeat(2000),
+            attributes: {},
+            childCount: 0,
+          },
+        })),
+      },
+    ]);
+    const { unmount } = render(<StudioToolbar config={config} />);
+    await user.click(
+      screen.getByRole("button", { name: "Open Portal Studio" })
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+    });
+    // Force an oversized payload: the loaded task is large enough that the
+    // keepalive flush must skip it (guard fires) instead of failing.
+    await user.click(screen.getByRole("button", { name: "Hide" }));
+    unmount(); // triggers the unload flush path
+    await waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("keepalive budget")
+      );
+    });
+    // The oversized payload was NOT sent via keepalive (it would fail with
+    // "Failed to fetch" — the D-043 defect); only the regular debounce may
+    // write, and the flush consumed the pending payload.
+    const keepalivePosts = fetchMock.mock.calls.filter(
+      (call) =>
+        (call[1] as { method?: string; keepalive?: boolean } | undefined)
+          ?.method === "POST" &&
+        (call[1] as { keepalive?: boolean }).keepalive === true
+    );
+    expect(keepalivePosts).toHaveLength(0);
+    warn.mockRestore();
+  });
+
   it("closes the panel from the toolbar header", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);

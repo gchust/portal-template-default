@@ -105,6 +105,8 @@ const STACK_DEPTH = 4;
 const MAX_REGION_SCAN_ELEMENTS = 5000;
 /** Flip the More menu below the dock when less space remains above. */
 const MENU_FLIP_MIN_ABOVE = 60;
+/** Keepalive fetch bodies are limited to 64 KB by Chromium (D-043). */
+const KEEPALIVE_SAFE_BYTES = 60 * 1024;
 
 const readDockStorage = (): DockStorage | null => {
   try {
@@ -987,31 +989,41 @@ export function StudioToolbar({
    * (D-033 #10/#11; no new endpoints): the last-known task is re-POSTed
    * with the mutated annotations (same taskId/screenshot ref, so the
    * replace lifecycle keeps the evidence). Debounced 300 ms.
-   */
-  /** Send one mutation POST (keepalive so reload flushes survive).
-   *  NOTE: keepalive bodies are limited to 64 KB by the browser vs the
-   *  256 KB artifact cap — a mutation flush beyond 64 KB may fail silently
-   *  on unload (F-5; realistic annotation payloads stay far below). */
-  /**
-   * Send one mutation POST (keepalive so reload flushes survive) and
-   * RESOLVE with the server response. Callers chain their follow-ups
-   * (e.g. refreshTask) AFTER this promise settles — the atomic POST write
-   * completes before the response, so a refresh can never observe stale
-   * pre-mutation state (audit-found race, G04).
-   * NOTE: keepalive bodies are limited to 64 KB by the browser vs the
-   * 256 KB artifact cap — a mutation flush beyond 64 KB may fail silently
-   * on unload (F-5; realistic annotation payloads stay far below).
+   *
+   * ACCEPTANCE-DISCOVERED DEFECT (G05, D-043): keepalive bodies are limited
+   * to 64 KB by the browser, but the artifact cap is 256 KB — a task with
+   * several annotations routinely exceeds 64 KB, so the ALWAYS-keepalive
+   * mutation POST failed with "TypeError: Failed to fetch" and the
+   * mutation was silently swallowed. The regular (debounced) path now
+   * sends a PLAIN fetch (like saveTask, which always worked); only the
+   * unload flush uses keepalive, and only when the payload fits the
+   * keepalive budget (otherwise it warns and skips — the debounced write
+   * already persisted unless the edit was < 300 ms before unload).
    */
   const sendMutation = useCallback(
-    (payload: PortalStudioTask): Promise<void> =>
-      fetch(config.endpoint, {
+    (
+      payload: PortalStudioTask,
+      options: { keepalive?: boolean } = {}
+    ): Promise<void> => {
+      const body = JSON.stringify(payload);
+      const useKeepalive = options.keepalive === true;
+      if (
+        useKeepalive &&
+        new TextEncoder().encode(body).length > KEEPALIVE_SAFE_BYTES
+      ) {
+        console.warn(
+          "[portal-studio] task exceeds the keepalive budget; the unload save was skipped (D-043)"
+        );
+        return Promise.resolve();
+      }
+      return fetch(config.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Portal-Studio-Token": config.token,
         },
-        body: JSON.stringify(payload),
-        keepalive: true,
+        body,
+        ...(useKeepalive ? { keepalive: true } : {}),
       })
         .then((response) => response.json())
         .then((result: { ok?: boolean; error?: string }) => {
@@ -1024,7 +1036,8 @@ export function StudioToolbar({
         })
         .catch(() => {
           // Dev server restarting; the next mutation retries.
-        }),
+        });
+    },
     [config.endpoint, config.token]
   );
 
@@ -1042,8 +1055,11 @@ export function StudioToolbar({
       pendingPayloadRef.current = null;
       taskRef.current = payload;
       // Same ordering as the debounced path: refresh after the POST
-      // settles (audit race fix).
-      void sendMutation(payload).then(() => refreshTask());
+      // settles (audit race fix). The unload flush uses keepalive when
+      // the payload fits the budget (D-043).
+      void sendMutation(payload, { keepalive: true }).then(() =>
+        refreshTask()
+      );
     }
   }, [refreshTask, sendMutation]);
 

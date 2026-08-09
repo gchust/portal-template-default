@@ -1307,3 +1307,74 @@ test("a11y keyboard walkthrough: dock, More menu containment, Esc focus return (
     root.locator(".ps-annotation-item [aria-label='Delete']")
   ).toBeFocused();
 });
+
+test("large task (>64KB) mutations persist via the plain POST (D-043 regression)", async ({
+  page,
+}) => {
+  await signIn(page);
+  const root = page.locator("#portal-studio-root");
+  await root.locator(".ps-dock").waitFor();
+
+  // Seed a LARGE task (>64 KB — beyond the keepalive budget) through the
+  // documented agent-side write path.
+  const token = await page.evaluate(
+    () => window.__PORTAL_STUDIO_CONFIG__?.token
+  );
+  const bigElements = Array.from({ length: 30 }, (_, i) => ({
+    tagName: "div",
+    selectorCandidates: [{ kind: "path", selector: `body > div:nth(${i})` }],
+    componentCandidates: [],
+    sourceCandidates: [],
+    snapshot: {
+      text: "L".repeat(2600),
+      attributes: {},
+      childCount: 0,
+    },
+  }));
+  const bigTask = {
+    schemaVersion: 5,
+    taskId: "d043-large-task",
+    createdAt: new Date().toISOString(),
+    url: new URL(page.url()).href,
+    title: "D-043 large",
+    annotations: [
+      {
+        annotationId: "ann-big-1",
+        kind: "multi",
+        comment: "Big annotation with many elements",
+        createdAt: new Date().toISOString(),
+        status: "open",
+        elements: bigElements,
+      },
+    ],
+    businessContext: [],
+    redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+  };
+  expect(Buffer.byteLength(JSON.stringify(bigTask), "utf8")).toBeGreaterThan(
+    64 * 1024
+  );
+  const seeded = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/tasks"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: bigTask,
+    }
+  );
+  expect(seeded.status()).toBe(200);
+  // The dock badge refreshes from the server on panel open.
+  await openStudio(page);
+  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await closeStudio(page);
+
+  // UI hide mutation must persist (the keepalive-only path would have
+  // failed with "Failed to fetch" for this >64 KB task — D-043).
+  await openStudio(page);
+  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.hidden)
+    .toBe(true);
+  await page.reload();
+  await expect(root.locator(".ps-badge")).toHaveText("1");
+  await openStudio(page);
+  await expect(root.locator(".ps-annotation-item")).toContainText(/hidden/i);
+});
