@@ -108,10 +108,10 @@ export const starter = {
   "Full permissions": "Full permissions",
   "studio.title": "Portal Studio",
   "studio.toggle.open": "Open Portal Studio",
+  "studio.toggle.openCount": "Open Portal Studio ({{count}} annotations)",
   "studio.toggle.close": "Close Portal Studio",
   "studio.annotations": "Annotations",
-  "studio.more": "More",
-  "studio.resetDock": "Reset dock position",
+
   "studio.close": "Close",
   "studio.pick": "Pick element",
   "studio.pickHint":
@@ -151,9 +151,7 @@ export const starter = {
   "studio.editAnnotation": "Edit comment",
   "studio.hideAnnotation": "Hide",
   "studio.deleteAnnotation": "Delete",
-  "studio.confirmClearAll": "Clear all annotations?",
-  "studio.clearAll": "Clear all",
-  "studio.clearAllAnnotations": "Clear all annotations",
+
   "studio.copy": "Copy",
   "studio.copied": "Copied to clipboard",
   "studio.copyManual": "Copy manually",
@@ -161,7 +159,7 @@ export const starter = {
   "studio.copyEmpty": "No annotations to copy yet.",
   "studio.completeAnnotation": "Complete",
   "studio.completed": "Completed",
-  "studio.completeAll": "Complete all",
+
   "studio.marqueeHint":
     "Drag over the page to select everything inside the region. Esc cancels.",
   "studio.capturedCount": "Captured",
@@ -170,6 +168,8 @@ export const starter = {
   "studio.businessContext": "Business context",
   "studio.screenshot": "Screenshot",
   "studio.selectedCount": "Selected",
-  "studio.revisionStatus": "Revision",
-  "studio.browserRevision": "browser",
+  "studio.collapse": "Collapse",
+  "studio.dragHint": "Drag to reposition",
+  "studio.showAllMarkers": "Show all markers",
+  "studio.hideAllMarkers": "Hide all markers",
 } as const;

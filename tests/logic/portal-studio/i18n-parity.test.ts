@@ -36,6 +36,7 @@ describe("i18n key-set parity (en-US vs zh-CN)", () => {
     const enFlat = enUS as Record<string, unknown>;
     for (const key of [
       "studio.toggle.open",
+      "studio.toggle.openCount",
       "studio.toggle.close",
       "studio.annotations",
       "studio.annotationsList",
@@ -47,11 +48,6 @@ describe("i18n key-set parity (en-US vs zh-CN)", () => {
       "studio.saved",
       "studio.errorSave",
       "studio.sessionStale",
-      "studio.more",
-      "studio.resetDock",
-      "studio.clearAllAnnotations",
-      "studio.confirmClearAll",
-      "studio.clearAll",
       "studio.multiSelect",
       "studio.multiHint",
       "studio.finishGroup",
@@ -69,7 +65,10 @@ describe("i18n key-set parity (en-US vs zh-CN)", () => {
       "studio.copyEmpty",
       "studio.completeAnnotation",
       "studio.completed",
-      "studio.completeAll",
+      "studio.collapse",
+      "studio.dragHint",
+      "studio.showAllMarkers",
+      "studio.hideAllMarkers",
     ]) {
       expect(enFlat[key], `missing en ${key}`).toBeDefined();
     }

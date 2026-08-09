@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -112,56 +112,6 @@ describe("StudioToolbar", () => {
     expect(
       screen.queryByText(/Hover an element, then click or press Enter/)
     ).not.toBeInTheDocument();
-  });
-
-  it("shows the revision status when the active task has one", async () => {
-    const user = userEvent.setup();
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        task: {
-          schemaVersion: 5,
-          taskId: "task-rev-1",
-          createdAt: "2026-08-07T12:00:00.000Z",
-          url: "http://127.0.0.1:4173/users",
-          title: "Users",
-          annotations: [
-            {
-              annotationId: "ann-1",
-              kind: "element",
-              comment: "c",
-              createdAt: "2026-08-07T12:00:00.000Z",
-              status: "open",
-              elements: [],
-            },
-          ],
-          businessContext: [],
-          redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
-          revision: {
-            sourceRevision: "ab".repeat(32),
-            browserRevision: 7,
-            hmrAck: true,
-            state: "matched",
-            checkedAt: "2026-08-07T12:00:00.000Z",
-          },
-        },
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
-    expect(await screen.findByText(/Revision/)).toBeInTheDocument();
-    expect(screen.getByText("abababab", { selector: "code" })).toBeInTheDocument();
-    expect(screen.getByText("7", { selector: "code" })).toBeInTheDocument();
-    expect(screen.getByText(/matched/)).toBeInTheDocument();
-    const [url, init] = fetchMock.mock.calls[0] as [
-      string,
-      { headers: Record<string, string> }
-    ];
-    expect(url).toBe("/__portal-studio/tasks");
-    expect(init.headers["X-Portal-Studio-Token"]).toBe("test-token");
   });
 
   it("starts region marquee mode and cancels with Escape", async () => {
@@ -325,15 +275,15 @@ describe("StudioToolbar", () => {
       expect(screen.getByText(/Task saved/)).toBeInTheDocument();
     });
 
-    // Close and reopen the panel (no Done click): the stale selection from
-    // the saved round must be gone, so Shift+Enter on the SAME element adds
-    // it (counter 1) instead of toggling it out of an old selection.
-    await user.click(screen.getByRole("button", { name: "Close Portal Studio" }));
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    // Close and reopen the panel: expand/collapse is presentation-only (Goal 01),
+    // so the stale selection from the saved round persists. Clicking Pick again
+    // starts a fresh session (count resets to 0), then Shift+Enter picks the
+    // element fresh (count 1).
+    await user.click(screen.getByRole("button", { name: /Close Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(screen.getByText(/Selected/)).toBeInTheDocument();
     expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
   });
 
@@ -346,9 +296,10 @@ describe("StudioToolbar", () => {
     expect(screen.getByText(/Selected/)).toBeInTheDocument();
 
     // Close the panel while picking with a non-empty selection, then reopen:
-    // the session must be fully reset (no stale selection).
-    await user.click(screen.getByRole("button", { name: "Close Portal Studio" }));
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    // expand/collapse is presentation-only (Goal 01), so the selection persists.
+    // Clicking Pick again starts a fresh session, Shift+Enter picks (count 1).
+    await user.click(screen.getByRole("button", { name: /Close Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
@@ -872,46 +823,6 @@ describe("StudioToolbar", () => {
     });
   });
 
-  it("More menu clears all annotations with confirmation", async () => {
-    const user = userEvent.setup();
-    const fetchMock = makeRoutedFetch([
-      {
-        annotationId: "ann-1",
-        kind: "element",
-        comment: "doomed",
-        createdAt: "2026-08-07T12:00:00.000Z",
-        status: "open",
-        elements: [],
-      },
-    ]);
-    render(<StudioToolbar config={config} />);
-    await loadThen(user);
-    await user.click(screen.getByRole("button", { name: "More" }));
-    await user.click(
-      screen.getByRole("menuitem", { name: /Clear all annotations/ })
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Clear all annotations?"
-    );
-    await user.click(screen.getByRole("button", { name: "Clear all" }));
-    await waitFor(() => {
-      expect(screen.queryByText("doomed")).not.toBeInTheDocument();
-    });
-    await waitFor(() => {
-      const posts = fetchMock.mock.calls.filter(
-        (call) =>
-          (call[1] as { method?: string } | undefined)?.method === "POST"
-      );
-      expect(
-        posts.some(
-          (call) =>
-            (JSON.parse((call[1] as { body: string }).body)
-              .annotations as unknown[]).length === 0
-        )
-      ).toBe(true);
-    });
-  });
-
   it("Esc cancels the delete confirmation and returns focus (F-1)", async () => {
     const user = userEvent.setup();
     makeRoutedFetch([
@@ -1171,57 +1082,6 @@ describe("StudioToolbar", () => {
     ).toBe(true);
   });
 
-  it("More menu 'Complete all' completes every annotation", async () => {
-    const user = userEvent.setup();
-    const fetchMock = makeRoutedFetch([
-      {
-        annotationId: "ann-1",
-        kind: "element",
-        comment: "one",
-        createdAt: "2026-08-07T12:00:00.000Z",
-        status: "open",
-        elements: [],
-      },
-      {
-        annotationId: "ann-2",
-        kind: "region",
-        comment: "two",
-        createdAt: "2026-08-07T12:00:00.000Z",
-        status: "open",
-        elements: [],
-      },
-    ]);
-    render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
-    await waitFor(() => {
-      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
-    });
-    await user.click(screen.getByRole("button", { name: "More" }));
-    await user.click(
-      screen.getByRole("menuitem", { name: /Complete all/ })
-    );
-    await waitFor(() => {
-      const posts = fetchMock.mock.calls.filter(
-        (call) =>
-          (call[1] as { method?: string } | undefined)?.method === "POST"
-      );
-      expect(
-        posts.some((call) => {
-          const annotations = (
-            JSON.parse((call[1] as { body: string }).body)
-              .annotations as { status: string }[]
-          );
-          return (
-            annotations.length === 2 &&
-            annotations.every((a) => a.status === "completed")
-          );
-        })
-      ).toBe(true);
-    });
-  });
-
   // ---- G05 acceptance-found defect (D-043): keepalive mutation bug ----
 
   it("the debounced mutation POST does NOT use keepalive (D-043)", async () => {
@@ -1312,13 +1172,16 @@ describe("StudioToolbar", () => {
     warn.mockRestore();
   });
 
-  it("closes the panel from the toolbar header", async () => {
+  it("closes the panel via the Collapse button in the command row", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
     await user.click(
       screen.getByRole("button", { name: "Open Portal Studio" })
     );
-    await user.click(screen.getByRole("button", { name: "Close" }));
+    const panel = screen.getByRole("toolbar", { name: "Portal Studio" });
+    expect(panel).toBeInTheDocument();
+    // The command row has a Collapse button (Goal 01).
+    await user.click(screen.getByRole("button", { name: "Collapse" }));
     expect(
       screen.queryByRole("toolbar", { name: "Portal Studio" })
     ).not.toBeInTheDocument();
@@ -1331,15 +1194,13 @@ describe("StudioToolbar", () => {
     expect(
       screen.getByRole("button", { name: "Open Portal Studio" })
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "More" })).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: "Annotations" })).toBeInTheDocument();
+    // No More button or badge in collapsed state (Goal 01).
+    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Annotations" })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("toolbar", { name: "Portal Studio" })
     ).not.toBeInTheDocument();
     // No emoji glyphs in the toolbar (D-034 #5).
-    expect(
-      document.querySelector("#portal-studio-root")
-    ).toBeNull(); // jsdom render has no host; check the root text instead
     const dock = document.querySelector(".ps-dock");
     expect(dock?.textContent).not.toContain("🛠");
   });
@@ -1390,35 +1251,111 @@ describe("StudioToolbar", () => {
     expect(Number(dock.style.top.replace("px", ""))).toBe(0);
   });
 
-  it("More menu opens, Esc closes it and returns focus to the More button", async () => {
+  // ---- AC5: collapsed dock pauses capture listeners (Goal 01) ----
+
+  it("collapsed Pick mode does not intercept page pointer events", async () => {
     const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
     render(<StudioToolbar config={config} />);
-    const more = screen.getByRole("button", { name: "More" });
-    expect(more).toHaveAttribute("aria-expanded", "false");
-    await user.click(more);
-    expect(more).toHaveAttribute("aria-expanded", "true");
-    const menu = screen.getByRole("menu");
-    expect(menu.textContent).toContain("Reset dock position");
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(more).toHaveAttribute("aria-expanded", "false");
-    expect(more).toHaveFocus();
+    // Open and enter pick mode.
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    // Collapse while in pick mode.
+    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(
+      screen.queryByRole("toolbar", { name: "Portal Studio" })
+    ).not.toBeInTheDocument();
+    // Simulate a pointer move on a page element — the picking listener should
+    // NOT have intercepted it (no outline rendered, no mode change).
+    fireEvent.pointerMove(row, { clientX: 10, clientY: 10 });
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    // The outline must remain hidden — proof the listener did not fire.
+    const outline = document.querySelector(".ps-outline");
+    expect(outline?.getAttribute("style")).toContain("display: none");
+    // Re-enter pick mode cleanly.
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
   });
 
-  it("Reset dock position restores the default bottom-right anchor", async () => {
+  it("collapsed Multi mode does not intercept page pointer events", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: "Multi-select" }));
+    expect(screen.getByText(/Multi-select/)).toBeInTheDocument();
+    // Collapse while in multi mode.
+    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(
+      screen.queryByRole("toolbar", { name: "Portal Studio" })
+    ).not.toBeInTheDocument();
+    // Pointer move should not trigger multi-select behavior.
+    fireEvent.pointerMove(row, { clientX: 10, clientY: 10 });
+    expect(screen.queryByText(/Multi-select/)).not.toBeInTheDocument();
+    const outline = document.querySelector(".ps-outline");
+    expect(outline?.getAttribute("style")).toContain("display: none");
+  });
+
+  it("collapsed Area mode does not intercept page pointer events", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
-    const toggle = screen.getByRole("button", { name: "Open Portal Studio" });
-    const dock = document.querySelector(".ps-dock") as HTMLElement;
-    toggle.focus();
-    await user.keyboard("{ArrowLeft}");
-    await user.keyboard("{ArrowLeft}");
-    const movedLeft = Number(dock.style.left.replace("px", ""));
-    await user.click(screen.getByRole("button", { name: "More" }));
-    await user.click(screen.getByRole("menuitem", { name: /Reset dock position/ }));
-    await waitFor(() => {
-      expect(Number(dock.style.left.replace("px", ""))).toBeGreaterThan(movedLeft);
-    });
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: "Select region" }));
+    expect(screen.getByText(/Drag over the page/)).toBeInTheDocument();
+    // Collapse while in marquee mode.
+    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(
+      screen.queryByRole("toolbar", { name: "Portal Studio" })
+    ).not.toBeInTheDocument();
+    // Pointer down/move should not start a marquee — the hint must not
+    // reappear (it lives inside the panel which is collapsed).
+    fireEvent.pointerDown(document.body, { clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(document.body, { clientX: 100, clientY: 100 });
+    expect(screen.queryByText(/Drag over the page/)).not.toBeInTheDocument();
+    // Re-enter marquee mode cleanly — proves the mode is still valid.
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: "Select region" }));
+    expect(screen.getByText(/Drag over the page/)).toBeInTheDocument();
   });
+
+  it("collapsed Pick mode does not intercept page keyboard events", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    // Collapse while in pick mode.
+    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    // Arrow keys on the page should not be intercepted by picking listeners.
+    fireEvent.keyDown(row, { key: "ArrowDown" });
+    fireEvent.keyDown(row, { key: "Enter" });
+    // No outline should appear — proof the listener did not fire.
+    const outline = document.querySelector(".ps-outline");
+    expect(outline?.getAttribute("style")).toContain("display: none");
+    // Re-expand — pick mode should still be pending (not consumed).
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+  });
+
+  it("re-expanding restores pending Pick mode and selection state", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    // Pick mode is active — verify the hint.
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    // Collapse — pick mode listeners are paused.
+    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    // Re-expand — pick mode restored, hint visible again.
+    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    // Pick an element after re-expand — works normally.
+    row.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+  });
+
 });

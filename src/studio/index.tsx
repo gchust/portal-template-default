@@ -55,10 +55,43 @@ const TOOLBAR_STYLES = `
   outline: 2px solid var(--ps-accent, #6366f1);
   outline-offset: 2px;
 }
-/* G01 dock (D-033 #2/#3, D-034 #6): the draggable unit is a compact
-   icon row — toggle + annotation badge + More menu. Position comes from
-   the toolbar's layout (inline left/top); buttons keep their own clicks;
-   the row background/badge are the drag surface. */
+/* Goal 01: launcher count badge (inside the toggle when collapsed or expanded). */
+.ps-launcher-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  padding: 0 4px;
+  background: var(--ps-accent, #6366f1);
+  color: var(--ps-primary-foreground, #ffffff);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+/* Goal 01: expanded command row — horizontal icon bar. */
+.ps-command-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+/* Goal 01: drag grip handle inside the command row. */
+.ps-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: #71717a;
+  cursor: grab;
+  border-radius: 4px;
+}
+.ps-drag-handle:hover { color: #fafafa; background: rgba(255,255,255,0.08); }
+/* G01 dock: compact draggable launcher row. */
 .ps-dock {
   position: fixed;
   display: inline-flex;
@@ -72,23 +105,7 @@ const TOOLBAR_STYLES = `
   z-index: 2147483000;
 }
 .ps-dock:active { cursor: grabbing; }
-.ps-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  border-radius: 9999px;
-  padding: 0 4px;
-  background: var(--ps-accent, #6366f1);
-  color: var(--ps-primary-foreground, #ffffff);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
-  pointer-events: none;
-}
-.ps-copy-button,
-.ps-more-button {
+.ps-copy-button {
   width: 28px;
   height: 28px;
   border-radius: 9999px;
@@ -99,7 +116,7 @@ const TOOLBAR_STYLES = `
   align-items: center;
   justify-content: center;
 }
-.ps-more-button:hover { color: #fafafa; background: #27272a; }
+
 .ps-copy-feedback {
   position: absolute;
   right: 0;
@@ -146,44 +163,7 @@ const TOOLBAR_STYLES = `
   color: #18181b;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
 }
-.ps-more-menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 6px);
-  min-width: 190px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: #18181b;
-  color: #fafafa;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  padding: 4px;
-  z-index: 2147483001;
-}
-/* Near the top edge the menu flips below the dock (F2). */
-.ps-more-menu-below {
-  bottom: auto;
-  top: calc(100% + 6px);
-}
-.ps-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-  text-align: left;
-}
-.ps-menu-item:hover { background: #27272a; }
-.ps-menu-item:focus-visible {
-  outline: 2px solid var(--ps-accent, #6366f1);
-  outline-offset: -1px;
-}
+
 .ps-panel {
   position: fixed;
   width: 320px;
@@ -195,12 +175,6 @@ const TOOLBAR_STYLES = `
   color: #fafafa;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   padding: 12px;
-}
-.ps-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
 }
 .ps-title { font-size: 13px; font-weight: 600; }
 .ps-icon-button {
@@ -381,18 +355,8 @@ const TOOLBAR_STYLES = `
 .ps-annotation-edit {
   min-height: 44px;
 }
-.ps-menu-item-danger {
-  color: #f87171;
-}
-.ps-menu-item-danger:hover {
-  background: rgba(248, 113, 113, 0.12);
-}
-:host-context([data-ps-theme="light"]) .ps-menu-item-danger {
-  color: #dc2626;
-}
-:host-context([data-ps-theme="light"]) .ps-menu-item-danger:hover {
-  background: rgba(220, 38, 38, 0.08);
-}
+
+
 :host-context([data-ps-theme="light"]) .ps-annotation-item {
   background: rgba(0, 0, 0, 0.05);
 }
@@ -412,25 +376,18 @@ const TOOLBAR_STYLES = `
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 :host-context([data-ps-theme="light"]) .ps-toggle:hover { background: #f4f4f5; }
-:host-context([data-ps-theme="light"]) .ps-copy-button,
-:host-context([data-ps-theme="light"]) .ps-more-button {
+:host-context([data-ps-theme="light"]) .ps-launcher-count {
+  background: var(--ps-accent, #6366f1);
+  color: #ffffff;
+}
+:host-context([data-ps-theme="light"]) .ps-drag-handle { color: #71717a; }
+:host-context([data-ps-theme="light"]) .ps-drag-handle:hover { color: #18181b; background: rgba(0,0,0,0.06); }
+:host-context([data-ps-theme="light"]) .ps-copy-button {
   border: 1px solid rgba(0, 0, 0, 0.14);
   background: #ffffff;
   color: #71717a;
 }
-:host-context([data-ps-theme="light"]) .ps-more-button:hover {
-  background: #f4f4f5;
-  color: #18181b;
-}
-:host-context([data-ps-theme="light"]) .ps-more-menu {
-  border: 1px solid rgba(0, 0, 0, 0.14);
-  background: #ffffff;
-  color: #18181b;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
-}
-:host-context([data-ps-theme="light"]) .ps-menu-item:hover {
-  background: #f4f4f5;
-}
+
 :host-context([data-ps-theme="light"]) .ps-panel {
   border: 1px solid rgba(0, 0, 0, 0.14);
   background: #ffffff;

@@ -102,10 +102,10 @@ export const starter = {
   "Full permissions": "全部权限",
   "studio.title": "Portal Studio",
   "studio.toggle.open": "打开 Portal Studio",
+  "studio.toggle.openCount": "打开 Portal Studio（{{count}} 条标注）",
   "studio.toggle.close": "关闭 Portal Studio",
   "studio.annotations": "标注",
-  "studio.more": "更多",
-  "studio.resetDock": "重置 dock 位置",
+
   "studio.close": "关闭",
   "studio.pick": "拾取元素",
   "studio.pickHint":
@@ -144,9 +144,7 @@ export const starter = {
   "studio.editAnnotation": "编辑评论",
   "studio.hideAnnotation": "隐藏",
   "studio.deleteAnnotation": "删除",
-  "studio.confirmClearAll": "清除全部标注？",
-  "studio.clearAll": "全部清除",
-  "studio.clearAllAnnotations": "清除全部标注",
+
   "studio.copy": "复制",
   "studio.copied": "已复制到剪贴板",
   "studio.copyManual": "手动复制",
@@ -154,7 +152,7 @@ export const starter = {
   "studio.copyEmpty": "暂无标注可复制。",
   "studio.completeAnnotation": "完成",
   "studio.completed": "已完成",
-  "studio.completeAll": "全部完成",
+
   "studio.marqueeHint": "在页面上拖拽以选中区域内的所有元素；Esc 取消。",
   "studio.capturedCount": "已捕获",
   "studio.elements": "个元素",
@@ -162,6 +160,8 @@ export const starter = {
   "studio.businessContext": "业务上下文",
   "studio.screenshot": "截图",
   "studio.selectedCount": "已选",
-  "studio.revisionStatus": "修订",
-  "studio.browserRevision": "浏览器",
+  "studio.collapse": "收起",
+  "studio.dragHint": "拖拽以重新定位",
+  "studio.showAllMarkers": "显示所有标记",
+  "studio.hideAllMarkers": "隐藏所有标记",
 } as const;

@@ -17,9 +17,8 @@ import {
   Copy,
   Eye,
   EyeOff,
-  MoreHorizontal,
+  GripVertical,
   Pencil,
-  RotateCcw,
   Trash2,
   Wrench,
   X,
@@ -56,8 +55,6 @@ import { isAnnotationUnresolved, resolveAnnotationTarget } from "./markers";
 import { newTaskId } from "./task-id";
 import {
   annotationDisplayNumber,
-  clearAnnotations,
-  completeAllAnnotations,
   completeAnnotation,
   groupToggleElement,
   normalizeTask,
@@ -103,8 +100,8 @@ const t = (key: string, fallback: string) =>
 
 const STACK_DEPTH = 4;
 const MAX_REGION_SCAN_ELEMENTS = 5000;
-/** Flip the More menu below the dock when less space remains above. */
-const MENU_FLIP_MIN_ABOVE = 60;
+/** Position threshold for above/below-anchored copy fallback dialog. */
+const COPY_FLIP_MIN_ABOVE = 60;
 /** Keepalive fetch bodies are limited to 64 KB by Chromium (D-043). */
 const KEEPALIVE_SAFE_BYTES = 60 * 1024;
 
@@ -236,9 +233,7 @@ export function StudioToolbar({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
-  const moreButtonRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   // Dock position (G01, D-033 #2): null = default bottom-right anchor;
   // persisted via localStorage portal-studio.dock (D-037).
   const [dockPosition, setDockPosition] = useState<DockPosition | null>(
@@ -272,7 +267,6 @@ export function StudioToolbar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [clearAllConfirm, setClearAllConfirm] = useState(false);
   // Copy state (G04, D-033 #12): "idle" | "copied" (aria-live feedback) |
   // "manual" (Clipboard unavailable — selectable textarea fallback).
   const [copyState, setCopyState] = useState<
@@ -291,17 +285,11 @@ export function StudioToolbar({
   const [hoverName, setHoverName] = useState<string | null>(null);
   const [selectionRects, setSelectionRects] = useState<DOMRect[]>([]);
   const [selectionCount, setSelectionCount] = useState(0);
-  const [revisionStatus, setRevisionStatus] = useState<{
-    sourceRevision?: string;
-    browserRevision?: number;
-    state?: string;
-  }>();
   const selectionRef = useRef<SelectionState>(EMPTY_SELECTION);
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const picking = mode.kind === "picking";
   const isMulti = mode.kind === "multi";
-  const isIdle = mode.kind === "idle";
   const isMarquee = mode.kind === "marquee";
 
   const viewport = viewportOf(window);
@@ -332,55 +320,7 @@ export function StudioToolbar({
     }
   }, []);
 
-  // Close the More menu on outside clicks and Esc (focus returns to
-  // More); Tab is contained within the menu (G05 a11y audit).
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setMenuOpen(false);
-        setClearAllConfirm(false);
-        moreButtonRef.current?.focus();
-        return;
-      }
-      if (event.key === "Tab") {
-        const menu = dockRef.current?.querySelector(".ps-more-menu");
-        if (!menu) return;
-        const focusable = findFocusable(menu as HTMLElement);
-        if (!focusable.length) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        const active = shadowActiveElement();
-        if (event.shiftKey) {
-          if (active === first || !menu.contains(active)) {
-            event.preventDefault();
-            last.focus();
-          }
-        } else if (active === last || !menu.contains(active)) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    const handlePointerDown = (event: PointerEvent | MouseEvent) => {
-      // composedPath() crosses the shadow boundary: events from inside the
-      // shadow are retargeted to the host, so a plain `contains(target)`
-      // check would treat menu-item clicks as outside clicks and unmount
-      // the menu before the item's click can fire (F1).
-      const path = event.composedPath?.() ?? [];
-      if (dockRef.current && path.includes(dockRef.current)) return;
-      setMenuOpen(false);
-      setClearAllConfirm(false);
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("mousedown", handlePointerDown);
-    };
-  }, [menuOpen]);
+
 
   const persistDockPosition = (next: DockPosition) => {
     setDockPosition(next);
@@ -407,8 +347,6 @@ export function StudioToolbar({
   const handleDockPointerDown = (
     event: React.PointerEvent<HTMLDivElement>
   ) => {
-    const target = event.target;
-    if (target instanceof Element && target.closest(".ps-more-menu")) return;
     // A new gesture: clear any suppression left by a PREVIOUS drag so the
     // next plain click still toggles the panel.
     didDragRef.current = false;
@@ -477,10 +415,7 @@ export function StudioToolbar({
     );
   };
 
-  const resetDockPosition = () => {
-    persistDockPosition(defaultDockPosition(viewport, dockWidth));
-    setMenuOpen(false);
-  };
+
 
   const refreshSelectionRects = useCallback(() => {
     setSelectionRects(
@@ -534,8 +469,10 @@ export function StudioToolbar({
 
   // Picking listeners (single/multi): pointermove builds the target stack,
   // plain click/Enter replaces, Shift+click/Shift+Enter toggles, Esc cancels.
+  // Capture listeners for single-pick mode: paused when the dock is collapsed
+  // (AC5: collapsed dock must not leave invisible capture listeners active).
   useEffect(() => {
-    if (!picking) return;
+    if (!picking || !open) return;
 
     const handlePointerMove = (event: PointerEvent) => {
       const target = event.target;
@@ -614,12 +551,13 @@ export function StudioToolbar({
       document.removeEventListener("keydown", handleKeyDown, true);
       document.removeEventListener("click", handleClick, true);
     };
-  }, [addOrReplace, cancelPicking, picking, refreshSelectionRects, updateOutline]);
+  }, [addOrReplace, cancelPicking, picking, open, refreshSelectionRects, updateOutline]);
 
   // Marquee listeners: pointerdown starts, pointermove updates the rect,
   // pointerup commits the region selection.
+  // Marquee listeners: paused when the dock is collapsed (AC5).
   useEffect(() => {
-    if (!isMarquee) return;
+    if (!isMarquee || !open) return;
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
@@ -676,7 +614,7 @@ export function StudioToolbar({
       document.removeEventListener("pointerup", handlePointerUp, true);
       document.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [commitDraft, isMarquee]);
+  }, [commitDraft, isMarquee, open]);
 
   // Load the persisted task (annotations + revision status; schema v4/v5
   // dual read, D-033 #17). Runs on mount (the dock badge shows the live
@@ -700,20 +638,6 @@ export function StudioToolbar({
           if (!normalized) return;
           taskRef.current = normalized;
           setAnnotations(normalized.annotations);
-          const revision = normalized.revision as
-            | {
-                sourceRevision?: string;
-                browserRevision?: number;
-                state?: string;
-              }
-            | undefined;
-          if (revision) {
-            setRevisionStatus({
-              sourceRevision: revision.sourceRevision,
-              browserRevision: revision.browserRevision,
-              state: revision.state,
-            });
-          }
         }
       )
       .catch(() => {
@@ -868,8 +792,9 @@ export function StudioToolbar({
   // subsequent clicks toggle elements in/out of the SAME annotation; Enter
   // finishes and opens the group comment editor; Esc cancels; keyboard
   // arrows move + Space toggles the focused target.
+  // Multi-select capture listeners: paused when the dock is collapsed (AC5).
   useEffect(() => {
-    if (!isMulti) return;
+    if (!isMulti || !open) return;
 
     const handlePointerMove = (event: PointerEvent) => {
       const target = event.target;
@@ -964,6 +889,7 @@ export function StudioToolbar({
     cancelMulti,
     commitMulti,
     isMulti,
+    open,
     refreshSelectionRects,
     toggleGroupTarget,
     updateOutline,
@@ -1220,11 +1146,7 @@ export function StudioToolbar({
       document.removeEventListener("keydown", handleKeyDown, true);
   }, [confirmDeleteId]);
 
-  const confirmClearAll = () => {
-    persistAnnotations(clearAnnotations());
-    setClearAllConfirm(false);
-    setMenuOpen(false);
-  };
+
 
   const saveTask = async () => {
     if (mode.kind !== "draft") return;
@@ -1394,16 +1316,6 @@ export function StudioToolbar({
   };
 
   /** Reset all capture-session state (selection, draft text, mode). */
-  const resetSession = useCallback(() => {
-    selectionRef.current = EMPTY_SELECTION;
-    setSelectionRects([]);
-    setSelectionCount(0);
-    setDraftComment("");
-    setMode({ kind: "idle" });
-    setOutlineRect(undefined);
-    setHoverName(null);
-  }, []);
-
   const panelVisible = open;
 
   return (
@@ -1420,7 +1332,12 @@ export function StudioToolbar({
           aria-label={
             open
               ? t("studio.toggle.close", "Close Portal Studio")
-              : t("studio.toggle.open", "Open Portal Studio")
+              : annotations.length > 0
+                ? t(
+                    "studio.toggle.openCount",
+                    "Open Portal Studio ({{count}} annotations)",
+                  ).replace("{{count}}", String(annotations.length))
+                : t("studio.toggle.open", "Open Portal Studio")
           }
           aria-expanded={open}
           onClick={() => {
@@ -1429,28 +1346,15 @@ export function StudioToolbar({
               return;
             }
             setOpen((current) => !current);
-            setMenuOpen(false);
-            resetSession();
           }}
           onKeyDown={handleToggleKeyDown}
         >
           <Wrench size={18} aria-hidden="true" />
-        </button>
-        <span
-          className="ps-badge"
-          role="status"
-          aria-label={t("studio.annotations", "Annotations")}
-        >
-          {annotations.length}
-        </span>
-        <button
-          ref={copyButtonRef}
-          type="button"
-          className="ps-icon-button ps-copy-button"
-          aria-label={t("studio.copy", "Copy")}
-          onClick={copyMarkdown}
-        >
-          <Copy size={16} aria-hidden="true" />
+          {annotations.length > 0 ? (
+            <span className="ps-launcher-count" aria-hidden="true">
+              {annotations.length > 99 ? "99+" : annotations.length}
+            </span>
+          ) : null}
         </button>
         {copyState === "copied" ? (
           <div className="ps-copy-feedback" role="status" aria-live="polite">
@@ -1460,7 +1364,7 @@ export function StudioToolbar({
         {copyState === "manual" ? (
           <div
             className={
-              position.y < MENU_FLIP_MIN_ABOVE
+              position.y < COPY_FLIP_MIN_ABOVE
                 ? "ps-copy-fallback ps-more-menu-below"
                 : "ps-copy-fallback"
             }
@@ -1492,98 +1396,6 @@ export function StudioToolbar({
             </button>
           </div>
         ) : null}
-        <button
-          ref={moreButtonRef}
-          type="button"
-          className="ps-icon-button ps-more-button"
-          aria-label={t("studio.more", "More")}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onClick={() => {
-            // Same post-drag click suppression as the toggle (F3): a drag
-            // that starts and ends on the More button must not toggle it.
-            if (didDragRef.current) {
-              didDragRef.current = false;
-              return;
-            }
-            setClearAllConfirm(false);
-            setMenuOpen((current) => !current);
-          }}
-        >
-          <MoreHorizontal size={16} aria-hidden="true" />
-        </button>
-        {menuOpen ? (
-          clearAllConfirm ? (
-            <div
-              className={
-                position.y < MENU_FLIP_MIN_ABOVE
-                  ? "ps-more-menu ps-more-menu-below"
-                  : "ps-more-menu"
-              }
-              role="alert"
-            >
-              <p className="ps-hint">
-                {t("studio.confirmClearAll", "Clear all annotations?")}
-              </p>
-              <div className="ps-actions">
-                <button
-                  type="button"
-                  className="ps-button ps-danger"
-                  onClick={confirmClearAll}
-                >
-                  {t("studio.clearAll", "Clear all")}
-                </button>
-                <button
-                  type="button"
-                  className="ps-button"
-                  onClick={() => setClearAllConfirm(false)}
-                >
-                  {t("studio.cancel", "Cancel")}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div
-              className={
-                position.y < MENU_FLIP_MIN_ABOVE
-                  ? "ps-more-menu ps-more-menu-below"
-                  : "ps-more-menu"
-              }
-              role="menu"
-            >
-              <button
-                type="button"
-                className="ps-menu-item"
-                role="menuitem"
-                onClick={resetDockPosition}
-              >
-                <RotateCcw size={14} aria-hidden="true" />
-                {t("studio.resetDock", "Reset dock position")}
-              </button>
-              <button
-                type="button"
-                className="ps-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  persistAnnotations(completeAllAnnotations(annotations));
-                  setMenuOpen(false);
-                }}
-              >
-                <CheckCircle2 size={14} aria-hidden="true" />
-                {t("studio.completeAll", "Complete all")}
-              </button>
-              <button
-                type="button"
-                className="ps-menu-item ps-menu-item-danger"
-                role="menuitem"
-                onClick={() => setClearAllConfirm(true)}
-              >
-                <Trash2 size={14} aria-hidden="true" />
-                {t("studio.clearAllAnnotations", "Clear all annotations")}
-              </button>
-            </div>
-          )
-        ) : null}
       </div>
 
       {panelVisible ? (
@@ -1593,16 +1405,85 @@ export function StudioToolbar({
           role="toolbar"
           aria-label={t("studio.title", "Portal Studio")}
         >
-          <div className="ps-panel-header">
-            <span className="ps-title">{t("studio.title", "Portal Studio")}</span>
+          {/* Command row (Goal 01): direct actions, no separate menu */}
+          <div className="ps-command-row">
+            <span className="ps-title" style={{ flex: 1 }}>
+              {t("studio.title", "Portal Studio")}
+            </span>
+            <div
+              className="ps-drag-handle"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t("studio.dragHint", "Drag to reposition")}
+              onPointerDown={handleDockPointerDown}
+              style={{ cursor: "grab" }}
+            >
+              <GripVertical size={14} aria-hidden="true" />
+            </div>
             <button
               type="button"
               className="ps-icon-button"
-              aria-label={t("studio.close", "Close")}
-              onClick={() => {
-                setOpen(false);
-                resetSession();
-              }}
+              aria-label={t("studio.pick", "Pick element")}
+              onClick={startPicking}
+            >
+              <Wrench size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="ps-icon-button"
+              aria-label={t("studio.multiSelect", "Multi-select")}
+              onClick={startMulti}
+            >
+              <CheckCircle2 size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="ps-icon-button"
+              aria-label={t("studio.selectRegion", "Select region")}
+              onClick={startMarquee}
+            >
+              <Eye size={14} aria-hidden="true" />
+            </button>
+            <button
+              ref={copyButtonRef}
+              type="button"
+              className="ps-icon-button"
+              aria-label={t("studio.copy", "Copy")}
+              onClick={copyMarkdown}
+            >
+              <Copy size={14} aria-hidden="true" />
+            </button>
+            {annotations.length > 0 ? (
+              <button
+                type="button"
+                className="ps-icon-button"
+                aria-label={
+                  annotations.some((a) => a.hidden)
+                    ? t("studio.showAllMarkers", "Show all markers")
+                    : t("studio.hideAllMarkers", "Hide all markers")
+                }
+                onClick={() => {
+                  const anyHidden = annotations.some((a) => a.hidden);
+                  persistAnnotations(
+                    annotations.map((a) => ({
+                      ...a,
+                      hidden: anyHidden ? false : true,
+                    }))
+                  );
+                }}
+              >
+                {annotations.some((a) => a.hidden) ? (
+                  <Eye size={14} aria-hidden="true" />
+                ) : (
+                  <EyeOff size={14} aria-hidden="true" />
+                )}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="ps-icon-button"
+              aria-label={t("studio.collapse", "Collapse")}
+              onClick={() => setOpen(false)}
             >
               <X size={14} aria-hidden="true" />
             </button>
@@ -2039,44 +1920,6 @@ export function StudioToolbar({
             </div>
           ) : null}
 
-          {isIdle ? (
-            <div className="ps-section">
-              {revisionStatus ? (
-                <p className="ps-meta" role="status" aria-live="polite">
-                  {t("studio.revisionStatus", "Revision")}:{" "}
-                  <code>
-                    {revisionStatus.sourceRevision?.slice(0, 8) ?? "?"}
-                  </code>{" "}
-                  · {t("studio.browserRevision", "browser")}{" "}
-                  <code>{revisionStatus.browserRevision ?? "?"}</code> ·{" "}
-                  {revisionStatus.state ?? "?"}
-                </p>
-              ) : null}
-              <div className="ps-actions ps-actions-start">
-                <button
-                  type="button"
-                  className="ps-button ps-primary"
-                  onClick={startPicking}
-                >
-                  {t("studio.pick", "Pick element")}
-                </button>
-                <button
-                  type="button"
-                  className="ps-button"
-                  onClick={startMulti}
-                >
-                  {t("studio.multiSelect", "Multi-select")}
-                </button>
-                <button
-                  type="button"
-                  className="ps-button"
-                  onClick={startMarquee}
-                >
-                  {t("studio.selectRegion", "Select region")}
-                </button>
-              </div>
-            </div>
-          ) : null}
         </div>
       ) : null}
 

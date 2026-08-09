@@ -1,11 +1,11 @@
 /**
  * Portal Studio — dock geometry & persistence (pure, testable).
  *
- * Goal 01 (D-033 #2/#3, D-034 #5/#6): the dock is a draggable unit
- * (toggle + badge + More button) whose top-left position is clamped to the
- * viewport and persisted across reloads. All geometry is pure math over
- * plain objects — no DOM — so clamp/move/layout/persistence are unit-
- * testable without a browser. The toolbar owns the single instance.
+ * Goal 01 (D-033 #2/#3, D-034 #5/#6): the dock is a single draggable
+ * launcher with annotation-count display, whose top-left position is
+ * clamped to the viewport and persisted across reloads. All geometry is
+ * pure math over plain objects — no DOM — so clamp/move/layout/persistence
+ * are unit-testable without a browser. The toolbar owns the single instance.
  *
  * Storage contract: `portal-studio.dock` = JSON `{x, y}`; invalid or
  * missing values fall back to the default bottom-right position; storage
@@ -16,11 +16,8 @@ export const DOCK_STORAGE_KEY = "portal-studio.dock";
 export const DEFAULT_DOCK_MARGIN = 16;
 export const TOGGLE_SIZE = 40;
 export const DOCK_ROW_GAP = 4;
-export const BADGE_MIN_WIDTH = 18;
-export const MORE_BUTTON_SIZE = 28;
-/** Fallback row width used before measurement (and in jsdom). */
-export const DEFAULT_DOCK_WIDTH =
-  TOGGLE_SIZE + DOCK_ROW_GAP + BADGE_MIN_WIDTH + DOCK_ROW_GAP + MORE_BUTTON_SIZE;
+/** Single launcher — no badge, no More button (Goal 01). */
+export const DEFAULT_DOCK_WIDTH = TOGGLE_SIZE;
 
 export const PANEL_WIDTH = 320;
 export const PANEL_GAP = 8;
