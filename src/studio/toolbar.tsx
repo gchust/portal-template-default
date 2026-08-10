@@ -15,6 +15,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { translate } from "@nocobase/portal-sdk/i18n";
 
 import { StudioAnnotationListPanel } from "./StudioAnnotationListPanel";
+import { StudioComposer } from "./StudioComposer";
 import { StudioShortcutHelp } from "./StudioShortcutHelp";
 import {
   StudioToolbarShell,
@@ -167,15 +168,6 @@ type ToolbarMode =
       };
     }
   | { kind: "saving" }
-  | {
-      kind: "saved";
-      taskId: string;
-      file?: string;
-      screenshot?: string;
-      sources: SourceCandidate[];
-      /** Non-blocking evidence warning (D-034 #2): the annotation is safe. */
-      notice?: string;
-    }
   | { kind: "error"; message: string };
 
 /**
@@ -280,6 +272,29 @@ export function StudioToolbar({
   // being created, and the persisted annotation list of the active task
   // (loaded on panel open, appended on save, cleared with the task).
   const [draftComment, setDraftComment] = useState("");
+  // Goal 02: the target-side composer keeps the last committed capture
+  // while the save is in flight (the `saving` mode has no capture field),
+  // plus a compact non-blocking toast and an inline composer error.
+  // Strict serial saving (round-3 finding): exactly ONE save in flight.
+  // saveTask re-entry is a no-op; capture-mode clicks and hotkeys are
+  // ignored while a save is pending, so a finishing save can never race a
+  // newer draft/session and the element/multi/area resume rule always
+  // applies to the save that was actually started.
+  const savingRef = useRef(false);
+  const lastDraftCaptureRef = useRef<{
+    elements: ElementCapture[];
+    businessContext: BusinessContextItem[];
+    region?: Region;
+  } | null>(null);
+  const [saveToast, setSaveToast] = useState<{
+    message: string;
+    tone: "ok" | "warning";
+  } | null>(null);
+  const [composerError, setComposerError] = useState<string | null>(null);
+  const [composerTick, setComposerTick] = useState(0);
+  const saveToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   // Re-resolution tick for the numbered marker overlay (route/scroll/
   // resize, D-033 #8).
@@ -330,6 +345,17 @@ export function StudioToolbar({
   const helpSurfaceNodeRef = useRef<HTMLDivElement | null>(null);
   const listSurfaceNodeRef = useRef<HTMLDivElement | null>(null);
   const [auxResizeTick, setAuxResizeTick] = useState(0);
+  // Goal 02: target-side composer — measured rendered height for genuine
+  // anchored placement, re-anchored on scroll/resize via composerTick.
+  const [composerHeight, setComposerHeight] = useState<number | null>(null);
+  const composerNodeRef = useRef<HTMLDivElement | null>(null);
+  const composerSurfaceRef = useCallback((node: HTMLDivElement | null) => {
+    composerNodeRef.current = node;
+    if (node) {
+      const height = node.offsetHeight;
+      setComposerHeight((current) => (current === height ? current : height));
+    }
+  }, []);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const markerButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const editorSavingRef = useRef(false);
@@ -908,7 +934,12 @@ export function StudioToolbar({
     });
     setOutlineRect(undefined);
     setHoverName(null);
-  }, []);
+    // Goal 02 A: the selected target stays highlighted while the composer
+    // is open — the .ps-selected outline renders from selectionRects, so
+    // the committed selection must be measured NOW (before, the highlight
+    // only appeared while picking).
+    refreshSelectionRects();
+  }, [refreshSelectionRects]);
 
   // Goal 01 v5 review P1: Pick is STRICTLY single-target. Shift is inert —
   // Shift+click / Shift+Enter commit the same single-element draft as a
@@ -954,6 +985,12 @@ export function StudioToolbar({
         return;
       }
       if (current.kind !== "picking") return;
+      // Keys pressed while focus is on the Studio's own controls must keep
+      // their native button behavior (F-4, same rule as multi-select): the
+      // marker button's Enter must open the marker editor, never re-enter
+      // capture. Esc above stays global (cancels picking).
+      const keyTarget = event.target;
+      if (keyTarget instanceof Element && isStudioElement(keyTarget)) return;
       // Keyboard picking without hover: seed the stack from the focused page
       // element so arrow keys and Enter work with no pointer input.
       const stack =
@@ -1075,9 +1112,9 @@ export function StudioToolbar({
   // count without opening the panel), when the panel opens, and after a
   // save so Copy always reflects the SERVER artifact (screenshot +
   // heartbeat merged) — byte-identical to the print CLI (G04 parity).
-  const refreshTask = useCallback(() => {
-    if (typeof fetch !== "function") return;
-    fetch(config.endpoint, {
+  const refreshTask = useCallback((): Promise<void> => {
+    if (typeof fetch !== "function") return Promise.resolve();
+    return fetch(config.endpoint, {
       headers: { "X-Portal-Studio-Token": config.token },
     })
       .then((response) => (response.ok ? response.json() : null))
@@ -1192,7 +1229,10 @@ export function StudioToolbar({
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => setMarkerTick((tick) => tick + 1), 80);
+      timer = setTimeout(() => {
+        setMarkerTick((tick) => tick + 1);
+        setComposerTick((tick) => tick + 1);
+      }, 80);
     };
     window.addEventListener("scroll", refresh, true);
     window.addEventListener("resize", refresh);
@@ -1229,7 +1269,7 @@ export function StudioToolbar({
   }, [open, refreshSelectionRects]);
 
 
-  const startPicking = () => {
+  const startPicking = useCallback(() => {
     // A new capture session always starts from a clean selection; stale
     // selections from a previous draft/save must never leak into it.
     selectionRef.current = EMPTY_SELECTION;
@@ -1248,7 +1288,7 @@ export function StudioToolbar({
       setMode({ kind: "picking", stack: [], index: 0 });
       updateOutline(undefined);
     }
-  };
+  }, [updateOutline]);
 
   /** True multi-select (D-033 #5): seed the group and enter multi mode. */
   const startMulti = () => {
@@ -1905,8 +1945,72 @@ export function StudioToolbar({
   const removeCompletedTriggerRef = useRef<HTMLButtonElement | null>(null);
 
 
+  /** Goal 02: compact non-blocking toast (auto-dismiss). */
+  const showSaveToast = useCallback(
+    (message: string, tone: "ok" | "warning") => {
+      setSaveToast({ message, tone });
+      if (saveToastTimerRef.current) {
+        clearTimeout(saveToastTimerRef.current);
+      }
+      saveToastTimerRef.current = setTimeout(() => {
+        setSaveToast(null);
+      }, 2600);
+    },
+    []
+  );
+
+  /**
+   * Goal 02 continuous loop: after a successful save, clear the transient
+   * selection/draft, show the compact toast and resume capture per the
+   * documented rules — Pick resumes a FRESH picking session, Multi resumes
+   * with an EMPTY group, Area returns to idle. No Done click.
+   */
+  const resumeAfterSave = useCallback(
+    (kind: "element" | "multi" | "region") => {
+      // Strict serial saving: capture-mode actions and hotkeys are ignored
+      // while a save is pending, so the mode is still "saving" here and
+      // this reset always belongs to THIS save. The continuous loop then
+      // resumes per the documented rule — element → fresh Pick session,
+      // multi → empty group, region → idle. No Done click.
+      selectionRef.current = EMPTY_SELECTION;
+      setSelectionRects([]);
+      setSelectionCount(0);
+      setDraftComment("");
+      lastDraftCaptureRef.current = null;
+      if (kind === "element") {
+        startPicking();
+      } else if (kind === "multi") {
+        setMode({ kind: "multi", stack: [], index: 0, group: [] });
+      } else {
+        setMode({ kind: "idle" });
+      }
+    },
+    [startPicking]
+  );
+
+  const finishSave = useCallback(
+    (kind: "element" | "multi" | "region", warning?: string) => {
+      showSaveToast(
+        warning ?? t("studio.savedToast", "Annotation saved"),
+        warning ? "warning" : "ok"
+      );
+      resumeAfterSave(kind);
+    },
+    [resumeAfterSave, showSaveToast]
+  );
+
   const saveTask = async () => {
     if (mode.kind !== "draft") return;
+    // Strict serialization: a second save while one is in flight is a
+    // no-op (the composer controls are disabled, but a hotkey/race must
+    // never start a second POST).
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+    // Keep the committed capture for the composer while the POST runs.
+    const draftCapture = mode.capture;
+    lastDraftCaptureRef.current = draftCapture;
+    setComposerError(null);
     setMode({ kind: "saving" });
     // Goal 06 taskId lifecycle (documented): the active taskId is created
     // with the FIRST annotation and preserved while annotations are added
@@ -1984,7 +2088,14 @@ export function StudioToolbar({
       // requires an existing active task). A capture failure therefore
       // NEVER loses or rolls back the annotation — it surfaces as a
       // non-blocking notice.
-      const response = await fetch(config.endpoint, {
+      // Goal 02 E / P2-3: the save POST is revision-aware. A 409 (the
+      // server moved between our last fetch and this save — our own
+      // screenshot merge, a CLI write, or a DELETE) uses the TYPED
+      // refresh/retry semantics: refresh from the server, retry the save
+      // ONCE against the fresh baseline, and only a second conflict shows
+      // explicit feedback with the draft and target preserved.
+      let retried = false;
+      let response = await fetch(config.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1992,28 +2103,57 @@ export function StudioToolbar({
         },
         body: JSON.stringify(task),
       });
-      const payload = (await response.json()) as PortalStudioSaveResult & {
+      let payload = (await response.json()) as PortalStudioSaveResult & {
         taskRevision?: number;
       };
       if (response.status === 409) {
-        // P2-3 review: another client (or the agent CLI/DELETE) moved the
-        // task between our last fetch and this save — never silently
-        // overwrite. Refresh and show explicit conflict feedback.
-        refreshTask();
-        setMode({
-          kind: "error",
-          message: t(
+        retried = true;
+        await refreshTask();
+        const retryBase = taskRef.current ?? task;
+        const retryTask: PortalStudioTask = {
+          ...retryBase,
+          annotations: fullyCompleted
+            ? [annotation]
+            : [...(retryBase.annotations ?? []), annotation],
+          ...(lastTaskRevisionRef.current !== null
+            ? { expectedTaskRevision: lastTaskRevisionRef.current }
+            : {}),
+        };
+        response = await fetch(config.endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Portal-Studio-Token": config.token,
+          },
+          body: JSON.stringify(retryTask),
+        });
+        payload = (await response.json()) as PortalStudioSaveResult & {
+          taskRevision?: number;
+        };
+      }
+      if (response.status === 409) {
+        // Second conflict — a genuine concurrent writer. Never silently
+        // overwrite: explicit conflict feedback INLINE in the composer;
+        // the draft and target stay preserved for a manual retry.
+        setMode({ kind: "draft", capture: draftCapture });
+        setComposerError(
+          t(
             "studio.conflict",
             "The task changed on the server — your change was not applied. Review the current state and retry."
-          ),
-        });
+          )
+        );
         return;
       }
       if (!response.ok || !payload.ok || !payload.taskId) {
-        setMode({
-          kind: "error",
-          message: sessionErrorMessage(response.status, payload.error),
-        });
+        // Goal 02 E: POST failure preserves the draft and target — the
+        // composer stays open with the inline error.
+        setMode({ kind: "draft", capture: draftCapture });
+        setComposerError(
+          `${t("studio.errorSave", "Unable to save")}: ${sessionErrorMessage(
+            response.status,
+            payload.error
+          )}`
+        );
         return;
       }
       if (typeof payload.taskRevision === "number") {
@@ -2021,10 +2161,16 @@ export function StudioToolbar({
       }
       // The annotation is durably persisted — reflect it in the overlay
       // and the dock badge immediately, and keep the last-known task for
-      // later mutation rewrites.
-      const savedAnnotations = fullyCompleted ? [annotation] : [...annotations, annotation];
+      // later mutation rewrites. After a retry the mirror starts from the
+      // SERVER's refreshed task (retryBase), never the stale local build.
+      const savedBase = retried && taskRef.current ? taskRef.current : task;
+      const savedAnnotations = fullyCompleted
+        ? [annotation]
+        : retried
+          ? [...(taskRef.current?.annotations ?? annotations), annotation]
+          : [...annotations, annotation];
       setAnnotations(savedAnnotations);
-      taskRef.current = { ...task, annotations: savedAnnotations };
+      taskRef.current = { ...savedBase, annotations: savedAnnotations };
 
       // Annotated screenshot (markers over the selected elements and the
       // region); the server validates, stores the PNG atomically, and
@@ -2043,17 +2189,15 @@ export function StudioToolbar({
       ];
       const shot = await captureViewportPng(markerRects);
       if (!shot) {
-        // D-034 #2: annotation already persisted — non-blocking notice.
-        setMode({
-          kind: "saved",
-          taskId: payload.taskId,
-          file: payload.file,
-          sources: payload.sourceCandidates ?? [],
-          notice: t(
+        // D-034 #2: annotation already persisted — screenshot failure is a
+        // WARNING toast, never a failed annotation (Goal 02 D).
+        finishSave(
+          kind,
+          t(
             "studio.captureFailed",
             "Annotation saved; the screenshot capture failed."
-          ),
-        });
+          )
+        );
         return;
       }
       const screenshotsEndpoint =
@@ -2076,16 +2220,13 @@ export function StudioToolbar({
       };
       if (!shotResponse.ok || !shotPayload.ok || !shotPayload.file) {
         // D-034 #2: same non-blocking semantics as a capture failure.
-        setMode({
-          kind: "saved",
-          taskId: payload.taskId,
-          file: payload.file,
-          sources: payload.sourceCandidates ?? [],
-          notice: t(
+        finishSave(
+          kind,
+          t(
             "studio.captureFailed",
             "Annotation saved; the screenshot capture failed."
-          ),
-        });
+          )
+        );
         return;
       }
 
@@ -2100,29 +2241,26 @@ export function StudioToolbar({
         };
       }
       // The server artifact now carries the merged screenshot + heartbeat;
-      // refresh so Copy matches the CLI byte-for-byte (G04 parity).
-      refreshTask();
-      setMode({
-        kind: "saved",
-        taskId: payload.taskId,
-        file: payload.file,
-        screenshot: shotPayload.file,
-        sources: payload.sourceCandidates ?? [],
-      });
+      // refresh so Copy matches the CLI byte-for-byte (G04 parity). The
+      // refresh is AWAITED: the screenshot merge bumps the server-owned
+      // taskRevision, so the continuous loop's NEXT save must post with
+      // the refreshed baseline or it would 409 on its own evidence.
+      await refreshTask();
+      finishSave(kind);
     } catch (error) {
-      setMode({
-        kind: "error",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      // Goal 02 E: failure preserves the draft and target.
+      setMode({ kind: "draft", capture: draftCapture });
+      setComposerError(
+        `${t("studio.errorSave", "Unable to save")}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
-  };
-
-  const resetAfterSave = () => {
-    selectionRef.current = EMPTY_SELECTION;
-    setSelectionRects([]);
-    setSelectionCount(0);
-    setDraftComment("");
-    setMode({ kind: "idle" });
+    } finally {
+      // The lock is released on EVERY exit path (success, failure,
+      // conflict) so the next save can start.
+      savingRef.current = false;
+    }
   };
 
   // -----------------------------------------------------------------------
@@ -2198,7 +2336,14 @@ export function StudioToolbar({
 
       // Capture actions (pick/multi/area): expand first if collapsed,
       // dismiss any auxiliary panel, then safely exit the previous
-      // capture and enter the new mode.
+      // capture and enter the new mode. Strict serial saving: the
+      // corresponding global hotkeys are IGNORED while a save is pending.
+      if (
+        savingRef.current &&
+        (action === "pick" || action === "multi" || action === "area")
+      ) {
+        return;
+      }
       setOpen(true);
       setAuxPanel("none");
 
@@ -2219,7 +2364,83 @@ export function StudioToolbar({
   // hidden while an auxiliary panel (Help/List) is open — the underlying
   // mode/draft state is preserved and resumes when the panel closes.
   const statusPanelVisible =
-    open && auxPanel === "none" && mode.kind !== "idle";
+    open &&
+    auxPanel === "none" &&
+    (mode.kind === "picking" ||
+      mode.kind === "multi" ||
+      mode.kind === "marquee");
+
+  // Goal 02: target-side composer placement — anchored to the captured
+  // target (first element) or the region rect through the shared
+  // viewport-aware helper; recomputed on scroll/resize (composerTick) and
+  // on the measured rendered height (content changes via ResizeObserver).
+  const composerAnchorRect = (() => {
+    if (mode.kind !== "draft" && mode.kind !== "saving") return null;
+    const capture =
+      mode.kind === "draft"
+        ? mode.capture
+        : lastDraftCaptureRef.current;
+    if (!capture) return null;
+    if (capture.region) {
+      return rectFrom({
+        left: capture.region.x,
+        top: capture.region.y,
+        width: capture.region.width,
+        height: capture.region.height,
+      });
+    }
+    const target = selectionRef.current.elements[0];
+    if (!target) return null;
+    // G02 P2: the composer anchors to the captured element's bounding
+    // box, but when that element is a table-cell descendant (the common
+    // page-annotation case) it anchors to the CONTAINING ROW — a
+    // cell-content-sized rect would place the composer below the text and
+    // OVERLAP the row's lower half. The row rect keeps the composer
+    // cleanly below the whole target row. The annotation capture itself
+    // is unchanged (still the deepest element).
+    const rowAncestor = target.closest?.("tr");
+    const rect = (rowAncestor ?? target).getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return null;
+    return rectFrom(rect);
+  })();
+  void composerTick;
+  const composerActive = mode.kind === "draft" || mode.kind === "saving";
+  const composerPlacement =
+    composerActive
+      ? resolveAnchoredPlacement({
+          // Goal 02: anchor to the captured target/region rect; fall back
+          // to a viewport-safe position when the target has no measurable
+          // rect (removed element, jsdom) so the composer stays reachable.
+          trigger: composerAnchorRect ?? {
+            left: position.x + dockWidth - 140,
+            top: position.y,
+            right: position.x + dockWidth - 40,
+            bottom: position.y + 48,
+            width: 100,
+            height: 48,
+          },
+          viewport: viewportOf(window),
+          width: 300,
+          maxHeight: Math.max(180, Math.round(window.innerHeight * 0.45)),
+          surfaceHeight: composerHeight ?? undefined,
+        })
+      : null;
+  useEffect(() => {
+    const node = composerNodeRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      const height =
+        entry?.borderBoxSize?.[0]?.blockSize ?? entry?.contentRect.height;
+      if (typeof height === "number" && height > 0) {
+        setComposerHeight((current) =>
+          current === Math.round(height) ? current : Math.round(height)
+        );
+      }
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [composerActive]);
 
   // Help/List panel placements: anchored to their trigger buttons, with a
   // dock-row fallback before the expanded bar has been measured.
@@ -2315,6 +2536,9 @@ export function StudioToolbar({
           onExpand={() => setOpen(true)}
           onCollapse={collapseToolbar}
           onPick={() => {
+            // Strict serial saving: capture-mode switches are IGNORED
+            // while a save is pending — the in-flight save owns the mode.
+            if (savingRef.current) return;
             setAuxPanel("none");
             // Clicking the active Pick cancels it (contract §6).
             if (mode.kind === "picking") {
@@ -2324,6 +2548,7 @@ export function StudioToolbar({
             }
           }}
           onMulti={() => {
+            if (savingRef.current) return;
             setAuxPanel("none");
             // Clicking the active Multi cancels it.
             if (mode.kind === "multi") {
@@ -2333,6 +2558,7 @@ export function StudioToolbar({
             }
           }}
           onArea={() => {
+            if (savingRef.current) return;
             setAuxPanel("none");
             // Clicking the active Area cancels it.
             if (mode.kind === "marquee") {
@@ -2463,6 +2689,48 @@ export function StudioToolbar({
         />
       ) : null}
 
+      {/* Goal 02: compact non-blocking save toast — replaces the technical
+          Saved panel. Screenshot failures are warning toasts. */}
+      {saveToast ? (
+        <div
+          className={
+            saveToast.tone === "warning"
+              ? "ps-save-toast ps-save-toast-warning"
+              : "ps-save-toast"
+          }
+          role="status"
+          aria-live="polite"
+        >
+          {saveToast.message}
+        </div>
+      ) : null}
+
+      {/* Goal 02: target-side composer — the one small form beside the
+          captured target/group/region; the horizontal toolbar never hosts
+          it. Hidden while the toolbar is collapsed (draft preserved). */}
+      {open &&
+      (mode.kind === "draft" || mode.kind === "saving") ? (
+        <StudioComposer
+          t={t}
+          style={composerPlacement ?? { display: "none" }}
+          value={draftComment}
+          onChange={setDraftComment}
+          onSave={saveTask}
+          onCancel={() => {
+            selectionRef.current = EMPTY_SELECTION;
+            setSelectionRects([]);
+            setSelectionCount(0);
+            setDraftComment("");
+            setComposerError(null);
+            lastDraftCaptureRef.current = null;
+            setMode({ kind: "idle" });
+          }}
+          saving={mode.kind === "saving"}
+          error={composerError}
+          surfaceRef={composerSurfaceRef}
+        />
+      ) : null}
+
       {statusPanelVisible ? (
         <div className="ps-status-panel" style={layout.panel}>
 
@@ -2543,170 +2811,6 @@ export function StudioToolbar({
               </button>
             </div>
           ) : null}
-
-          {mode.kind === "draft" ? (
-            <div className="ps-section">
-              <p className="ps-meta">
-                {t("studio.capturedCount", "Captured")}:{" "}
-                <strong>{mode.capture.elements.length}</strong>{" "}
-                {t("studio.elements", "element(s)")}
-                {mode.capture.region
-                  ? ` — ${t("studio.regionLabel", "region")} ${mode.capture.region.width}×${mode.capture.region.height}`
-                  : ""}
-              </p>
-              {mode.capture.businessContext.length ? (
-                <p className="ps-meta">
-                  {t("studio.businessContext", "Business context")}:{" "}
-                  {mode.capture.businessContext.length}
-                </p>
-              ) : null}
-              <p className="ps-label">{t("studio.component", "Components")}</p>
-              <ul className="ps-list">
-                {mode.capture.elements.length ? (
-                  mode.capture.elements.slice(0, 10).map((capture, index) => {
-                    const component = capture.componentCandidates.find(
-                      (candidate) => candidate.name
-                    )?.name;
-                    return (
-                      <li key={index}>
-                        <code>
-                          {capture.tagName}
-                          {component ? ` · ${component}` : ""}
-                        </code>
-                      </li>
-                    );
-                  })
-                ) : (
-                  <li>
-                    {t(
-                      "studio.noComponent",
-                      "No React component detected (DOM fallback)"
-                    )}
-                  </li>
-                )}
-              </ul>
-              <p className="ps-hint">
-                {t(
-                  "studio.sourcePending",
-                  "Source candidates are resolved by the dev server when the task is saved."
-                )}
-              </p>
-              <label className="ps-label" htmlFor="ps-instruction">
-                {t("studio.instruction", "Annotation comment")}
-              </label>
-              <textarea
-                id="ps-instruction"
-                className="ps-textarea"
-                rows={3}
-                value={draftComment}
-                onChange={(event) => setDraftComment(event.target.value)}
-                onKeyDown={(event) => {
-                  // D-034 #1: plain Enter inserts a newline; Ctrl/Cmd+Enter
-                  // saves the annotation.
-                  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                    event.preventDefault();
-                    saveTask();
-                  }
-                }}
-                placeholder={t(
-                  "studio.instructionPlaceholder",
-                  "Describe the change the agent should make… Ctrl+Enter saves."
-                )}
-              />
-              <div className="ps-actions">
-                <button
-                  type="button"
-                  className="ps-button"
-                  onClick={() => setMode({ kind: "idle" })}
-                >
-                  {t("studio.cancel", "Cancel")}
-                </button>
-                <button
-                  type="button"
-                  className="ps-button ps-primary"
-                  onClick={saveTask}
-                >
-                  {t("studio.save", "Save task")}
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {mode.kind === "saving" ? (
-            <div className="ps-section" role="status" aria-live="polite">
-              <p className="ps-hint">
-                {t("studio.saving", "Saving task…")}
-              </p>
-            </div>
-          ) : null}
-
-          {mode.kind === "saved" ? (
-            <div className="ps-section" role="status" aria-live="polite">
-              <p className="ps-ok">
-                {t("studio.saved", "Task saved")} —{" "}
-                <code>{mode.taskId}</code>
-              </p>
-              {mode.notice ? (
-                <p className="ps-hint" role="alert">
-                  {mode.notice}
-                </p>
-              ) : null}
-              {mode.file ? (
-                <p className="ps-meta">
-                  {t("studio.savedFile", "File")}: <code>{mode.file}</code>
-                </p>
-              ) : null}
-              {mode.screenshot ? (
-                <p className="ps-meta">
-                  {t("studio.screenshot", "Screenshot")}:{" "}
-                  <code>{mode.screenshot}</code>
-                </p>
-              ) : null}
-              {mode.sources.length ? (
-                <>
-                  <p className="ps-label">
-                    {t("studio.sourceResolved", "Resolved source candidates")}
-                  </p>
-                  <ul className="ps-list">
-                    {mode.sources.slice(0, 6).map((source) => (
-                      <li key={`${source.file}:${source.line ?? ""}`}>
-                        <code>
-                          {source.file}
-                          {typeof source.line === "number"
-                            ? `:${source.line}`
-                            : ""}
-                        </code>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : null}
-              <button
-                type="button"
-                className="ps-button ps-primary"
-                onClick={resetAfterSave}
-              >
-                {t("studio.done", "Done")}
-              </button>
-            </div>
-          ) : null}
-
-          {mode.kind === "error" ? (
-            <div className="ps-section" role="alert">
-              <p className="ps-error">
-                {t("studio.errorSave", "Unable to save task")}:{" "}
-                {mode.message}
-              </p>
-              <button
-                type="button"
-                className="ps-button"
-                onClick={() => setMode({ kind: "idle" })}
-              >
-                {t("studio.cancel", "Cancel")}
-              </button>
-            </div>
-          ) : null}
-
         </div>
       ) : null}
 

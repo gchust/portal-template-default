@@ -108,6 +108,41 @@ const openList = async (user: ReturnType<typeof userEvent.setup>) => {
 const hideItemButton = () =>
   screen.getByRole("button", { name: "Hide", exact: true });
 
+/** Goal 02: the target-side composer dialog shown beside the target. */
+const composer = () => screen.getByRole("dialog", { name: "Annotation" });
+const composerTextarea = () =>
+  within(composer()).getByRole("textbox", { name: "Annotation comment" });
+const composerSave = () =>
+  within(composer()).getByRole("button", { name: "Save", exact: true });
+
+/** Goal 02: continuous loop — click Pick only when NOT already picking
+ *  (Pick resumes automatically after a successful save). */
+const startPickIfNeeded = async (
+  user: ReturnType<typeof userEvent.setup>
+) => {
+  // Pick resumes automatically after a successful save (Goal 02) — check
+  // the button's aria-pressed, NOT the status hint (the hint hides while
+  // an auxiliary panel is open even though picking stays active). When an
+  // auxiliary panel is open, picking is suspended: re-entering via the
+  // button closes the panel and resumes the session.
+  const pick = screen.getByRole("button", { name: "Pick element" });
+  const list = screen.getByRole("button", { name: "Annotation list" });
+  const help = screen.getByRole("button", { name: "Keyboard shortcuts" });
+  if (pick.getAttribute("aria-pressed") !== "true") {
+    await user.click(pick);
+  } else {
+    // Picking is already active. If an auxiliary panel is open the session
+    // is merely suspended — close the panel via its own toggle instead of
+    // clicking Pick (which would CANCEL the active session).
+    if (list.getAttribute("aria-expanded") === "true") {
+      await user.click(list);
+    }
+    if (help.getAttribute("aria-expanded") === "true") {
+      await user.click(help);
+    }
+  }
+};
+
 beforeEach(async () => {
   vi.mocked(
     (await import("@/studio/screenshot")).captureViewportPng
@@ -199,17 +234,18 @@ describe("StudioToolbar", () => {
     await openAndPick(user, row);
     await user.keyboard("{Enter}");
 
-    expect(screen.getByText(/Captured/)).toBeInTheDocument();
-    expect(screen.getByText("tr")).toBeInTheDocument();
+    // Goal 02: the target-side composer opens beside the target — no
+    // technical Draft screen.
+    expect(composer()).toBeInTheDocument();
 
     await user.type(
-      screen.getByLabelText("Annotation comment"),
+      composerTextarea(),
       "Increase padding"
     );
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.click(composerSave());
 
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
     const postCalls = fetchMock.mock.calls.filter(
       (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
@@ -262,17 +298,17 @@ describe("StudioToolbar", () => {
     await openAndPick(user, a);
     // Shift+Enter behaves exactly like plain Enter: ONE element draft.
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(screen.getByText(/Captured/)).toBeInTheDocument();
-    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    expect(composer()).toBeInTheDocument();
     // The draft is committed — no additive "Selected" counter path exists.
     expect(screen.queryByText(/Selected/)).not.toBeInTheDocument();
 
     // Re-enter picking: Shift+click must NOT toggle the second element in.
+    await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     await user.click(b, { shiftKey: true });
-    expect(screen.getByText(/Captured/)).toBeInTheDocument();
-    // Strict single: the draft carries exactly one captured element.
-    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    expect(composer()).toBeInTheDocument();
+    // No additive counter anywhere.
+    expect(screen.queryByText(/Selected/)).not.toBeInTheDocument();
     expect(screen.queryByText("2", { selector: "strong" })).not.toBeInTheDocument();
   });
 
@@ -302,46 +338,52 @@ describe("StudioToolbar", () => {
     await openAndPick(user, row);
     await user.keyboard("{Enter}");
     await user.type(
-      screen.getByLabelText("Annotation comment"),
+      composerTextarea(),
       "do it"
     );
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.click(composerSave());
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
 
-    // Close and reopen the panel: expand/collapse is presentation-only (Goal 01),
-    // so the stale selection from the saved round persists. The saved mode is
-    // NOT picking, so one Pick click starts a fresh session, then Shift+Enter
-    // (strict single) commits a draft carrying exactly ONE element.
+    // Goal 02 continuous loop: after the save, Pick RESUMES with a clean
+    // selection. Close and reopen: presentation-only — the resumed Pick
+    // session persists, so no Pick click is needed (clicking would
+    // cancel it); a Shift+Enter pick commits exactly ONE element.
     await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
     row.focus();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(screen.getByText(/Captured/)).toBeInTheDocument();
-    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    expect(composer()).toBeInTheDocument();
   });
 
-  it("clears the selection when closing the panel mid-draft", async () => {
+  it("collapsing mid-draft preserves the composer draft; cancel clears it", async () => {
     const user = userEvent.setup();
     const row = makePageElement("Alice", "row-a");
     render(<StudioToolbar config={config} />);
     await openAndPick(user, row);
     await user.keyboard("{Enter}");
-    expect(screen.getByText(/Captured/)).toBeInTheDocument();
+    expect(composer()).toBeInTheDocument();
+    await user.type(composerTextarea(), "keep draft");
 
-    // Close the panel while a draft is pending, then reopen:
-    // expand/collapse is presentation-only (Goal 01), so the draft persists.
-    // The pending mode is DRAFT (not picking), so one Pick click starts a
-    // fresh session — a Shift+Enter pick commits exactly ONE element.
+    // Goal 02 A: collapse hides the composer but PRESERVES the non-empty
+    // draft and target; re-expand restores both.
     await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    expect(screen.queryByRole("dialog", { name: "Annotation" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    expect(composer()).toBeInTheDocument();
+    expect((composerTextarea() as HTMLTextAreaElement).value).toBe(
+      "keep draft"
+    );
+    // Esc cancels: the composer closes and the draft is cleared.
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Annotation" })).not.toBeInTheDocument();
+    // A fresh pick commits exactly ONE element.
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(screen.getByText(/Captured/)).toBeInTheDocument();
-    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    expect(composer()).toBeInTheDocument();
   });
 
   it("resets the selection after a successful save", async () => {
@@ -371,21 +413,36 @@ describe("StudioToolbar", () => {
     await openAndPick(user, row);
     await user.keyboard("{Enter}");
     await user.type(
-      screen.getByLabelText("Annotation comment"),
+      composerTextarea(),
       "do it"
     );
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.click(composerSave());
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Done" }));
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
-    // The stale selection must be gone: a fresh Shift+Enter pick commits a
-    // draft with exactly ONE element (never an accumulated counter).
+    // Goal 02 continuous loop: Pick RESUMES with a clean session — a
+    // fresh Shift+Enter pick opens the composer for a SECOND annotation.
     row.focus();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(screen.getByText(/Captured/)).toBeInTheDocument();
-    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    expect(composer()).toBeInTheDocument();
+    await user.type(composerTextarea(), "second");
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    // Both saves persisted, each with exactly one element.
+    const taskPosts = fetchMock.mock.calls.filter(
+      (call) =>
+        (call[1] as { method?: string } | undefined)?.method === "POST" &&
+        String(call[0]).includes("/tasks")
+    );
+    expect(taskPosts).toHaveLength(2);
+    for (const call of taskPosts) {
+      const payload = JSON.parse((call[1] as { body: string }).body) as {
+        annotations: Array<{ elements: unknown[] }>;
+      };
+      expect(payload.annotations.at(-1)!.elements).toHaveLength(1);
+    }
   });
 
   it("removed the Clear-task normal path (G04, D-033 #13)", async () => {
@@ -424,12 +481,13 @@ describe("StudioToolbar", () => {
     render(<StudioToolbar config={config} />);
     await openAndPick(user, row);
     await user.keyboard("{Enter}");
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.type(composerTextarea(), "doomed");
+    await user.click(composerSave());
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(within(composer()).getByRole("alert")).toBeInTheDocument();
     });
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Unable to save task"
+    expect(within(composer()).getByRole("alert").textContent).toContain(
+      "Unable to save"
     );
   });
 
@@ -515,7 +573,7 @@ describe("StudioToolbar", () => {
     expect((textarea as HTMLTextAreaElement).value).toBe("line one\n");
     await user.keyboard("{Control>}{Enter}{/Control}");
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
     const taskPost = fetchMock.mock.calls.find(
       (call) =>
@@ -551,14 +609,13 @@ describe("StudioToolbar", () => {
       screen.getByLabelText("Annotation comment"),
       "keep me"
     );
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.click(composerSave());
+    // The warning toast is non-blocking; the annotation is NOT rolled back.
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(
+        screen.getByText("Annotation saved; the screenshot capture failed.")
+      ).toBeInTheDocument();
     });
-    // The notice is non-blocking; the annotation is NOT rolled back.
-    expect(
-      screen.getByRole("alert").textContent
-    ).toContain("screenshot capture failed");
     // The annotation is retained — visible in the annotation list.
     await openList(user);
     expect(
@@ -610,9 +667,9 @@ describe("StudioToolbar", () => {
       screen.getByLabelText("Annotation comment"),
       "group comment"
     );
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.click(composerSave());
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
     const taskPost = fetchMock.mock.calls.find(
       (call) =>
@@ -1607,10 +1664,10 @@ describe("StudioToolbar", () => {
     // Re-expand — pick mode restored, hint visible again.
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
-    // Pick an element after re-expand — works normally.
+    // Pick an element after re-expand — the target-side composer opens.
     row.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    expect(composer()).toBeInTheDocument();
   });
 
   // ---- Goal 02: hotkey integration tests ----
@@ -1717,7 +1774,7 @@ describe("StudioToolbar", () => {
     render(<StudioToolbar config={config} />);
     // Open, pick an element to enter draft mode (textarea visible).
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
     // Now in draft mode — textarea is visible.
@@ -1795,13 +1852,13 @@ describe("StudioToolbar", () => {
     render(<StudioToolbar config={config} />);
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Pick and save an annotation.
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
-    await user.type(screen.getByLabelText("Annotation comment"), "saved note");
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.type(composerTextarea(), "saved note");
+    await user.click(composerSave());
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
     // Switch to multi via hotkey — saved annotation persists.
     fireEvent.keyDown(document, { key: "m", ctrlKey: true, altKey: true });
@@ -1818,7 +1875,7 @@ describe("StudioToolbar", () => {
     render(<StudioToolbar config={config} />);
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Enter pick mode and pick an element → draft mode with comment textarea.
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
     const textarea = screen.getByLabelText("Annotation comment");
@@ -3166,16 +3223,15 @@ describe("StudioToolbar", () => {
     render(<StudioToolbar config={config} />);
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     const saveOne = async (comment: string) => {
-      await user.click(screen.getByRole("button", { name: "Pick element" }));
+      await startPickIfNeeded(user);
       row.focus();
       await user.keyboard("{Enter}");
-      await user.type(screen.getByLabelText("Annotation comment"), comment);
-      await user.click(screen.getByRole("button", { name: "Save task" }));
+      await user.type(composerTextarea(), comment);
+      await user.click(composerSave());
       await waitFor(() => {
-        expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+        expect(screen.getByText("Annotation saved")).toBeInTheDocument();
       });
-      await user.click(screen.getByRole("button", { name: "Done" }));
-    };
+      };
     // Annotation 1 → taskId A.
     await saveOne("first");
     expect(postedTaskIds).toHaveLength(1);
@@ -3271,11 +3327,11 @@ describe("StudioToolbar", () => {
       expect(screen.getByText("existing")).toBeInTheDocument();
     });
     // Save a new annotation — the POST must carry the last-known revision.
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
-    await user.type(screen.getByLabelText("Annotation comment"), "conflicted save");
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.type(composerTextarea(), "conflicted save");
+    await user.click(composerSave());
     await waitFor(() => {
       expect(createRevision).toBe(2);
     });
@@ -3283,7 +3339,7 @@ describe("StudioToolbar", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/changed on the server/);
     });
-    expect(screen.queryByText(/Task saved/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Annotation saved")).not.toBeInTheDocument();
   });
 
   // ---- Goal 06: 409 revision conflict — refresh, retry once, feedback ----
@@ -3474,23 +3530,22 @@ describe("StudioToolbar", () => {
     render(<StudioToolbar config={config} />);
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Annotation 1.
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
-    await user.type(screen.getByLabelText("Annotation comment"), "first");
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.type(composerTextarea(), "first");
+    await user.click(composerSave());
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Done" }));
     // Annotation 2 — same active task, SAME taskId.
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
-    await user.type(screen.getByLabelText("Annotation comment"), "second");
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.type(composerTextarea(), "second");
+    await user.click(composerSave());
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
     expect(postedTaskIds).toHaveLength(2);
     expect(postedTaskIds[0]).toBe(postedTaskIds[1]);
@@ -3550,15 +3605,14 @@ describe("StudioToolbar", () => {
     render(<StudioToolbar config={config} />);
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Annotation 1.
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
-    await user.type(screen.getByLabelText("Annotation comment"), "one");
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.type(composerTextarea(), "one");
+    await user.click(composerSave());
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Done" }));
     // Complete the only open annotation → task fully completed (the typed
     // mutate flush must settle so taskRef reflects the completed task).
     await openList(user);
@@ -3571,11 +3625,11 @@ describe("StudioToolbar", () => {
       expect(postedTaskBodies.length).toBeGreaterThanOrEqual(1);
     });
     // Annotation 2 — a NEW batch → fresh taskId, only the new annotation.
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
-    await user.type(screen.getByLabelText("Annotation comment"), "batch two");
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.type(composerTextarea(), "batch two");
+    await user.click(composerSave());
     await waitFor(() => {
       // save1 (taskId A) + save2 (new batch, taskId B); the Complete went
       // through the typed mutate endpoint (no new task POST).
@@ -3649,15 +3703,14 @@ describe("StudioToolbar", () => {
     render(<StudioToolbar config={config} />);
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Annotation 1.
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
-    await user.type(screen.getByLabelText("Annotation comment"), "one");
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.type(composerTextarea(), "one");
+    await user.click(composerSave());
     await waitFor(() => {
-      expect(screen.getByText(/Task saved/)).toBeInTheDocument();
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Done" }));
     const taskIdA = postedTaskIds[0];
     // Complete the only open annotation → the sticky task-level
     // completedAt is stamped by the typed mutate flush.
@@ -3682,11 +3735,11 @@ describe("StudioToolbar", () => {
     // fully completed, so the next batch must start a fresh taskId
     // (regression: the emptied task used to reuse the old id).
     expect(currentTask?.completedAt).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await startPickIfNeeded(user);
     row.focus();
     await user.keyboard("{Enter}");
-    await user.type(screen.getByLabelText("Annotation comment"), "batch after remove");
-    await user.click(screen.getByRole("button", { name: "Save task" }));
+    await user.type(composerTextarea(), "batch after remove");
+    await user.click(composerSave());
     await waitFor(() => {
       expect(postedTaskIds.length).toBeGreaterThanOrEqual(2);
     });
@@ -5095,7 +5148,914 @@ describe("StudioToolbar", () => {
     expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
     row.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByText(/Captured/)).toBeInTheDocument();
+    expect(composer()).toBeInTheDocument();
   });
 
+});
+
+// =====================================================================
+// Goal 02 — Fast Target-Side Composer and Continuous Annotation Loop
+// (proofs G02-01 .. G02-13; spec:
+// /root/goals/portal-studio-horizontal-toolbar-v5/02-goal-fast-local-annotation-flow.md)
+// =====================================================================
+
+describe("Goal 02 — fast target-side composer and continuous loop", () => {
+  /** Stateful G02 mock: the task POST succeeds and the GET returns the
+   *  saved task so markers and the List refresh immediately. */
+  const g02SaveMocks = () => {
+    let currentTask: {
+      taskId: string;
+      annotations: Array<{ status: string; comment: string }>;
+    } | null = null;
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse(currentTask ? { task: currentTask } : { task: null }),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init) => {
+          const task = JSON.parse((init?.body ?? "{}") as string);
+          currentTask = task;
+          return jsonResponse({
+            ok: true,
+            taskId: task.taskId,
+            sourceCandidates: [],
+          });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({
+            ok: true,
+            file: "screenshots/g02.png",
+            width: 100,
+            height: 50,
+          }),
+      },
+    ]);
+    return { fetchMock };
+  };
+
+  const taskPosts = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.filter(
+      (call) =>
+        (call[1] as { method?: string } | undefined)?.method === "POST" &&
+        String(call[0]).includes("/tasks")
+    );
+
+  it("G02-01: a target click opens the local composer (autofocus, Save/Cancel, clicks inside never capture)", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-01");
+    const { fetchMock } = g02SaveMocks();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    // POINTER capture: clicking the target commits it and opens the
+    // composer beside it — no keyboard required.
+    (row as HTMLElement & { getBoundingClientRect(): DOMRect }).getBoundingClientRect = () =>
+      ({
+        left: 100,
+        top: 200,
+        width: 200,
+        height: 40,
+        right: 300,
+        bottom: 240,
+        x: 100,
+        y: 200,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    await user.click(row);
+    expect(composer()).toBeInTheDocument();
+    // G02-01/A: the selected target stays highlighted while the composer
+    // is open — the .ps-selected outline renders from the committed
+    // selection rects.
+    expect(document.querySelector(".ps-outline.ps-selected")).not.toBeNull();
+    await waitFor(() => {
+      expect(composerTextarea()).toHaveFocus();
+    });
+    // Exactly the three composer controls: textarea + Save + Cancel.
+    expect(
+      within(composer()).getByRole("button", { name: "Cancel", exact: true })
+    ).toBeInTheDocument();
+    expect(composerSave()).toBeInTheDocument();
+    // Clicks INSIDE the composer (textarea, buttons) never trigger a new
+    // capture — the SAME single-target draft stays open.
+    await user.click(composerTextarea());
+    await user.type(composerTextarea(), "pointer pick");
+    expect(composer()).toBeInTheDocument();
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    const payload = JSON.parse(
+      (taskPosts(fetchMock)[0][1] as { body: string }).body
+    ) as { annotations: Array<{ elements: unknown[] }> };
+    expect(payload.annotations.at(-1)!.elements).toHaveLength(1);
+  });
+
+  it("G02-02: normal creation never shows the technical Draft/Saved journey", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-02");
+    g02SaveMocks();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    expect(composer()).toBeInTheDocument();
+    // No Task ID, JSON path, screenshot path or source-candidate details.
+    expect(screen.queryByText(/Task ID|task JSON|JSON path/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/screenshot path|source candidate/i)).not.toBeInTheDocument();
+    // No Done button and no Saved panel at any point of the draft; the
+    // status panel is absent during the draft (composer replaces it).
+    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
+    expect(document.querySelector(".ps-status-panel")).toBeNull();
+    await user.type(composerTextarea(), "clean flow");
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    // After the save: ONLY the compact toast — still no Done, no Saved
+    // panel, no technical surface.
+    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Task ID/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Annotation saved").closest(".ps-save-toast")
+    ).not.toBeNull();
+    // After the save the compact toast is the only new surface; the
+    // status panel re-appears ONLY with the resumed Pick hint (the
+    // continuous loop) — never as an empty artifact.
+    await waitFor(() => {
+      expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    });
+    expect(document.querySelector(".ps-status-panel")).not.toBeNull();
+  });
+
+  it("G02-03: Ctrl+Enter AND Cmd+Enter save; Pick stays active for the next target", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-03");
+    const { fetchMock } = g02SaveMocks();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "via ctrl");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    await waitFor(() => {
+      expect(taskPosts(fetchMock)).toHaveLength(1);
+    });
+    // Pick RESUMES: still pressed, hint visible, no re-arm click needed.
+    expect(
+      screen.getByRole("button", { name: "Pick element" })
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    // Second annotation — Cmd+Enter (macOS shortcut) on the SAME session.
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "via cmd");
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+    await waitFor(() => {
+      expect(taskPosts(fetchMock)).toHaveLength(2);
+    });
+  });
+
+  it("G02-04: two annotations are created CONSECUTIVELY with no Done between", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-04");
+    const { fetchMock } = g02SaveMocks();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "first");
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(taskPosts(fetchMock)).toHaveLength(1);
+    });
+    // Immediately capture the next target — Pick already resumed.
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "second");
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(taskPosts(fetchMock)).toHaveLength(2);
+    });
+    const secondPayload = JSON.parse(
+      (taskPosts(fetchMock)[1][1] as { body: string }).body
+    ) as { annotations: Array<{ comment: string }> };
+    expect(secondPayload.annotations.map((a) => a.comment)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("G02-05: Pick stays STRICTLY single-target — a new pick REPLACES, never accumulates", async () => {
+    const user = userEvent.setup();
+    const a = makePageElement("A", "row-a-g02");
+    const b = makePageElement("B", "row-b-g02");
+    const { fetchMock } = g02SaveMocks();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    a.focus();
+    await user.keyboard("{Enter}");
+    expect(composer()).toBeInTheDocument();
+    // Cancel the draft, then pick a DIFFERENT target.
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Annotation" })).not.toBeInTheDocument();
+    await startPickIfNeeded(user);
+    b.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "replacement");
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(taskPosts(fetchMock)).toHaveLength(1);
+    });
+    const payload = JSON.parse(
+      (taskPosts(fetchMock)[0][1] as { body: string }).body
+    ) as {
+      annotations: Array<{
+        elements: Array<{ selectorCandidates: Array<{ selector: string }> }>;
+      }>;
+    };
+    const elements = payload.annotations.at(-1)!.elements;
+    // Exactly ONE element, and it is the SECOND target — no accumulation.
+    expect(elements).toHaveLength(1);
+    expect(
+      elements[0].selectorCandidates.some((c) => c.selector === "#row-b-g02")
+    ).toBe(true);
+  });
+
+  it("G02-06: Multi is the ONLY multi-target path; after save it resumes with an EMPTY group (documented rule)", async () => {
+    const user = userEvent.setup();
+    const cellA = makePageElement("A", "cell-a-g02");
+    const cellB = makePageElement("B", "cell-b-g02");
+    const { fetchMock } = g02SaveMocks();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Multi-select" }));
+    await user.click(cellA);
+    await user.click(cellB);
+    expect(screen.getByText(/Selected/)).toHaveTextContent("2");
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "group");
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(taskPosts(fetchMock)).toHaveLength(1);
+    });
+    const payload = JSON.parse(
+      (taskPosts(fetchMock)[0][1] as { body: string }).body
+    ) as { annotations: Array<{ kind: string; elements: unknown[] }> };
+    expect(payload.annotations.at(-1)!.kind).toBe("multi");
+    expect(payload.annotations.at(-1)!.elements).toHaveLength(2);
+    // Documented rule: Multi resumes with an EMPTY group, still active.
+    expect(
+      screen.getByRole("button", { name: "Multi-select" })
+    ).toHaveAttribute("aria-pressed", "true");
+    // Documented rule: the resumed group is EMPTY (Selected: 0).
+    expect(screen.getByText(/Selected/)).toHaveTextContent("0");
+    // A fresh group can be built immediately — one click = one member.
+    await user.click(cellB);
+    expect(screen.getByText(/Selected/)).toHaveTextContent("1");
+  });
+
+  it("G02-06 (Area): a region annotation saves and returns to IDLE (documented rule)", async () => {
+    const user = userEvent.setup();
+    const { fetchMock } = g02SaveMocks();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Select region" }));
+    // Marquee drag over the page.
+    fireEvent.pointerDown(document.body, { clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(document.body, { clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(document.body, { clientX: 300, clientY: 200 });
+    expect(composer()).toBeInTheDocument();
+    await user.type(composerTextarea(), "area note");
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(taskPosts(fetchMock)).toHaveLength(1);
+    });
+    const payload = JSON.parse(
+      (taskPosts(fetchMock)[0][1] as { body: string }).body
+    ) as { annotations: Array<{ kind: string; region: unknown }> };
+    expect(payload.annotations.at(-1)!.kind).toBe("region");
+    expect(payload.annotations.at(-1)!.region).toBeDefined();
+    // Documented rule: Area returns to IDLE — no capture mode active.
+    expect(
+      screen.getByRole("button", { name: "Pick element" })
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Multi-select" })
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Select region" })
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("G02-07: a POST failure preserves the draft AND the target; retry succeeds", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-07");
+    let failNext = true;
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () =>
+          failNext
+            ? jsonResponse({ ok: false, error: "invalid_task" }, false, 400)
+            : jsonResponse({ ok: true, taskId: "task-g02-07", sourceCandidates: [] }),
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, file: "g02.png" }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "doomed");
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(within(composer()).getByRole("alert")).toBeInTheDocument();
+    });
+    // The draft is preserved VERBATIM in the open composer…
+    expect((composerTextarea() as HTMLTextAreaElement).value).toBe("doomed");
+    // …and the target is preserved: the retry commits exactly one element.
+    failNext = false;
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    const payload = JSON.parse(
+      (taskPosts(fetchMock)[0][1] as { body: string }).body
+    ) as { annotations: Array<{ comment: string; elements: unknown[] }> };
+    expect(payload.annotations.at(-1)!.comment).toBe("doomed");
+    expect(payload.annotations.at(-1)!.elements).toHaveLength(1);
+  });
+
+  it("G02-07b: a 409 on save refreshes and retries ONCE (typed refresh/retry semantics)", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-07b");
+    let serverTask: {
+      taskId: string;
+      annotations: Array<{ status: string; comment: string }>;
+      taskRevision: number;
+    } | null = null;
+    let posts = 0;
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse(
+            serverTask
+              ? {
+                  task: {
+                    schemaVersion: 5,
+                    taskId: serverTask.taskId,
+                    createdAt: "2026-08-10T00:00:00.000Z",
+                    annotations: serverTask.annotations,
+                    businessContext: [],
+                    redaction: {
+                      droppedKeys: [],
+                      redactedValues: 0,
+                      truncatedValues: 0,
+                    },
+                    taskRevision: serverTask.taskRevision,
+                  },
+                }
+              : { task: null }
+          ),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async (init) => {
+          const body = JSON.parse((init?.body ?? "{}") as string);
+          posts += 1;
+          if (posts === 1) {
+            // The server moved (revision 2): the first POST conflicts.
+            return jsonResponse(
+              {
+                ok: false,
+                error: "revision_conflict",
+                taskRevision: 2,
+              },
+              false,
+              409
+            );
+          }
+          serverTask = {
+            taskId: body.taskId,
+            annotations: body.annotations,
+            taskRevision: 2,
+          };
+          return jsonResponse({
+            ok: true,
+            taskId: body.taskId,
+            sourceCandidates: [],
+            taskRevision: 2,
+          });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, file: "g02.png" }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "conflict retry");
+    await user.click(composerSave());
+    // The retry succeeded transparently: toast, no conflict feedback, and
+    // the annotation persisted (retried against the fresh baseline).
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    expect(posts).toBe(2);
+    // No conflict feedback anywhere — the retry was transparent.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await openList(user);
+    expect(screen.getAllByText("conflict retry").length).toBeGreaterThan(0);
+    void fetchMock;
+  });
+
+  it("G02-03b: strict serial save — capture-mode CLICKS are ignored while saving; element resume applies", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-03b");
+    let releasePost: (() => void) | null = null;
+    const postGate = new Promise<void>((resolve) => {
+      releasePost = resolve;
+    });
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => {
+          await postGate;
+          return jsonResponse({
+            ok: true,
+            taskId: "task-g02-03b",
+            sourceCandidates: [],
+            taskRevision: 1,
+          });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, file: "g02.png" }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "serial one");
+    await user.click(composerSave());
+    // The POST is pending: the mode is saving — no capture mode active.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Pick element" })
+      ).toHaveAttribute("aria-pressed", "false");
+    });
+    // Clicks on Pick/Multi/Area during saving are IGNORED — the in-flight
+    // save owns the mode.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await user.click(screen.getByRole("button", { name: "Multi-select" }));
+    await user.click(screen.getByRole("button", { name: "Select region" }));
+    expect(
+      screen.getByRole("button", { name: "Pick element" })
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Multi-select" })
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Select region" })
+    ).toHaveAttribute("aria-pressed", "false");
+    // The global P/M/A hotkeys are ignored while saving too.
+    fireEvent.keyDown(document, { key: "p", ctrlKey: true, altKey: true });
+    fireEvent.keyDown(document, { key: "m", ctrlKey: true, altKey: true });
+    fireEvent.keyDown(document, { key: "a", ctrlKey: true, altKey: true });
+    expect(
+      screen.getByRole("button", { name: "Pick element" })
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Multi-select/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Drag over the page/)).not.toBeInTheDocument();
+    // Release the save: exactly ONE POST, and the element rule resumes
+    // Pick with a fresh session.
+    releasePost!();
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: "Pick element" })
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    const posts = fetchMock.mock.calls.filter(
+      (call) =>
+        (call[1] as { method?: string } | undefined)?.method === "POST" &&
+        String(call[0]).includes("/tasks")
+    );
+    expect(posts).toHaveLength(1);
+  });
+
+  it("G02-03b (multi): during a multi save mode switches are ignored; the multi rule resumes with an EMPTY group", async () => {
+    const user = userEvent.setup();
+    const cellA = makePageElement("A", "cell-a-g02-03b");
+    const cellB = makePageElement("B", "cell-b-g02-03b");
+    let releasePost: (() => void) | null = null;
+    const postGate = new Promise<void>((resolve) => {
+      releasePost = resolve;
+    });
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => {
+          await postGate;
+          return jsonResponse({
+            ok: true,
+            taskId: "task-g02-03b-m",
+            sourceCandidates: [],
+          });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, file: "g02.png" }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Multi-select" }));
+    await user.click(cellA);
+    await user.click(cellB);
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "serial group");
+    await user.click(composerSave());
+    // While the multi save is pending, clicking Multi (or the P/A hotkeys)
+    // must NOT switch the mode.
+    await user.click(screen.getByRole("button", { name: "Multi-select" }));
+    fireEvent.keyDown(document, { key: "p", ctrlKey: true, altKey: true });
+    fireEvent.keyDown(document, { key: "a", ctrlKey: true, altKey: true });
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Drag over the page/)).not.toBeInTheDocument();
+    // Release: the multi rule resumes Multi with an EMPTY group.
+    releasePost!();
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: "Multi-select" })
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/Selected/)).toHaveTextContent("0");
+  });
+
+  it("G02-03b (area): during an area save mode switches are ignored; the area rule returns to IDLE", async () => {
+    const user = userEvent.setup();
+    let releasePost: (() => void) | null = null;
+    const postGate = new Promise<void>((resolve) => {
+      releasePost = resolve;
+    });
+    mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => {
+          await postGate;
+          return jsonResponse({
+            ok: true,
+            taskId: "task-g02-03b-a",
+            sourceCandidates: [],
+          });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, file: "g02.png" }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Select region" }));
+    fireEvent.pointerDown(document.body, { clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(document.body, { clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(document.body, { clientX: 300, clientY: 200 });
+    await user.type(composerTextarea(), "serial area");
+    await user.click(composerSave());
+    // While the area save is pending, Area/Pick/Multi clicks are ignored.
+    await user.click(screen.getByRole("button", { name: "Select region" }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await user.click(screen.getByRole("button", { name: "Multi-select" }));
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    // Release: the area rule returns to IDLE — no capture mode active.
+    releasePost!();
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: "Pick element" })
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Multi-select" })
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Select region" })
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("G02-03b (re-entry): a second saveTask while one is in flight is a NO-OP — one POST only", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-03b-r");
+    let releasePost: (() => void) | null = null;
+    const postGate = new Promise<void>((resolve) => {
+      releasePost = resolve;
+    });
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => {
+          await postGate;
+          return jsonResponse({
+            ok: true,
+            taskId: "task-g02-03b-r",
+            sourceCandidates: [],
+          });
+        },
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, file: "g02.png" }),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(
+      screen.getByLabelText("Annotation comment"),
+      "double fired"
+    );
+    // Two synchronous clicks in the same tick — the lock makes the second
+    // a no-op (one POST).
+    const save = screen.getByRole("button", { name: "Save", exact: true });
+    fireEvent.click(save);
+    fireEvent.click(save);
+    releasePost!();
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    const posts = fetchMock.mock.calls.filter(
+      (call) =>
+        (call[1] as { method?: string } | undefined)?.method === "POST" &&
+        String(call[0]).includes("/tasks")
+    );
+    expect(posts).toHaveLength(1);
+  });
+
+  it("G02-08: a screenshot failure is a WARNING, not a failed annotation", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-08");
+    const fetchMock = mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () => jsonResponse({ task: null }),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () =>
+          jsonResponse({ ok: true, taskId: "task-g02-08", sourceCandidates: [] }),
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: false, error: "capture failed" }, false, 500),
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "kept despite shot");
+    await user.click(composerSave());
+    // Warning toast — NOT an error: the annotation itself succeeded.
+    await waitFor(() => {
+      expect(
+        screen.getByText("Annotation saved; the screenshot capture failed.")
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("Annotation saved; the screenshot capture failed.").closest(
+        ".ps-save-toast-warning"
+      )
+    ).not.toBeNull();
+    // No Done, no error panel, and the task POST went through.
+    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
+    expect(taskPosts(fetchMock)).toHaveLength(1);
+    // The annotation is still retained in the list.
+    await openList(user);
+    expect(screen.getByText("kept despite shot")).toBeInTheDocument();
+  });
+
+  it("G02-09: Help/List/collapse never silently lose a non-empty draft or its target", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-09");
+    (row as HTMLElement & { getBoundingClientRect(): DOMRect }).getBoundingClientRect = () =>
+      ({
+        left: 100,
+        top: 200,
+        width: 200,
+        height: 40,
+        right: 300,
+        bottom: 240,
+        x: 100,
+        y: 200,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const { fetchMock } = g02SaveMocks();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "precious");
+    // The highlight persists through Help/List/collapse round-trips.
+    expect(document.querySelector(".ps-outline.ps-selected")).not.toBeNull();
+    // Help open/close.
+    await user.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+    expect(composer()).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+    expect((composerTextarea() as HTMLTextAreaElement).value).toBe("precious");
+    // List open/close.
+    await user.click(screen.getByRole("button", { name: "Annotation list" }));
+    expect(composer()).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Annotation list" }));
+    expect((composerTextarea() as HTMLTextAreaElement).value).toBe("precious");
+    // Collapse hides the composer; re-expand restores draft AND target.
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Annotation" })
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    expect((composerTextarea() as HTMLTextAreaElement).value).toBe("precious");
+    // The preserved target commits exactly ONE element on save.
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(taskPosts(fetchMock)).toHaveLength(1);
+    });
+    const payload = JSON.parse(
+      (taskPosts(fetchMock)[0][1] as { body: string }).body
+    ) as { annotations: Array<{ comment: string; elements: unknown[] }> };
+    expect(payload.annotations.at(-1)!.comment).toBe("precious");
+    expect(payload.annotations.at(-1)!.elements).toHaveLength(1);
+  });
+
+  it("G02-11: a saved annotation appears in the List and the marker layer IMMEDIATELY", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-11");
+    // A measurable rect lets the marker layer resolve the saved target.
+    (row as HTMLElement & {
+      getBoundingClientRect(): DOMRect;
+    }).getBoundingClientRect = () =>
+      ({
+        left: 100,
+        top: 200,
+        width: 200,
+        height: 40,
+        right: 300,
+        bottom: 240,
+        x: 100,
+        y: 200,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    g02SaveMocks();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    await user.type(composerTextarea(), "instant");
+    await user.click(composerSave());
+    await waitFor(() => {
+      expect(screen.getByText("Annotation saved")).toBeInTheDocument();
+    });
+    // Marker layer: the numbered semantic button resolves over the target.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Annotation 1: open editor" })
+      ).toBeInTheDocument();
+    });
+    // List panel: the fresh annotation is listed immediately.
+    await openList(user);
+    expect(screen.getByText("instant")).toBeInTheDocument();
+    expect(screen.getByText(/1 open · 1 total/)).toBeInTheDocument();
+  });
+
+  it("G02-12: the horizontal toolbar NEVER expands vertically to host the form", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-g02-12");
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    row.focus();
+    await user.keyboard("{Enter}");
+    expect(composer()).toBeInTheDocument();
+    const bar = document.querySelector(".ps-horizontal-bar");
+    expect(bar).not.toBeNull();
+    // The composer is a SEPARATE anchored surface — never inside the bar.
+    expect(bar!.contains(composer())).toBe(false);
+    // The bar hosts no form controls at any point.
+    expect(bar!.querySelector("textarea, input")).toBeNull();
+    expect(
+      within(bar as HTMLElement).queryByRole("button", { name: "Save", exact: true })
+    ).toBeNull();
+    // The status panel is ENTIRELY absent during the draft — the form
+    // lives beside the target, not in any toolbar surface.
+    expect(document.querySelector(".ps-status-panel")).toBeNull();
+    // The bar itself keeps the same single-row structure it had before
+    // the draft: exactly the toolbar buttons, nothing appended.
+    const barLabels = () =>
+      within(screen.getByRole("toolbar", { name: "Portal Studio" }))
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label"));
+    expect(barLabels()).toEqual([
+      "Drag toolbar",
+      "Pick element",
+      "Multi-select",
+      "Select region",
+      "Copy annotations",
+      "Hide markers",
+      "Keyboard shortcuts",
+      "Annotation list",
+      "Collapse toolbar",
+    ]);
+  });
+
+  it("G02-13: Goal 01 stays unchanged — collapsed chip, action order, tooltips with shortcuts, Help/List", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    // Collapsed chip first: compact, no horizontal bar.
+    const chip = screen.getByRole("button", { name: /Annotation tools/ });
+    expect(document.querySelector(".ps-horizontal-bar")).toBeNull();
+    await user.click(chip);
+    // Horizontal action order (Goal 01 normative).
+    const barLabels = () =>
+      within(screen.getByRole("toolbar", { name: "Portal Studio" }))
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label"));
+    expect(barLabels()).toEqual([
+      "Drag toolbar",
+      "Pick element",
+      "Multi-select",
+      "Select region",
+      "Copy annotations",
+      "Hide markers",
+      "Keyboard shortcuts",
+      "Annotation list",
+      "Collapse toolbar",
+    ]);
+    // Tooltip with the platform shortcut still opens on focus.
+    const pick = screen.getByRole("button", { name: "Pick element" });
+    pick.focus();
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Pick element");
+    expect(tooltip.textContent).toContain("Ctrl+Alt+P");
+    expect(pick.getAttribute("aria-describedby")).toBe(tooltip.id);
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    });
+    // Help and List remain available from the expanded bar.
+    await user.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+    expect(screen.getByRole("region", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+    await user.click(screen.getByRole("button", { name: "Annotation list" }));
+    expect(screen.getByRole("region", { name: "Annotations" })).toBeInTheDocument();
+  });
 });

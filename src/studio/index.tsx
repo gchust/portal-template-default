@@ -389,6 +389,69 @@ const TOOLBAR_STYLES = `
   outline: 2px solid var(--ps-accent, #6366f1);
   outline-offset: 2px;
 }
+/* Goal 02: target-side composer — the one small form beside the captured
+   target/group/region. The horizontal toolbar never hosts it. */
+.ps-composer {
+  position: fixed;
+  z-index: 2147483006;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #18181b;
+  color: #fafafa;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-sizing: border-box;
+}
+.ps-composer-textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+.ps-composer-actions {
+  justify-content: flex-end;
+}
+.ps-composer-error {
+  margin: 0;
+}
+:host-context([data-ps-theme="light"]) .ps-composer {
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #ffffff;
+  color: #18181b;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
+/* Goal 02: compact non-blocking save toast (replaces the Saved panel). */
+.ps-save-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 92px;
+  transform: translateX(-50%);
+  z-index: 2147483007;
+  padding: 8px 14px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #18181b;
+  color: #4ade80;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+.ps-save-toast-warning {
+  color: #fbbf24;
+}
+:host-context([data-ps-theme="light"]) .ps-save-toast {
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #ffffff;
+  color: #16a34a;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+:host-context([data-ps-theme="light"]) .ps-save-toast-warning {
+  color: #d97706;
+}
+
 /* Goal 01 v5: custom tooltip — registry-generated, pointer-events none,
    role=tooltip wired through aria-describedby (no native title). */
 .ps-tooltip {

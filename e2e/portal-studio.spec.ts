@@ -172,10 +172,14 @@ const expectNoOpenCount = async (
 };
 
 const startPicking = async (page: import("@playwright/test").Page) => {
-  await page
+  const pick = page
     .locator("#portal-studio-root")
-    .getByRole("button", { name: "Pick element" })
-    .click();
+    .getByRole("button", { name: "Pick element" });
+  // Goal 02 continuous loop: after a successful save Pick is ALREADY
+  // active — re-clicking the button would CANCEL the resumed session.
+  if ((await pick.getAttribute("aria-pressed")) !== "true") {
+    await pick.click();
+  }
   await expect(
     page.locator("#portal-studio-root .ps-status-panel", {
       hasText: "Hover an element",
@@ -190,11 +194,12 @@ const saveTask = async (
   await page.locator("#portal-studio-root textarea").fill(instruction);
   await page
     .locator("#portal-studio-root")
-    .getByRole("button", { name: "Save task" })
+    .getByRole("button", { name: "Save", exact: true })
     .click();
+  // Goal 02: the compact toast replaces the technical Saved panel.
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Task saved",
+    page.locator("#portal-studio-root .ps-save-toast", {
+      hasText: /Annotation saved|批注已保存/,
     })
   ).toBeVisible();
   await expect
@@ -248,10 +253,11 @@ test("users page: single, multi, marquee, replace, screenshot (3 rounds)", async
   const row = page.locator("tbody tr").first();
   await row.hover();
   await row.click();
+  // Goal 02: the target-side composer opens beside the capture.
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Captured",
-    })
+    page
+      .locator("#portal-studio-root")
+      .getByRole("dialog", { name: "Annotation" })
   ).toBeVisible();
   await saveTask(page, "E2E single: increase row padding");
 
@@ -320,10 +326,11 @@ test("users page: single, multi, marquee, replace, screenshot (3 rounds)", async
     .locator("#portal-studio-root")
     .getByRole("button", { name: "Finish group" })
     .click();
+  // Goal 02: the target-side composer opens beside the capture.
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Captured",
-    })
+    page
+      .locator("#portal-studio-root")
+      .getByRole("dialog", { name: "Annotation" })
   ).toBeVisible();
   await saveTask(page, "E2E continuous: multi group appends annotation 2");
   task = readActiveTask();
@@ -354,10 +361,11 @@ test("users page: single, multi, marquee, replace, screenshot (3 rounds)", async
     steps: 8,
   });
   await page.mouse.up();
+  // Goal 02: the target-side composer opens beside the capture.
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Captured",
-    })
+    page
+      .locator("#portal-studio-root")
+      .getByRole("dialog", { name: "Annotation" })
   ).toBeVisible();
   await saveTask(page, "E2E marquee: select the whole table body");
   task = readActiveTask();
@@ -374,12 +382,12 @@ test("users page: single, multi, marquee, replace, screenshot (3 rounds)", async
   expect(serialized.length).toBeLessThan(256 * 1024);
 
   // Clear lifecycle (G04): Complete is the ONLY normal clear path — the
-  // old Clear-task button is gone; the agent-side DELETE endpoint still
-  // clears the task and its screenshot.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Done" })
-    .click();
+  // old Clear-task button is gone; Goal 02 removed the Done button too;
+  // the agent-side DELETE endpoint still clears the task and its
+  // screenshot.
+  await expect(
+    page.locator("#portal-studio-root").getByRole("button", { name: "Done" })
+  ).toHaveCount(0);
   await expect(
     page.locator("#portal-studio-root [role='toolbar'] button", {
       hasText: "Clear task",
@@ -431,10 +439,11 @@ test("dev page: keyboard single and multi, agent-side writes, guards", async ({
   const target = page.locator("main button, main a, main h2").first();
   await target.focus();
   await page.keyboard.press("Enter");
+  // Goal 02: the target-side composer opens beside the capture.
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Captured",
-    })
+    page
+      .locator("#portal-studio-root")
+      .getByRole("dialog", { name: "Annotation" })
   ).toBeVisible();
   await saveTask(page, "E2E keyboard single on /dev/ai-chat");
   const single = readActiveTask();
@@ -452,10 +461,11 @@ test("dev page: keyboard single and multi, agent-side writes, guards", async ({
   const second = page.locator("main button, main a, main h2").nth(1);
   await first.focus();
   await page.keyboard.press("Shift+Enter");
+  // Goal 02: the target-side composer opens beside the capture.
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Captured",
-    })
+    page
+      .locator("#portal-studio-root")
+      .getByRole("dialog", { name: "Annotation" })
   ).toBeVisible();
   // Cancel the draft — nothing was saved.
   await page
@@ -479,10 +489,11 @@ test("dev page: keyboard single and multi, agent-side writes, guards", async ({
   await second.focus();
   await page.keyboard.press("Space");
   await page.keyboard.press("Enter");
+  // Goal 02: the target-side composer opens beside the capture.
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Captured",
-    })
+    page
+      .locator("#portal-studio-root")
+      .getByRole("dialog", { name: "Annotation" })
   ).toBeVisible();
   await saveTask(page, "E2E keyboard: multi group then Enter");
   const multi = readActiveTask();
@@ -643,11 +654,11 @@ test("runtime diagnostics: console.error read-back, heartbeat authority, screens
     .fill("diagnostics baseline");
   await page
     .locator("#portal-studio-root")
-    .getByRole("button", { name: "Save task" })
+    .getByRole("button", { name: "Save", exact: true })
     .click();
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Task saved",
+    page.locator("#portal-studio-root .ps-save-toast", {
+      hasText: /Annotation saved|批注已保存/,
     })
   ).toBeVisible();
 
@@ -751,11 +762,11 @@ test("update verification loop: real edit, HMR path, reload-bump path, MCP smoke
     .fill("verify loop baseline");
   await page
     .locator("#portal-studio-root")
-    .getByRole("button", { name: "Save task" })
+    .getByRole("button", { name: "Save", exact: true })
     .click();
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Task saved",
+    page.locator("#portal-studio-root .ps-save-toast", {
+      hasText: /Annotation saved|批注已保存/,
     })
   ).toBeVisible();
 
@@ -1068,19 +1079,19 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
   await page.locator("#portal-studio-root textarea").fill("First annotation");
   await page.keyboard.press("Control+Enter");
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Task saved",
+    page.locator("#portal-studio-root .ps-save-toast", {
+      hasText: /Annotation saved|批注已保存/,
     })
   ).toBeVisible();
+  // Goal 02: no Done — the loop continues on the resumed Pick session.
+  await expect(
+    page.locator("#portal-studio-root").getByRole("button", { name: "Done" })
+  ).toHaveCount(0);
   // Dock badge reflects the persisted count; list + page marker exist.
   await expectOpenCount(root, "1");
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(1);
   // Marker is INSIDE the shadow host: never in the page DOM.
   expect(await page.locator("body > .ps-marker-anchor").count()).toBe(0);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Done" })
-    .click();
   // The annotation list is the anchored panel behind the List icon.
   await openList(page);
   await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
@@ -1455,10 +1466,11 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   expect(task.annotations).toHaveLength(1);
   expect(task.annotations[0].kind).toBe("multi");
   expect(task.annotations[0].elements).toHaveLength(2);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Done" })
-    .click();
+  // Goal 02: no Done — Multi resumed with an EMPTY group (documented
+  // rule); the next Pick click is a mode SWITCH to single-target.
+  await expect(
+    page.locator("#portal-studio-root").getByRole("button", { name: "Done" })
+  ).toHaveCount(0);
 
   // Second single annotation (delete target).
   await page
@@ -1706,7 +1718,8 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G04 open one");
   await page.keyboard.press("Control+Enter");
-  await root.getByRole("button", { name: "Done" }).click();
+  // Goal 02: no Done; Pick resumed — startPicking reuses the session.
+  await expect(root.getByRole("button", { name: "Done" })).toHaveCount(0);
   await startPicking(page);
   await row.hover();
   await row.click();
@@ -1768,12 +1781,17 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
     )
     .toContain("G04 open two");
   expect(copied).not.toContain("G04 open one");
-  // Esc twice: the first closes the topmost transient surface (the list
-  // panel via the aux handler, or the copy fallback), the second closes
-  // the remaining one — both must be gone before the capture flow.
-  await page.keyboard.press("Escape");
+  // Esc twice, topmost first: the poll's final Copy click resolves
+  // asynchronously (a denied clipboard write can reject a tick after the
+  // click), so settle the fallback state first. The fallback is the
+  // topmost surface — ONE Esc closes it; ONE more Esc closes the list —
+  // both must be gone before the capture flow.
+  await page.waitForTimeout(300);
+  await expect(root.locator(".ps-copy-fallback")).toHaveCount(1);
   await page.keyboard.press("Escape");
   await expect(root.locator(".ps-copy-fallback")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(root.locator(".ps-list-panel")).toHaveCount(0);
   // All-mode print output contains every annotation (mixed data).
   const printed = execFileSync(
     process.execPath,
@@ -2029,8 +2047,8 @@ test("interleaved browser/CLI mutations keep stable taskId and revision-aware co
   await expectOpenCount(root, "1");
   const taskIdA = readActiveTask().taskId;
 
-  // Browser adds a second annotation — SAME taskId A.
-  await root.getByRole("button", { name: "Done" }).click();
+  // Browser adds a second annotation — SAME taskId A (Pick resumed).
+  await expect(root.getByRole("button", { name: "Done" })).toHaveCount(0);
   await startPicking(page);
   await row.hover();
   await row.click();
@@ -2235,10 +2253,8 @@ test("G01 v5: collapsed chip (empty + 4 open, EN/ZH tolerant), expand, drag-not-
     page.locator("tbody tr").first().locator("td").nth(2),
   ];
   for (let index = 0; index < targets.length; index += 1) {
-    await page
-      .locator("#portal-studio-root")
-      .getByRole("button", { name: "Pick element" })
-      .click();
+    // Goal 02: no Done — each iteration continues on the resumed Pick.
+    await startPicking(page);
     await targets[index].hover();
     await targets[index].click();
     await page
@@ -2246,10 +2262,11 @@ test("G01 v5: collapsed chip (empty + 4 open, EN/ZH tolerant), expand, drag-not-
       .fill(`G01 v5 annotation ${index + 1}`);
     await page.keyboard.press("Control+Enter");
     await expectOpenCount(root, String(index + 1));
-    await page
-      .locator("#portal-studio-root")
-      .getByRole("button", { name: "Done" })
-      .click();
+    await expect(
+      page
+        .locator("#portal-studio-root")
+        .getByRole("button", { name: "Done" })
+    ).toHaveCount(0);
   }
   // Collapse with annotations present: count chip, nothing cleared.
   await page
@@ -2798,8 +2815,10 @@ test("G01 v5: Chinese locale states — chip, toolbar, help, list, count (review
   await page.locator("tbody tr").first().click();
   await page.locator("#portal-studio-root textarea").fill("中文批注");
   await page.keyboard.press("Control+Enter");
-  await expect(root.locator(".ps-status-panel")).toContainText("任务已保存");
-  await root.getByRole("button", { name: "完成" }).click();
+  // Goal 02: the compact toast replaces the technical Saved panel (ZH).
+  await expect(root.locator(".ps-save-toast")).toContainText("批注已保存");
+  // Goal 02: no 完成 (Done) button — the continuous loop resumes Pick.
+  await expect(root.getByRole("button", { name: "完成" })).toHaveCount(0);
   await root.getByRole("button", { name: "收起工具栏" }).click();
   await expect(root.locator(".ps-status-slot")).toHaveText("1");
   await expect(root.locator(".ps-chip-open")).toHaveAttribute(
@@ -2957,6 +2976,218 @@ test("G01 v5: manual-Copy fallback clamps inside the viewport at edge positions 
   await root.locator(".ps-annotation-confirm").waitFor();
   await root
     .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+    .click();
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+});
+
+// =====================================================================
+// Goal 02 — Fast Target-Side Composer and Continuous Annotation Loop
+// (G02-14: real-browser evidence; proofs G02-01..G02-12 exercised live)
+// =====================================================================
+
+test("G02: target-side composer beside the target, continuous loop, no Done (EN + ZH screenshots)", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+  const bar = root.locator("[role='toolbar']");
+
+  // G02-05: Pick is single-target — one click, one annotation.
+  await root.getByRole("button", { name: "Pick element" }).click();
+  const row = page.locator("tbody tr").first();
+  await row.hover();
+  await row.click();
+
+  // G02-01: the local composer opens BESIDE the target, autofocused.
+  const composer = root.getByRole("dialog", { name: "Annotation" });
+  await expect(composer).toBeVisible();
+  await expect(root.getByRole("textbox", { name: "Annotation comment" })).toBeFocused();
+  const composerBox = (await composer.boundingBox())!;
+  const rowBox = (await row.boundingBox())!;
+
+  // G02 P2 regression: the composer must NOT vertically intersect the
+  // target row. It is anchored BELOW the captured target (the shared
+  // helper's below preference, gap away) — an autofocus-triggered page
+  // scroll used to drift the anchor after placement and overlap the row
+  // by ~13px; focus now uses preventScroll so the anchor stays exact.
+  expect(composerBox.y).toBeGreaterThanOrEqual(rowBox.y + rowBox.height);
+  // Horizontal association: the composer remains over the row's span
+  // (left-aligned to the captured cell — never far from the target).
+  expect(composerBox.x).toBeGreaterThanOrEqual(rowBox.x);
+  expect(composerBox.x).toBeLessThan(rowBox.x + rowBox.width);
+  // Viewport-aware anchored placement (G02-10 live clamp check): the
+  // composer stays fully inside the viewport.
+  expect(composerBox.x).toBeGreaterThanOrEqual(0);
+  expect(composerBox.y).toBeGreaterThanOrEqual(0);
+  expect(composerBox.x + composerBox.width).toBeLessThanOrEqual(1440);
+  expect(composerBox.y + composerBox.height).toBeLessThanOrEqual(900);
+  await page.screenshot({
+    path: "test-results/g02-composer-target.png",
+    fullPage: false,
+  });
+
+  // G02-01/A: the selected target stays highlighted while the composer is
+  // open (the .ps-selected outline measures the committed selection).
+  await expect(root.locator(".ps-outline.ps-selected")).toHaveCount(1);
+
+  // G02-02: no technical Draft/Saved surface, no Done.
+  await expect(composer.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
+  await expect(composer.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await expect(
+    page.locator("#portal-studio-root").getByRole("button", { name: "Done" })
+  ).toHaveCount(0);
+  // G02-12: the status panel is ENTIRELY absent during the composer
+  // draft (it only renders for picking/multi/marquee sections).
+  expect(await root.locator(".ps-status-panel").count()).toBe(0);
+
+  // G02-03: Ctrl+Enter saves; the compact toast replaces the Saved panel;
+  // G02-11: marker appears immediately.
+  await page.locator("#portal-studio-root textarea").fill("G02 continuous one");
+  await page.keyboard.press("Control+Enter");
+  await expect(
+    root.locator(".ps-save-toast", { hasText: "Annotation saved" })
+  ).toBeVisible();
+
+  await expect(root.locator(".ps-marker-anchor")).toHaveCount(1);
+  await expect(root.locator(".ps-save-toast")).toContainText("Annotation saved");
+  await page.screenshot({
+    path: "test-results/g02-save-toast.png",
+    fullPage: false,
+  });
+
+  // G02-04/G02-03: Pick RESUMES — no re-arm click; the next capture works
+  // immediately; Cmd+Enter (Meta) also saves.
+  await expect(
+    root.getByRole("button", { name: "Pick element" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await row.hover();
+  await row.click();
+  await expect(composer).toBeVisible();
+  await page.locator("#portal-studio-root textarea").fill("G02 continuous two");
+  await page.keyboard.press("Meta+Enter");
+  await expect(
+    root.locator(".ps-save-toast", { hasText: "Annotation saved" })
+  ).toBeVisible();
+  await expectOpenCount(root, "2");
+  const task = readActiveTask();
+  expect(task.annotations).toHaveLength(2);
+  expect(task.annotations.map((a) => a.comment)).toEqual([
+    "G02 continuous one",
+    "G02 continuous two",
+  ]);
+  // G02-12: the horizontal toolbar never grew vertically — the composer is
+  // a separate surface, the bar still has exactly its row of buttons.
+  await expect(
+    bar.locator("textarea, input").count()
+  ).resolves.toBe(0);
+  expect(await bar.getByRole("button").count()).toBe(9);
+  await page.screenshot({
+    path: "test-results/g02-continuous-loop.png",
+    fullPage: false,
+  });
+
+  // G02-06: switch to Multi — the ONLY multi-target path; a 2-element
+  // group saves as ONE multi annotation and resumes with an EMPTY group.
+  await root.getByRole("button", { name: "Multi-select" }).click();
+  const cellA = page.locator("tbody tr").first().locator("td").first();
+  const cellB = page.locator("tbody tr").first().locator("td").nth(1);
+  await cellA.hover();
+  await cellA.click();
+  await cellB.hover();
+  await cellB.click();
+  await page
+    .locator("#portal-studio-root")
+    .getByRole("button", { name: "Finish group" })
+    .click();
+  await expect(composer).toBeVisible();
+  await page.locator("#portal-studio-root textarea").fill("G02 multi group");
+  await page.keyboard.press("Control+Enter");
+  await expect(
+    root.locator(".ps-save-toast", { hasText: "Annotation saved" })
+  ).toBeVisible();
+  await expect(
+    root.getByRole("button", { name: "Multi-select" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(root.locator(".ps-status-panel")).toContainText("Selected");
+  await expect(root.locator(".ps-status-panel")).toContainText("0");
+  expect(readActiveTask().annotations.at(-1)!.kind).toBe("multi");
+  expect(readActiveTask().annotations.at(-1)!.elements).toHaveLength(2);
+
+  // Cleanup: delete everything so later tests start empty.
+  await openList(page);
+  await root
+    .locator(".ps-annotation-item [aria-label='Delete']")
+    .first()
+    .click();
+  await root.locator(".ps-annotation-confirm").waitFor();
+  await root
+    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+    .click();
+  await expect.poll(() => readActiveTask().annotations.length).toBe(2);
+  await openList(page);
+  await root
+    .locator(".ps-annotation-item [aria-label='Delete']")
+    .first()
+    .click();
+  await root.locator(".ps-annotation-confirm").waitFor();
+  await root
+    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+    .click();
+  await expect.poll(() => readActiveTask().annotations.length).toBe(1);
+  await openList(page);
+  await root
+    .locator(".ps-annotation-item [aria-label='Delete']")
+    .first()
+    .click();
+  await root.locator(".ps-annotation-confirm").waitFor();
+  await root
+    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+    .click();
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+
+  // ---- ZH locale evidence: the composer + toast in Chinese ----
+  await page.route("**/api/app:getLang*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: { lang: "zh-CN", resources: {} } }),
+    });
+  });
+  await page.reload();
+  await page.locator("tbody tr").first().waitFor();
+  await root.locator(".ps-chip-open").click();
+  await root.getByRole("button", { name: "拾取元素" }).click();
+  await page.locator("tbody tr").first().hover();
+  await page.locator("tbody tr").first().click();
+  const zhComposer = root.getByRole("dialog", { name: "批注" });
+  await expect(zhComposer).toBeVisible();
+  await expect(root.getByRole("textbox", { name: "标注评论" })).toBeFocused();
+  await page.screenshot({
+    path: "test-results/g02-composer-zh.png",
+    fullPage: false,
+  });
+  await page.locator("#portal-studio-root textarea").fill("中文连续批注");
+  await page.keyboard.press("Control+Enter");
+  await expect(root.locator(".ps-save-toast")).toContainText("批注已保存");
+  await expect(root.getByRole("button", { name: "完成" })).toHaveCount(0);
+  await page.screenshot({
+    path: "test-results/g02-save-toast-zh.png",
+    fullPage: false,
+  });
+  await expect.poll(() => readActiveTask().annotations.at(-1)?.comment).toBe(
+    "中文连续批注"
+  );
+  // Cleanup ZH annotation (the list toggle is localized in ZH here).
+  await root.getByRole("button", { name: "批注列表" }).click();
+  await expect(root.locator("#ps-annotation-list")).toBeVisible();
+  await root.locator(".ps-annotation-item [aria-label='删除']").click();
+  await root.locator(".ps-annotation-confirm").waitFor();
+  await root
+    .locator(".ps-annotation-confirm button", { hasText: "删除" })
     .click();
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 });

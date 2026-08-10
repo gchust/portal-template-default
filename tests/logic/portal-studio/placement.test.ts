@@ -219,3 +219,95 @@ describe("resolveTooltipPlacement", () => {
     expect(rightP.left + 120).toBeLessThanOrEqual(VIEWPORT.width - PLACEMENT_MARGIN + 1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Goal 02 (G02-10): the target-side COMPOSER clamps at every viewport edge.
+// The composer calls resolveAnchoredPlacement with width 300, a maxHeight of
+// ~45% of the viewport and the MEASURED surface height; these cases mirror
+// exactly those inputs against targets anchored at each viewport edge.
+// ---------------------------------------------------------------------------
+
+describe("Goal 02 composer placement — clamps at every viewport edge", () => {
+  const composer = (trigger: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    width: number;
+    height: number;
+  }) =>
+    resolveAnchoredPlacement({
+      trigger,
+      viewport: VIEWPORT,
+      width: 300,
+      maxHeight: Math.round(VIEWPORT.height * 0.45),
+      surfaceHeight: 140,
+    });
+
+  it("left edge: the composer never crosses the left margin", () => {
+    const atLeft = { left: 0, top: 300, right: 200, bottom: 340, width: 200, height: 40 };
+    const p = composer(atLeft);
+    expect(p.left).toBeGreaterThanOrEqual(PLACEMENT_MARGIN);
+    expect(p.left + p.width).toBeLessThanOrEqual(VIEWPORT.width - PLACEMENT_MARGIN);
+  });
+
+  it("right edge: the composer never crosses the right margin", () => {
+    const atRight = {
+      left: VIEWPORT.width - 200,
+      top: 300,
+      right: VIEWPORT.width,
+      bottom: 340,
+      width: 200,
+      height: 40,
+    };
+    const p = composer(atRight);
+    expect(p.left + p.width).toBeLessThanOrEqual(VIEWPORT.width - PLACEMENT_MARGIN);
+    expect(p.left).toBeGreaterThanOrEqual(PLACEMENT_MARGIN);
+  });
+
+  it("bottom edge: the composer flips ABOVE the target and stays in the viewport", () => {
+    const atBottom = {
+      left: 400,
+      top: VIEWPORT.height - 60,
+      right: 700,
+      bottom: VIEWPORT.height - 20,
+      width: 300,
+      height: 40,
+    };
+    const p = composer(atBottom);
+    // Flipped above, hugging the target by its RENDERED height.
+    expect(p.top + 140).toBeLessThanOrEqual(atBottom.top - 8 + 1);
+    expect(p.top).toBeGreaterThanOrEqual(PLACEMENT_MARGIN);
+  });
+
+  it("top edge: the composer sits below the target and stays in the viewport", () => {
+    const atTop = { left: 400, top: 0, right: 700, bottom: 40, width: 300, height: 40 };
+    const p = composer(atTop);
+    expect(p.top).toBeGreaterThanOrEqual(PLACEMENT_MARGIN);
+    expect(p.top + p.maxHeight).toBeLessThanOrEqual(VIEWPORT.height);
+  });
+
+  it("corner targets stay fully inside the viewport", () => {
+    for (const corner of [
+      { left: 0, top: 0, right: 100, bottom: 40, width: 100, height: 40 },
+      {
+        left: VIEWPORT.width - 100,
+        top: VIEWPORT.height - 40,
+        right: VIEWPORT.width,
+        bottom: VIEWPORT.height,
+        width: 100,
+        height: 40,
+      },
+    ]) {
+      const p = composer(corner);
+      expect(p.left).toBeGreaterThanOrEqual(PLACEMENT_MARGIN);
+      expect(p.top).toBeGreaterThanOrEqual(PLACEMENT_MARGIN);
+      expect(p.left + p.width).toBeLessThanOrEqual(
+        VIEWPORT.width - PLACEMENT_MARGIN
+      );
+      // The RENDERED surface (140) fits — placement is bounded by the
+      // actual surface height, not by maxHeight.
+      expect(p.top + 140).toBeLessThanOrEqual(VIEWPORT.height);
+    }
+  });
+});
