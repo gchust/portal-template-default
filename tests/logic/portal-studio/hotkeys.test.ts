@@ -10,7 +10,9 @@ import {
   getHotkey,
   HOTKEYS,
   isEditableTarget,
+  matchHelpShortcut,
   matchHotkey,
+  matchStudioShortcut,
   MODIFIER,
 } from "@/studio/hotkeys";
 
@@ -50,18 +52,18 @@ describe("hotkeys — modifier mapping", () => {
     expect(MODIFIER.label.length).toBeGreaterThan(0);
   });
 
-  it("HOTKEYS has exactly 5 entries", () => {
-    expect(HOTKEYS).toHaveLength(5);
+  it("HOTKEYS has exactly 8 entries (P/M/A/C/V/L/?/K)", () => {
+    expect(HOTKEYS).toHaveLength(8);
   });
 
   it("each hotkey has a unique action", () => {
     const actions = HOTKEYS.map((h) => h.action);
-    expect(new Set(actions).size).toBe(5);
+    expect(new Set(actions).size).toBe(8);
   });
 
-  it("each hotkey has a single-letter key", () => {
+  it("each hotkey has a single-character key (letters plus ?)", () => {
     for (const h of HOTKEYS) {
-      expect(h.key).toMatch(/^[A-Z]$/);
+      expect(h.key).toMatch(/^[A-Z?]$/);
     }
   });
 
@@ -71,6 +73,9 @@ describe("hotkeys — modifier mapping", () => {
     expect(getHotkey("copy")?.key).toBe("C");
     expect(getHotkey("multi")?.key).toBe("M");
     expect(getHotkey("area")?.key).toBe("A");
+    expect(getHotkey("visibility")?.key).toBe("V");
+    expect(getHotkey("list")?.key).toBe("L");
+    expect(getHotkey("help")?.key).toBe("?");
     expect(getHotkey("nonexistent")).toBeUndefined();
   });
 });
@@ -230,6 +235,113 @@ describe("hotkeys — action matching", () => {
   it("Toggle: Ctrl+Alt+K", () => {
     const event = makeEvent({ key: "k", altKey: true, ...mod });
     expect(matchHotkey(event)?.action).toBe("toggle");
+  });
+
+  it("Visibility: Ctrl+Alt+V", () => {
+    const event = makeEvent({ key: "v", altKey: true, ...mod });
+    expect(matchHotkey(event)?.action).toBe("visibility");
+  });
+
+  it("List: Ctrl+Alt+L", () => {
+    const event = makeEvent({ key: "l", altKey: true, ...mod });
+    expect(matchHotkey(event)?.action).toBe("list");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Help shortcut (?) / Shift+/
+// ---------------------------------------------------------------------------
+
+describe("hotkeys — help shortcut (?)", () => {
+  it("matches the bare ? key with no modifiers", () => {
+    const event = makeEvent({ key: "?", shiftKey: true });
+    expect(matchHelpShortcut(event)?.action).toBe("help");
+    expect(matchStudioShortcut(event)?.action).toBe("help");
+  });
+
+  it("matches Shift+/ on international layouts (key '/')", () => {
+    const event = makeEvent({
+      key: "/",
+      code: "Slash",
+      shiftKey: true,
+    });
+    expect(matchHelpShortcut(event)?.action).toBe("help");
+  });
+
+  it("does not match with other modifiers held", () => {
+    const event = makeEvent({ key: "?", altKey: true });
+    expect(matchHelpShortcut(event)).toBeNull();
+    const ctrlEvent = makeEvent({ key: "?", ctrlKey: true });
+    expect(matchHelpShortcut(ctrlEvent)).toBeNull();
+  });
+
+  it("does not match inside an editable target", () => {
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    const event = makeEvent({ key: "?", target: input });
+    expect(matchHelpShortcut(event)).toBeNull();
+    document.body.removeChild(input);
+  });
+
+  it("does not match during IME composition or repeats", () => {
+    expect(
+      matchHelpShortcut(makeEvent({ key: "?", isComposing: true }))
+    ).toBeNull();
+    expect(matchHelpShortcut(makeEvent({ key: "?", repeat: true }))).toBeNull();
+  });
+
+  it("a plain slash without Shift is not help", () => {
+    const event = makeEvent({ key: "/", code: "Slash" });
+    expect(matchHelpShortcut(event)).toBeNull();
+  });
+
+  it("matchStudioShortcut falls back to the ? key", () => {
+    expect(matchStudioShortcut(makeEvent({ key: "?" }))?.action).toBe("help");
+  });
+
+  it("detects editable controls inside a FOREIGN shadow root via composedPath (round-3 finding 2)", () => {
+    // jsdom cannot retarget: dispatching on a shadow-internal node leaves
+    // event.target as the HOST and composedPath() empty, so the browser
+    // case (target = host, path = [input, shadow, host, …]) is covered by
+    // the explicit-path contract below plus the real-browser e2e test.
+    const host = document.createElement("div");
+    const shadow = host.attachShadow({ mode: "open" });
+    const input = document.createElement("input");
+    shadow.appendChild(input);
+    document.body.appendChild(host);
+    try {
+      // A browser document listener would see target = host with a path
+      // that includes the shadow-internal input — model exactly that by
+      // overriding composedPath on the (plain-object) event:
+      const path = [input, host, document.body];
+      const browserLikeEvent = makeEvent({
+        key: "p",
+        altKey: true,
+        ctrlKey: true,
+        target: host,
+        composedPath: () => path,
+      });
+      expect(matchHotkey(browserLikeEvent)).toBeNull();
+      expect(matchStudioShortcut(browserLikeEvent)).toBeNull();
+      // Same for the ? help shortcut.
+      expect(
+        matchHelpShortcut(
+          makeEvent({ key: "?", target: host, composedPath: () => path })
+        )
+      ).toBeNull();
+    } finally {
+      document.body.removeChild(host);
+    }
+  });
+
+  it("isEditableTarget honors an explicit composed path over the target walk", () => {
+    const plain = document.createElement("button");
+    const input = document.createElement("input");
+    // Path that CONTAINS an editable node while the target is a button:
+    // the composed path is authoritative (a document listener sees the
+    // retargeted target but the path still carries the editable node).
+    expect(isEditableTarget(plain, [plain, input, document.body])).toBe(true);
+    expect(isEditableTarget(plain, [plain, document.body])).toBe(false);
   });
 });
 

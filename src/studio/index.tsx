@@ -36,76 +36,202 @@ const TOOLBAR_STYLES = `
   box-sizing: border-box;
   pointer-events: auto;
 }
-.ps-toggle {
-  width: 40px;
-  height: 40px;
+/* Goal 01 v5: collapsed horizontal chip (drag handle | status slot |
+   short label | expand). The chip body click expands; only the explicit
+   drag handle starts a drag, so dragging never expands. */
+.ps-collapsed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
   border-radius: 9999px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: #18181b;
   color: #fafafa;
-  font-size: 18px;
-  cursor: pointer;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  user-select: none;
+  touch-action: none;
+  white-space: nowrap;
+}
+.ps-chip-drag {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: #71717a;
+  cursor: grab;
+  border-radius: 9999px;
+  padding: 0;
 }
-.ps-toggle:hover { background: #27272a; }
-.ps-toggle:focus-visible {
+.ps-chip-drag:hover { color: #fafafa; background: rgba(255,255,255,0.08); }
+.ps-chip-drag:focus-visible {
   outline: 2px solid var(--ps-accent, #6366f1);
   outline-offset: 2px;
 }
-/* Goal 01: launcher count badge (inside the toggle when collapsed or expanded). */
-.ps-launcher-count {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
-  border-radius: 9999px;
-  padding: 0 4px;
-  background: var(--ps-accent, #6366f1);
-  color: var(--ps-primary-foreground, #ffffff);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
-  pointer-events: none;
-}
-/* Goal 01: expanded command row — horizontal icon bar. */
-.ps-command-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-/* Goal 01: drag grip handle inside the command row. */
-.ps-drag-handle {
+/* Status slot: feedback icon OR the open count (99+ cap) — never both,
+   never a detached corner badge. */
+.ps-status-slot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  background: var(--ps-accent, #6366f1);
+  color: var(--ps-primary-foreground, #ffffff);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.ps-chip-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: #fafafa;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 2px;
+  cursor: pointer;
+  border-radius: 9999px;
+  height: 32px;
+}
+.ps-chip-open:hover { color: #ffffff; }
+.ps-chip-open:focus-visible {
+  outline: 2px solid var(--ps-accent, #6366f1);
+  outline-offset: 2px;
+}
+.ps-chip-label {
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ps-chip-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: #a1a1aa;
+  cursor: pointer;
+  padding: 0;
+}
+.ps-chip-expand:hover { color: #fafafa; background: rgba(255,255,255,0.08); }
+.ps-chip-expand:focus-visible {
+  outline: 2px solid var(--ps-accent, #6366f1);
+  outline-offset: 2px;
+}
+/* Goal 01 v5: expanded horizontal bar — exactly ONE row, never wraps. */
+.ps-horizontal-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #18181b;
+  color: #fafafa;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  user-select: none;
+  touch-action: none;
+}
+.ps-tool-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
   color: #71717a;
   cursor: grab;
-  border-radius: 4px;
+  border-radius: 10px;
+  padding: 0;
 }
-.ps-drag-handle:hover { color: #fafafa; background: rgba(255,255,255,0.08); }
-/* G01 dock: compact draggable launcher row. */
+.ps-tool-grip:hover { color: #fafafa; background: rgba(255,255,255,0.08); }
+.ps-tool-grip:focus-visible {
+  outline: 2px solid var(--ps-accent, #6366f1);
+  outline-offset: 2px;
+}
+.ps-tool-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ps-tool-divider {
+  width: 1px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.14);
+  margin: 0 2px;
+}
+/* Hit targets: 40x40 desktop, 36x36 compact (media query below). */
+.ps-tool-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #a1a1aa;
+  cursor: pointer;
+  padding: 0;
+}
+.ps-tool-action:hover { color: #fafafa; background: rgba(255,255,255,0.08); }
+.ps-tool-action:focus-visible {
+  outline: 2px solid var(--ps-accent, #6366f1);
+  outline-offset: 2px;
+}
+.ps-tool-action[aria-pressed="true"] {
+  background: var(--ps-accent, #6366f1);
+  border-color: var(--ps-accent, #6366f1);
+  color: var(--ps-primary-foreground, #ffffff);
+  box-shadow: 0 0 0 2px
+    color-mix(in srgb, var(--ps-accent, #6366f1) 35%, transparent);
+}
+.ps-tool-action[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--ps-accent, #6366f1) 22%, transparent);
+  border-color: var(--ps-accent, #6366f1);
+  color: var(--ps-accent, #6366f1);
+}
+.ps-tool-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* Goal 01 v5: compact viewport (360-419px) — one row, 36px targets,
+   tighter gaps, no wrap, no horizontal overflow. */
+@media (max-width: 419px) {
+  .ps-horizontal-bar { gap: 2px; padding: 5px 4px; border-radius: 14px; }
+  .ps-tool-grip { width: 36px; height: 36px; }
+  .ps-tool-action { width: 36px; height: 36px; }
+  .ps-tool-group { gap: 1px; }
+  .ps-tool-divider { margin: 0 1px; }
+  .ps-collapsed-chip { gap: 4px; padding: 5px 6px; }
+  .ps-chip-label { max-width: 108px; }
+}
+@media (max-width: 339px) {
+  /* Very narrow: the visible label may hide; the accessible label stays. */
+  .ps-chip-label { display: none; }
+}
+/* G01 dock: positioning container only (drag lives on the handles). */
 .ps-dock {
   position: fixed;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 9999px;
-  cursor: grab;
-  user-select: none;
-  touch-action: none;
   z-index: 2147483000;
 }
-.ps-dock:active { cursor: grabbing; }
 .ps-copy-button {
   width: 28px;
   height: 28px;
@@ -133,10 +259,11 @@ const TOOLBAR_STYLES = `
   z-index: 2147483001;
 }
 .ps-copy-fallback {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 6px);
-  width: 320px;
+  /* Round-3 finding 4: positioned by the shared viewport-aware placement
+     utility (inline left/top/width/maxHeight); fixed so it is anchored to
+     the Copy button and clamps/flips inside the viewport at any dock
+     position and viewport size. */
+  position: fixed;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: #18181b;
@@ -165,19 +292,132 @@ const TOOLBAR_STYLES = `
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
 }
 
-.ps-panel {
+/* Goal 01 v5: separate anchored surfaces — capture status, shortcut help
+   and the annotation list. None of them is a toolbar. */
+.ps-status-panel,
+.ps-help-popover,
+.ps-list-panel {
   position: fixed;
-  width: 320px;
-  max-height: calc(100vh - 96px);
-  overflow-y: auto;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: #18181b;
   color: #fafafa;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   padding: 12px;
+  overflow-y: auto;
+  box-sizing: border-box;
 }
-.ps-title { font-size: 13px; font-weight: 600; }
+.ps-help-list {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ps-help-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: #d4d4d8;
+}
+.ps-help-keycap {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: #fafafa;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 5px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+}
+.ps-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ps-list-counts {
+  color: #a1a1aa;
+  font-weight: 500;
+  font-size: 11px;
+}
+.ps-list-filters { display: inline-flex; gap: 4px; }
+.ps-list-panel .ps-annotation-list {
+  max-height: none;
+  overflow: visible;
+}
+.ps-annotation-secondary {
+  font-size: 11px;
+  color: #a1a1aa;
+  overflow-wrap: anywhere;
+}
+.ps-annotation-comment[role="button"] {
+  cursor: pointer;
+}
+.ps-annotation-comment[role="button"]:focus-visible {
+  outline: 2px solid var(--ps-accent, #6366f1);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.ps-list-footer {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+.ps-remove-completed {
+  border: none;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ps-remove-completed:hover:not(:disabled) { color: #f87171; }
+.ps-remove-completed:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+.ps-remove-completed:focus-visible {
+  outline: 2px solid var(--ps-accent, #6366f1);
+  outline-offset: 2px;
+}
+/* Goal 01 v5: custom tooltip — registry-generated, pointer-events none,
+   role=tooltip wired through aria-describedby (no native title). */
+.ps-tooltip {
+  position: fixed;
+  z-index: 2147483005;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #27272a;
+  color: #fafafa;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+.ps-tooltip-keycap {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: #d4d4d8;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: rgba(255, 255, 255, 0.06);
+}
 .ps-icon-button {
   border: none;
   background: transparent;
@@ -295,7 +535,7 @@ const TOOLBAR_STYLES = `
   background: rgba(251, 191, 36, 0.12);
   pointer-events: none;
 }
-/* Goal 04: view-filter toggle in the command row (aria-pressed = All). */
+/* Goal 04: view-filter toggle in the annotation-list panel. */
 .ps-view-toggle {
   font-size: 11px;
   padding: 2px 8px;
@@ -429,32 +669,84 @@ const TOOLBAR_STYLES = `
 :host-context([data-ps-theme="light"]) .ps-root { color-scheme: light; }
 /* Light host: the floating toggle follows the host palette too (D-031
    follow-up) — white button with dark glyph instead of the fixed black. */
-:host-context([data-ps-theme="light"]) .ps-toggle {
+:host-context([data-ps-theme="light"]) .ps-collapsed-chip,
+:host-context([data-ps-theme="light"]) .ps-horizontal-bar {
   background: #ffffff;
   color: #18181b;
   border: 1px solid rgba(0, 0, 0, 0.14);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
 }
-:host-context([data-ps-theme="light"]) .ps-toggle:hover { background: #f4f4f5; }
-:host-context([data-ps-theme="light"]) .ps-launcher-count {
+:host-context([data-ps-theme="light"]) .ps-chip-drag,
+:host-context([data-ps-theme="light"]) .ps-tool-grip { color: #71717a; }
+:host-context([data-ps-theme="light"]) .ps-chip-drag:hover,
+:host-context([data-ps-theme="light"]) .ps-tool-grip:hover {
+  color: #18181b;
+  background: rgba(0, 0, 0, 0.06);
+}
+:host-context([data-ps-theme="light"]) .ps-chip-open { color: #18181b; }
+:host-context([data-ps-theme="light"]) .ps-chip-open:hover { color: #000000; }
+:host-context([data-ps-theme="light"]) .ps-chip-expand { color: #71717a; }
+:host-context([data-ps-theme="light"]) .ps-chip-expand:hover {
+  color: #18181b;
+  background: rgba(0, 0, 0, 0.06);
+}
+:host-context([data-ps-theme="light"]) .ps-tool-action { color: #71717a; }
+:host-context([data-ps-theme="light"]) .ps-tool-action:hover {
+  color: #18181b;
+  background: rgba(0, 0, 0, 0.06);
+}
+:host-context([data-ps-theme="light"]) .ps-tool-action[aria-pressed="true"] {
   background: var(--ps-accent, #6366f1);
+  border-color: var(--ps-accent, #6366f1);
   color: #ffffff;
+  box-shadow: 0 0 0 2px
+    color-mix(in srgb, var(--ps-accent, #6366f1) 30%, transparent);
 }
-:host-context([data-ps-theme="light"]) .ps-drag-handle { color: #71717a; }
-:host-context([data-ps-theme="light"]) .ps-drag-handle:hover { color: #18181b; background: rgba(0,0,0,0.06); }
+:host-context([data-ps-theme="light"]) .ps-tool-action[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--ps-accent, #6366f1) 14%, transparent);
+  border-color: var(--ps-accent, #6366f1);
+  color: var(--ps-accent, #6366f1);
+}
+:host-context([data-ps-theme="light"]) .ps-tool-divider {
+  background: rgba(0, 0, 0, 0.14);
+}
+:host-context([data-ps-theme="light"]) .ps-status-panel,
+:host-context([data-ps-theme="light"]) .ps-help-popover,
+:host-context([data-ps-theme="light"]) .ps-list-panel {
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #ffffff;
+  color: #18181b;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
+:host-context([data-ps-theme="light"]) .ps-help-row { color: #3f3f46; }
+:host-context([data-ps-theme="light"]) .ps-help-keycap,
+:host-context([data-ps-theme="light"]) .ps-tooltip-keycap {
+  color: #3f3f46;
+  border-color: rgba(0, 0, 0, 0.14);
+  background: rgba(0, 0, 0, 0.05);
+}
+:host-context([data-ps-theme="light"]) .ps-tooltip {
+  background: #ffffff;
+  color: #18181b;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.16);
+}
+:host-context([data-ps-theme="light"]) .ps-list-counts { color: #71717a; }
+:host-context([data-ps-theme="light"]) .ps-annotation-secondary {
+  color: #71717a;
+}
+:host-context([data-ps-theme="light"]) .ps-remove-completed {
+  color: #71717a;
+}
+:host-context([data-ps-theme="light"]) .ps-remove-completed:hover:not(:disabled) {
+  color: #dc2626;
+}
 :host-context([data-ps-theme="light"]) .ps-copy-button {
   border: 1px solid rgba(0, 0, 0, 0.14);
   background: #ffffff;
   color: #71717a;
 }
 
-:host-context([data-ps-theme="light"]) .ps-panel {
-  border: 1px solid rgba(0, 0, 0, 0.14);
-  background: #ffffff;
-  color: #18181b;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
-}
-:host-context([data-ps-theme="light"]) .ps-title { color: #18181b; }
 :host-context([data-ps-theme="light"]) .ps-label { color: #3f3f46; }
 :host-context([data-ps-theme="light"]) .ps-hint { color: #52525b; }
 :host-context([data-ps-theme="light"]) .ps-meta { color: #3f3f46; }

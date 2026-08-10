@@ -2,33 +2,32 @@
  * Portal Studio — Shadow DOM toolbar (schema v2).
  *
  * Dev-only client UI rendered inside a shadow root (see `index.tsx`). Plain
- * semantic HTML + scoped styles. Interactions: single pick (click/Enter),
- * Shift+click or Shift+Enter multi-select, drag marquee region selection,
- * replace (a new plain pick replaces the selection), clear task, and an
- * annotated screenshot taken at save time. Keyboard accessible: Tab reaches
- * the floating button, the panel traps focus, Esc cancels, arrow keys move
- * between the hovered element and its ancestors while picking.
+ * semantic HTML + scoped styles. Interactions: strictly single-target pick
+ * (click/Enter), true Multi-select (the only multi-target path), drag
+ * marquee region selection, replace (a new plain pick replaces the
+ * selection), and an annotated screenshot taken at save time. Keyboard
+ * accessible: Tab reaches the dock, Esc cancels, arrow keys move between
+ * the hovered element and its ancestors while picking.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
-import {
-  CheckCircle2,
-  Copy,
-  Eye,
-  EyeOff,
-  GripVertical,
-  Pencil,
-  RotateCcw,
-  Trash2,
-  Wrench,
-  X,
-} from "lucide-react";
-
 import { translate } from "@nocobase/portal-sdk/i18n";
 
+import { StudioAnnotationListPanel } from "./StudioAnnotationListPanel";
+import { StudioShortcutHelp } from "./StudioShortcutHelp";
+import {
+  StudioToolbarShell,
+  type AuxiliaryPanel,
+} from "./StudioHorizontalToolbar";
+import {
+  rectFrom,
+  resolveAnchoredPlacement,
+  type AnchorRect,
+} from "./placement";
+
 import { sessionErrorMessage } from "./errors";
-import { matchHotkey, getHotkey } from "./hotkeys";
+import { matchStudioShortcut } from "./hotkeys";
 import {
   applyMutationOperations,
   isFullyCompletedTask,
@@ -52,6 +51,7 @@ import {
   moveDockPosition,
   resolveDockLayout,
   saveDockPosition,
+  TOGGLE_SIZE,
   type DockPosition,
 } from "./dock";
 
@@ -65,7 +65,6 @@ import { sharedDiagnosticsBuffer, snapshotDiagnostics } from "./diagnostics";
 import { formatTaskMarkdown } from "./format.ts";
 import { captureViewportPng } from "./screenshot";
 import {
-  isAnnotationUnresolved,
   resolveAnnotationTarget,
   resolveAnnotationTargets,
   resolveMarkerEditorPosition,
@@ -77,7 +76,6 @@ import {
   countOpenAnnotations,
   groupToggleElement,
   normalizeTask,
-  selectCompletedAnnotations,
   selectVisibleAnnotations,
   type ViewFilter,
 } from "./task-model";
@@ -86,7 +84,6 @@ import {
   EMPTY_SELECTION,
   normalizeRegion,
   replaceSelection,
-  toggleInSelection,
   type SelectionState,
 } from "./selection";
 import {
@@ -123,8 +120,6 @@ const t = (key: string, fallback: string) =>
 
 const STACK_DEPTH = 4;
 const MAX_REGION_SCAN_ELEMENTS = 5000;
-/** Position threshold for above/below-anchored copy fallback dialog. */
-const COPY_FLIP_MIN_ABOVE = 60;
 const readDockStorage = (): DockStorage | null => {
   try {
     return typeof window !== "undefined" ? window.localStorage : null;
@@ -263,16 +258,23 @@ export function StudioToolbar({
     }
   );
   const [dockWidth, setDockWidth] = useState(DEFAULT_DOCK_WIDTH);
+  const [dockHeight, setDockHeight] = useState(TOGGLE_SIZE);
   const dockPositionRef = useRef<DockPosition | null>(dockPosition);
   dockPositionRef.current = dockPosition;
   const dockWidthRef = useRef(dockWidth);
   dockWidthRef.current = dockWidth;
+  const dockHeightRef = useRef(dockHeight);
+  dockHeightRef.current = dockHeight;
   const dragRef = useRef<DragState | null>(null);
   const dragListenersRef = useRef<{
     move: (event: PointerEvent) => void;
     up: (event: PointerEvent) => void;
+    cancel: (event: PointerEvent) => void;
+    blur?: () => void;
+    release?: () => void;
+    handle?: HTMLElement;
+    lostPointerCapture?: (event: PointerEvent) => void;
   } | null>(null);
-  const didDragRef = useRef(false);
   const [mode, setMode] = useState<ToolbarMode>({ kind: "idle" });
   // Annotation-first (D-033 #4/#7): the draft comment of the annotation
   // being created, and the persisted annotation list of the active task
@@ -283,7 +285,7 @@ export function StudioToolbar({
   // resize, D-033 #8).
   const [markerTick, setMarkerTick] = useState(0);
   // Goal 03 list actions: inline comment editing (with dirty state),
-  // delete confirmation, and the More-menu clear-all confirmation.
+  // per-row delete confirmation, and the remove-completed confirmation.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -301,6 +303,33 @@ export function StudioToolbar({
   // completed) + the Remove-completed confirmation.
   const [viewFilter, setViewFilter] = useState<ViewFilter>("open");
   const [removeCompletedConfirm, setRemoveCompletedConfirm] = useState(false);
+  // Goal 01 v5: presentation-only marker visibility (never a batch
+  // setHidden mutation) and the mutually-exclusive auxiliary panel
+  // (shortcut help / annotation list).
+  const [markersVisible, setMarkersVisible] = useState(true);
+  const [auxPanel, setAuxPanel] = useState<AuxiliaryPanel>("none");
+  const helpButtonRef = useRef<HTMLButtonElement | null>(null);
+  const listButtonRef = useRef<HTMLButtonElement | null>(null);
+  const openCountRef = useRef(0);
+  // Trigger rects for the anchored Help/List panels (filled by a layout
+  // effect once the expanded bar has rendered).
+  const [auxAnchors, setAuxAnchors] = useState<{
+    shortcuts?: AnchorRect;
+    annotations?: AnchorRect;
+  }>({});
+  // Round-6 blocker 1: RENDERED surface heights of the Help/List panels
+  // (bounded by maxHeight) drive the above-flip anchor so the panels hug
+  // their trigger buttons; recomputed on open, dock move, viewport resize
+  // and panel-content size changes (ResizeObserver where available).
+  const [helpSurfaceHeight, setHelpSurfaceHeight] = useState<number | null>(
+    null
+  );
+  const [listSurfaceHeight, setListSurfaceHeight] = useState<number | null>(
+    null
+  );
+  const helpSurfaceNodeRef = useRef<HTMLDivElement | null>(null);
+  const listSurfaceNodeRef = useRef<HTMLDivElement | null>(null);
+  const [auxResizeTick, setAuxResizeTick] = useState(0);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const markerButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const editorSavingRef = useRef(false);
@@ -310,10 +339,70 @@ export function StudioToolbar({
   const [copyState, setCopyState] = useState<
     "idle" | "copied" | "manual"
   >("idle");
+  // Mount-once refs mirroring the transient-surface states. The Esc /
+  // outside-click listeners are registered ONCE at mount and read these
+  // refs, so a keypress arriving immediately after a surface opens is
+  // never lost to effect-registration timing (external review, P7).
+  const copyStateRef = useRef(copyState);
+  copyStateRef.current = copyState;
+  const auxPanelRef = useRef(auxPanel);
+  auxPanelRef.current = auxPanel;
+  const editorAnnotationIdRef = useRef(editorAnnotationId);
+  editorAnnotationIdRef.current = editorAnnotationId;
+  const editingIdRef = useRef(editingId);
+  editingIdRef.current = editingId;
+  const confirmDeleteIdRef = useRef(confirmDeleteId);
+  confirmDeleteIdRef.current = confirmDeleteId;
+  const removeCompletedConfirmRef = useRef(removeCompletedConfirm);
+  removeCompletedConfirmRef.current = removeCompletedConfirm;
+  // Round-4 finding 5: the RENDERED dialog height (bounded by maxHeight)
+  // drives the above-flip anchor so the fallback hugs the Copy button;
+  // recomputed on dock moves, viewport resize and height changes.
+  const [copyFallbackHeight, setCopyFallbackHeight] = useState<number | null>(
+    null
+  );
+  const [copyResizeTick, setCopyResizeTick] = useState(0);
+  useEffect(() => {
+    const onResize = () => setCopyResizeTick((tick) => tick + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (copyState !== "manual") {
+      setCopyFallbackPlacement(null);
+      setCopyFallbackHeight(null);
+      return;
+    }
+    const trigger = copyButtonRef.current?.getBoundingClientRect();
+    if (!trigger) return;
+    const viewport = viewportOf(window);
+    setCopyFallbackPlacement(
+      resolveAnchoredPlacement({
+        trigger: rectFrom(trigger),
+        viewport,
+        width: 320,
+        maxHeight: Math.max(160, Math.round(viewport.height * 0.6)),
+        // Genuine anchoring: use the measured rendered height so an
+        // above-flipped dialog sits right above the button, not hundreds
+        // of pixels away (round-4 finding 5).
+        surfaceHeight: copyFallbackHeight ?? undefined,
+      })
+    );
+  }, [copyState, copyFallbackHeight, copyResizeTick, dockPosition]);
   const [copyText, setCopyText] = useState("");
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  // Round-3 finding 4: the manual-Copy fallback is anchored to the REAL
+  // Copy button through the shared viewport-aware placement utility
+  // (flip above/below + horizontal clamping), recomputed on dock moves.
+  const [copyFallbackPlacement, setCopyFallbackPlacement] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
   const copyButtonRef = useRef<HTMLButtonElement | null>(null);
   // Last-known task (loaded from the server) used to rebuild mutation
   // POSTs through the existing atomic rewrite (no new endpoints).
@@ -342,24 +431,37 @@ export function StudioToolbar({
     dockWidth,
   });
 
-  // Measure the real dock row width once so clamping keeps the whole row
-  // (toggle + badge + More) inside the viewport; falls back to the constant
-  // when measurement is unavailable (jsdom).
+  // Measure the real dock size once so clamping keeps the whole chip/bar
+  // inside the viewport; falls back to the constants when measurement is
+  // unavailable (jsdom).
   useLayoutEffect(() => {
     const element = dockRef.current;
     if (!element) return;
-    const measured = element.getBoundingClientRect().width;
-    if (measured > 0) {
-      setDockWidth(measured);
-      // Re-clamp a persisted position against the MEASURED width so a
+    const rect = element.getBoundingClientRect();
+    const measuredWidth = rect.width;
+    const measuredHeight = rect.height;
+    if (measuredWidth > 0 && measuredHeight > 0) {
+      setDockWidth(measuredWidth);
+      setDockHeight(measuredHeight);
+      // Re-clamp a persisted position against the MEASURED size so a
       // position saved at the extreme edge cannot sit off-viewport after
       // reload (round-2 P4).
       const persisted = dockPositionRef.current;
       if (persisted) {
-        setDockPosition(clampDockPosition(persisted, viewportOf(window), measured));
+        setDockPosition(
+          clampDockPosition(
+            persisted,
+            viewportOf(window),
+            measuredWidth,
+            measuredHeight
+          )
+        );
       }
     }
-  }, []);
+    // Goal 01 v5: the dock size changes between the collapsed chip and
+    // the expanded bar — re-measure + re-clamp whenever the state flips so
+    // the expanded toolbar always stays inside the viewport.
+  }, [open]);
 
 
 
@@ -368,28 +470,48 @@ export function StudioToolbar({
     saveDockPosition(readDockStorage(), next);
   };
 
-  // Pointer drag (G01 AC1): starts on any dock surface (row, toggle). No pointer capture, so button clicks keep
-  // their natural semantics; movement past the threshold marks the gesture
-  // as a drag (didDragRef suppresses the toggle's click action). Window-
-  // capture listeners end the drag on pointerup/cancel. The page-level
-  // picking/marquee listeners are unaffected: they exclude Studio elements
-  // (isStudioElement, D-034 #3) and our window-capture handler stops
-  // propagation of the events it consumes.
+  // Pointer drag (G01 AC1, round-3 finding 1): the drag handle captures
+  // the pointer (setPointerCapture with pointerId filtering) so the gesture
+  // survives leaving the handle; the capture is released safely on
+  // pointerup/pointercancel, lostpointercapture, window blur and unmount.
+  // Click-vs-drag: movement past the threshold marks the gesture as a
+  // drag, and a dragged gesture never expands/clicks (the chip body's own
+  // threshold tracking is independent). Ordinary clicks and keyboard
+  // focus keep their natural semantics (no preventDefault on pointerdown).
+  // The page-level picking/marquee listeners are unaffected: they exclude
+  // Studio elements (isStudioElement, D-034 #3) and the window-capture
+  // handler stops propagation of the events it consumes.
   const stopDragListeners = () => {
     const listeners = dragListenersRef.current;
     if (!listeners) return;
+    // Round-4 finding 1: every listener is removed with the IDENTICAL
+    // callback that registered it (pointercancel uses `cancel`, not `up`),
+    // including the handle's lostpointercapture listener — removed BEFORE
+    // releasing capture so release/lost-capture reentrancy is impossible.
     window.removeEventListener("pointermove", listeners.move, true);
     window.removeEventListener("pointerup", listeners.up, true);
-    window.removeEventListener("pointercancel", listeners.up, true);
+    window.removeEventListener("pointercancel", listeners.cancel, true);
+    if (listeners.blur) window.removeEventListener("blur", listeners.blur);
+    if (listeners.handle && listeners.lostPointerCapture) {
+      listeners.handle.removeEventListener(
+        "lostpointercapture",
+        listeners.lostPointerCapture
+      );
+    }
+    listeners.release?.();
     dragListenersRef.current = null;
   };
 
   const handleDockPointerDown = (
-    event: React.PointerEvent<HTMLDivElement>
+    event: React.PointerEvent<HTMLElement>
   ) => {
-    // A new gesture: clear any suppression left by a PREVIOUS drag so the
-    // next plain click still toggles the panel.
-    didDragRef.current = false;
+    // Goal 01 v5: dragging the toolbar closes transient tooltips and
+    // auxiliary popovers (contract §10) but preserves all task/composer
+    // data — only presentation surfaces are dismissed.
+    setAuxPanel("none");
+    // Round-4 finding 1: a replacement gesture must not leak the previous
+    // gesture's window/handle listeners.
+    stopDragListeners();
     const drag: DragState = {
       startX: event.clientX,
       startY: event.clientY,
@@ -397,38 +519,90 @@ export function StudioToolbar({
       moved: false,
     };
     dragRef.current = drag;
+    const handle = event.currentTarget as HTMLElement;
+    const pointerId = event.pointerId;
+    // Real pointer capture (round-3 finding 1): the drag continues even
+    // when the pointer leaves the handle. Wrapped defensively — capture
+    // can throw if the pointer is already gone (synthetic jsdom events).
+    let captured = false;
+    try {
+      handle.setPointerCapture(pointerId);
+      captured = true;
+    } catch {
+      captured = false;
+    }
+    const releaseCapture = () => {
+      if (!captured) return;
+      captured = false;
+      try {
+        if (typeof handle.hasPointerCapture === "function" &&
+            handle.hasPointerCapture(pointerId)) {
+          handle.releasePointerCapture(pointerId);
+        }
+      } catch {
+        // Already released by the browser (lostpointercapture).
+      }
+    };
     const move = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
       const active = dragRef.current;
       if (!active) return;
       const dx = moveEvent.clientX - active.startX;
       const dy = moveEvent.clientY - active.startY;
       if (!active.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
       active.moved = true;
-      didDragRef.current = true;
       // Fresh viewport/width so a mid-drag resize clamps correctly (F5).
       const currentViewport = viewportOf(window);
       setDockPosition(
         clampDockPosition(
           { x: active.origin.x + dx, y: active.origin.y + dy },
           currentViewport,
-          dockWidthRef.current
+          dockWidthRef.current,
+          dockHeightRef.current
         )
       );
       moveEvent.preventDefault();
       moveEvent.stopPropagation();
     };
-    const up = (upEvent: PointerEvent) => {
+    const finish = (finishEvent: PointerEvent, save: boolean) => {
+      if (finishEvent.pointerId !== pointerId) return;
       stopDragListeners();
       dragRef.current = null;
-      upEvent.stopPropagation();
-      if (drag.moved) {
+      finishEvent.stopPropagation();
+      if (save && drag.moved) {
         saveDockPosition(readDockStorage(), dockPositionRef.current ?? position);
       }
     };
-    dragListenersRef.current = { move, up };
+    const up = (upEvent: PointerEvent) => finish(upEvent, true);
+    const cancel = (cancelEvent: PointerEvent) => finish(cancelEvent, false);
+    const onBlur = () => {
+      // Window blur (alt-tab etc.): abort the drag without persisting.
+      if (!dragRef.current) return;
+      stopDragListeners();
+      dragRef.current = null;
+    };
+    const onLostPointerCapture = (lostEvent: PointerEvent) => {
+      if (lostEvent.pointerId !== pointerId) return;
+      // The browser ended the capture (e.g. pointercancel or an element
+      // removal): abort the drag and clean up listeners.
+      if (!dragRef.current) return;
+      stopDragListeners();
+      dragRef.current = null;
+    };
+    dragListenersRef.current = {
+      move,
+      up,
+      cancel,
+      release: releaseCapture,
+      blur: onBlur,
+      handle,
+      lostPointerCapture: onLostPointerCapture,
+    };
     window.addEventListener("pointermove", move, true);
     window.addEventListener("pointerup", up, true);
-    window.addEventListener("pointercancel", up, true);
+    window.addEventListener("pointercancel", cancel, true);
+    window.addEventListener("blur", onBlur);
+    handle.addEventListener("lostpointercapture", onLostPointerCapture);
     // No preventDefault here (F6): buttons keep mouse focus; the move
     // handler prevents default (selection/scroll) during the drag.
     event.stopPropagation();
@@ -450,10 +624,253 @@ export function StudioToolbar({
     if (!delta) return;
     event.preventDefault();
     event.stopPropagation();
+    // Review P9: keyboard movement is treated like drag — transient
+    // auxiliary panels (Help/List) close so their anchors cannot go stale.
+    setAuxPanel("none");
     persistDockPosition(
-      moveDockPosition(position, delta, viewport, step, dockWidth)
+      moveDockPosition(
+        position,
+        delta,
+        viewport,
+        step,
+        dockWidth,
+        dockHeight
+      )
     );
   };
+
+  // Goal 01 v5: auxiliary panel (shortcut help / annotation list) open and
+  // close with mutual exclusion; collapse is presentation only and never
+  // touches annotations, tasks or the composer draft.
+  const toggleHelpPanel = useCallback(() => {
+    setOpen(true);
+    // Round-3 finding 3: switching to Help clears the LIST's transient UI
+    // so a hidden confirm/edit can never block Help's own Esc handling.
+    setEditingId(null);
+    setEditValue("");
+    setConfirmDeleteId(null);
+    setRemoveCompletedConfirm(false);
+    setAuxPanel((current) => (current === "shortcuts" ? "none" : "shortcuts"));
+  }, []);
+
+  const toggleListPanel = useCallback(() => {
+    setOpen(true);
+    setAuxPanel((current) =>
+      current === "annotations" ? "none" : "annotations"
+    );
+  }, []);
+
+  const collapseToolbar = useCallback(() => {
+    setAuxPanel("none");
+    setOpen(false);
+  }, []);
+
+  // Re-anchor the Help/List panels to their trigger buttons whenever the
+  // expanded bar mounts or the panel opens (fallback until measured).
+  useLayoutEffect(() => {
+    if (auxPanel === "shortcuts") {
+      const rect = helpButtonRef.current?.getBoundingClientRect();
+      if (rect) {
+        setAuxAnchors((current) => ({
+          ...current,
+          shortcuts: rectFrom(rect),
+        }));
+      }
+    }
+    if (auxPanel === "annotations") {
+      const rect = listButtonRef.current?.getBoundingClientRect();
+      if (rect) {
+        setAuxAnchors((current) => ({
+          ...current,
+          annotations: rectFrom(rect),
+        }));
+      }
+    }
+    // Review P9: re-anchor synchronously on ANY dock movement/resize so an
+    // open panel can never sit at a stale trigger position.
+  }, [auxPanel, dockPosition, open, auxResizeTick, helpSurfaceHeight, listSurfaceHeight]);
+
+  // Viewport resize: bump the tick so the trigger rects and placements are
+  // recomputed when a null/default or clamped dock moves with the viewport.
+  useEffect(() => {
+    const onResize = () => setAuxResizeTick((tick) => tick + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Round-6 blocker 1: measure the RENDERED panel height (initial measure
+  // via the surface ref; content-size changes via ResizeObserver where the
+  // browser provides it — jsdom lacks ResizeObserver, so the ref measure
+  // is the jsdom path).
+  const setMeasuredSurfaceHeight = (
+    which: "help" | "list",
+    height: number
+  ) => {
+    if (which === "help") {
+      setHelpSurfaceHeight((current) =>
+        current === height ? current : height
+      );
+    } else {
+      setListSurfaceHeight((current) =>
+        current === height ? current : height
+      );
+    }
+  };
+  const helpSurfaceRef = useCallback((node: HTMLDivElement | null) => {
+    helpSurfaceNodeRef.current = node;
+    if (node) {
+      setMeasuredSurfaceHeight("help", node.offsetHeight);
+    }
+  }, []);
+  const listSurfaceRef = useCallback((node: HTMLDivElement | null) => {
+    listSurfaceNodeRef.current = node;
+    if (node) {
+      setMeasuredSurfaceHeight("list", node.offsetHeight);
+    }
+  }, []);
+  useEffect(() => {
+    if (auxPanel === "none") return;
+    const node =
+      auxPanel === "shortcuts"
+        ? helpSurfaceNodeRef.current
+        : listSurfaceNodeRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      // Border-box size (padding + border included) — contentRect.height
+      // excludes padding and made the panel sit ~26px too high.
+      const entry = entries[0];
+      const height =
+        entry?.borderBoxSize?.[0]?.blockSize ?? entry?.contentRect.height;
+      if (typeof height === "number" && height > 0) {
+        setMeasuredSurfaceHeight(
+          auxPanel === "shortcuts" ? "help" : "list",
+          Math.round(height)
+        );
+      }
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [auxPanel]);
+
+  // Goal 01 v5: Help/List close on Esc (with focus return to the trigger)
+  // and on outside pointerdown. Capture listeners are suspended while an
+  // auxiliary panel is open, so Esc here never races a capture handler.
+  // Registered ONCE at mount and gated on refs so an Esc/pointerdown right
+  // after a surface opens is never lost to effect-registration timing.
+  useEffect(() => {
+    // Round-3 finding 3: ONE list-transient Esc coordinator. Esc closes
+    // the TOPMOST transient surface first, panel-scoped — the manual-Copy
+    // dialog, then Help/List transients by exact trigger, then the panel
+    // itself. Hidden transients of the OTHER panel never block Esc.
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const openPanel = auxPanelRef.current;
+      if (openPanel === "none") return;
+      // The manual-Copy dialog is topmost when open (its own mount-once
+      // listener closes it and restores Copy focus).
+      if (copyStateRef.current === "manual") return;
+      // The marker editor owns Esc whenever it is open (target-side).
+      if (editorAnnotationIdRef.current) return;
+      if (openPanel === "shortcuts") {
+        event.preventDefault();
+        event.stopPropagation();
+        setAuxPanel("none");
+        requestAnimationFrame(() => {
+          helpButtonRef.current?.focus();
+        });
+        return;
+      }
+      // openPanel === "annotations": the list's transients, topmost first
+      // (round-4 finding 4). The remove-completed confirmation renders in
+      // the panel FOOTER — painted last, so it is the visually topmost
+      // list transient; the per-row delete confirmation renders below the
+      // inline edit textarea within an item, and Esc priority follows the
+      // finding's required order: remove-completed → delete confirm →
+      // inline edit. A user who starts an inline edit and then opens the
+      // row's Delete confirmation gets the CONFIRMATION closed first while
+      // the edit stays active.
+      if (removeCompletedConfirmRef.current) {
+        event.preventDefault();
+        event.stopPropagation();
+        setRemoveCompletedConfirm(false);
+        requestAnimationFrame(() => {
+          removeCompletedTriggerRef.current?.focus();
+        });
+        return;
+      }
+      if (confirmDeleteIdRef.current) {
+        const confirmId = confirmDeleteIdRef.current;
+        event.preventDefault();
+        event.stopPropagation();
+        setConfirmDeleteId(null);
+        requestAnimationFrame(() => {
+          // Focus returns to the EXACT row that opened the confirmation
+          // (id-keyed ref; re-armed on re-mount).
+          deleteButtonRefs.current.get(confirmId)?.focus();
+        });
+        return;
+      }
+      if (editingIdRef.current) {
+        const editingId = editingIdRef.current;
+        event.preventDefault();
+        event.stopPropagation();
+        setEditingId(null);
+        setEditValue("");
+        requestAnimationFrame(() => {
+          editButtonRefs.current.get(editingId)?.focus();
+        });
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      setAuxPanel("none");
+      requestAnimationFrame(() => {
+        listButtonRef.current?.focus();
+      });
+    };
+    const hitInside = (
+      node: Element | null,
+      path: EventTarget[],
+      target: EventTarget | null
+    ): boolean => {
+      if (!node) return false;
+      if (path.includes(node)) return true;
+      return target instanceof Node && node.contains(target);
+    };
+    const handlePointerDown = (event: PointerEvent | MouseEvent) => {
+      if (auxPanelRef.current === "none") return;
+      // The panels live INSIDE the shadow root — document.getElementById
+      // does not pierce shadow boundaries, so resolve them through the
+      // toolbar root's shadow tree (real browsers) with a light-DOM
+      // fallback (jsdom tests).
+      const openPanel = auxPanelRef.current;
+      const rootNode = rootRef.current?.getRootNode() as
+        | ShadowRoot
+        | Document
+        | undefined;
+      const panel =
+        openPanel === "shortcuts"
+          ? rootNode?.querySelector("#ps-shortcut-help")
+          : rootNode?.querySelector("#ps-annotation-list");
+      const trigger =
+        openPanel === "shortcuts"
+          ? helpButtonRef.current
+          : listButtonRef.current;
+      const path = event.composedPath?.() ?? [];
+      if (hitInside(panel ?? null, path, event.target)) return;
+      if (hitInside(trigger, path, event.target)) return;
+      // Clicks on the toolbar itself (any action) never close the panel —
+      // the action's own handler decides (e.g. Pick dismisses it).
+      if (hitInside(dockRef.current, path, event.target)) return;
+      setAuxPanel("none");
+    };
+    document.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+    };
+  }, []);
 
 
 
@@ -493,26 +910,23 @@ export function StudioToolbar({
     setHoverName(null);
   }, []);
 
+  // Goal 01 v5 review P1: Pick is STRICTLY single-target. Shift is inert —
+  // Shift+click / Shift+Enter commit the same single-element draft as a
+  // plain pick. Multi is the only multi-target path (true multi mode),
+  // so no additive behavior is hidden inside Pick (contract §6).
   const addOrReplace = useCallback(
-    (element: Element, additive: boolean) => {
-      if (additive) {
-        // Multi-select stays in picking mode so more elements can be added.
-        selectionRef.current = toggleInSelection(selectionRef.current, element);
-        setSelectionCount(selectionRef.current.elements.length);
-        refreshSelectionRects();
-        return;
-      }
+    (element: Element) => {
       commitDraft(replaceSelection(selectionRef.current, element));
     },
-    [commitDraft, refreshSelectionRects]
+    [commitDraft]
   );
 
-  // Picking listeners (single/multi): pointermove builds the target stack,
-  // plain click/Enter replaces, Shift+click/Shift+Enter toggles, Esc cancels.
+  // Picking listeners (single only): pointermove builds the target stack,
+  // plain click/Enter commits a single-element draft, Esc cancels.
   // Capture listeners for single-pick mode: paused when the dock is collapsed
   // (AC5: collapsed dock must not leave invisible capture listeners active).
   useEffect(() => {
-    if (!picking || !open) return;
+    if (!picking || !open || auxPanel !== "none") return;
 
     const handlePointerMove = (event: PointerEvent) => {
       const target = event.target;
@@ -566,7 +980,7 @@ export function StudioToolbar({
         event.preventDefault();
         event.stopPropagation();
         const target = stack[current.index] ?? undefined;
-        if (target) addOrReplace(target, event.shiftKey);
+        if (target) addOrReplace(target);
       }
     };
     const handleClick = (event: MouseEvent) => {
@@ -578,7 +992,7 @@ export function StudioToolbar({
       const picked = stack[0] ?? target;
       event.preventDefault();
       event.stopPropagation();
-      addOrReplace(picked, event.shiftKey);
+      addOrReplace(picked);
     };
 
     document.addEventListener("pointermove", handlePointerMove, true);
@@ -591,13 +1005,13 @@ export function StudioToolbar({
       document.removeEventListener("keydown", handleKeyDown, true);
       document.removeEventListener("click", handleClick, true);
     };
-  }, [addOrReplace, cancelPicking, picking, open, refreshSelectionRects, updateOutline]);
+  }, [addOrReplace, auxPanel, cancelPicking, picking, open, refreshSelectionRects, updateOutline]);
 
   // Marquee listeners: pointerdown starts, pointermove updates the rect,
   // pointerup commits the region selection.
   // Marquee listeners: paused when the dock is collapsed (AC5).
   useEffect(() => {
-    if (!isMarquee || !open) return;
+    if (!isMarquee || !open || auxPanel !== "none") return;
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target;
@@ -654,7 +1068,7 @@ export function StudioToolbar({
       document.removeEventListener("pointerup", handlePointerUp, true);
       document.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [commitDraft, isMarquee, open]);
+  }, [auxPanel, commitDraft, isMarquee, open]);
 
   // Load the persisted task (annotations + revision status; schema v4/v5
   // dual read, D-033 #17). Runs on mount (the dock badge shows the live
@@ -702,6 +1116,10 @@ export function StudioToolbar({
 
   useEffect(() => {
     refreshTask();
+    // Re-fetch when the dock expands/collapses (the launcher count and the
+    // list need fresh data). The visibility-aware revision poll covers
+    // server-side changes while open — no refetch needed when an auxiliary
+    // panel opens, so optimistic local state is never discarded.
   }, [refreshTask, open]);
 
   // Goal 05: visibility-aware revision polling. While the document is
@@ -810,31 +1228,6 @@ export function StudioToolbar({
     };
   }, [open, refreshSelectionRects]);
 
-  // Focus trap while the panel is open.
-  useEffect(() => {
-    if (!open) return;
-    const root = rootRef.current;
-    if (!root) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Tab") return;
-      const focusable = findFocusable(root);
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = shadowActiveElement();
-      if (event.shiftKey) {
-        if (active === first || !root.contains(active)) {
-          event.preventDefault();
-          last.focus();
-        }
-      } else if (active === last || !root.contains(active)) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    root.addEventListener("keydown", handleKeyDown);
-    return () => root.removeEventListener("keydown", handleKeyDown);
-  }, [open]);
 
   const startPicking = () => {
     // A new capture session always starts from a clean selection; stale
@@ -912,7 +1305,7 @@ export function StudioToolbar({
   // arrows move + Space toggles the focused target.
   // Multi-select capture listeners: paused when the dock is collapsed (AC5).
   useEffect(() => {
-    if (!isMulti || !open) return;
+    if (!isMulti || !open || auxPanel !== "none") return;
 
     const handlePointerMove = (event: PointerEvent) => {
       const target = event.target;
@@ -1004,6 +1397,7 @@ export function StudioToolbar({
       document.removeEventListener("click", handleClick, true);
     };
   }, [
+    auxPanel,
     cancelMulti,
     commitMulti,
     isMulti,
@@ -1151,15 +1545,25 @@ export function StudioToolbar({
   // otherwise an edit made <300 ms before a reload would be lost (found
   // by the G03 e2e: the optimistic UI hid the missing persistence).
   // Esc closes the manual-copy fallback dialog and returns focus (F-1),
-  // and Tab is contained within the dialog (G05 a11y audit).
+  // and Tab is contained within the dialog (G05 a11y audit). Registered
+  // ONCE at mount and gated on copyStateRef so the Esc can never land in
+  // the window between the state commit and an effect registration.
+  const closeCopyFallback = useCallback(() => {
+    setCopyState("idle");
+    // Focus restoration after render: the dialog unmounts, then the real
+    // Copy button (threaded ref) receives focus.
+    requestAnimationFrame(() => {
+      copyButtonRef.current?.focus();
+    });
+  }, []);
+
   useEffect(() => {
-    if (copyState !== "manual") return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (copyStateRef.current !== "manual") return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        setCopyState("idle");
-        copyButtonRef.current?.focus();
+        closeCopyFallback();
         return;
       }
       if (event.key === "Tab") {
@@ -1182,9 +1586,10 @@ export function StudioToolbar({
       }
     };
     document.addEventListener("keydown", handleKeyDown, true);
-    return () =>
-      document.removeEventListener("keydown", handleKeyDown, true);
-  }, [copyState]);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+    // closeCopyFallback is a stable useCallback — the listener stays
+    // registered ONCE (the mount-once race-free contract).
+  }, [closeCopyFallback]);
 
   useEffect(() => {
     return () => {
@@ -1202,6 +1607,15 @@ export function StudioToolbar({
       flushPendingMutation();
     };
   }, [flushPendingMutation]);
+
+  // Round-3 finding 1: unmount/HMR during a drag must release the pointer
+  // capture and drop the window listeners — no leaked global state.
+  useEffect(() => {
+    return () => {
+      stopDragListeners();
+      dragRef.current = null;
+    };
+  }, []);
 
   /**
    * Copy the agent-facing Markdown (G04, D-033 #12/#15): first-class,
@@ -1483,28 +1897,12 @@ export function StudioToolbar({
   }, [closeMarkerEditor, editorAnnotationId]);
 
   // The button that opened the current delete confirmation (focus return).
-  const confirmDeleteButtonRef = useRef<HTMLButtonElement | null>(null);
-
-  // Esc cancels the inline delete confirmation and returns focus (F-1).
-  // The ref is re-armed by a callback ref on every delete-button mount, so
-  // by the time the rAF runs (after the confirm unmounts the actions span
-  // and they remount) it points at the FRESH button, not a detached node.
-  useEffect(() => {
-    if (!confirmDeleteId) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      setConfirmDeleteId(null);
-      requestAnimationFrame(() => {
-        confirmDeleteButtonRef.current?.focus();
-      });
-    };
-    document.addEventListener("keydown", handleKeyDown, true);
-    return () =>
-      document.removeEventListener("keydown", handleKeyDown, true);
-  }, [confirmDeleteId]);
-
+  // Round-3 finding 3: id-keyed focus-return refs for the annotation list
+  // transients — Esc restores focus to the EXACT row/trigger that opened
+  // a surface (replaces the shared last-row ref).
+  const deleteButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const editButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const removeCompletedTriggerRef = useRef<HTMLButtonElement | null>(null);
 
 
   const saveTask = async () => {
@@ -1741,44 +2139,68 @@ export function StudioToolbar({
 
   useEffect(() => {
     const handleHotkey = (event: KeyboardEvent) => {
-      // Events originating inside the Studio's OWN UI (marker editor
-      // textarea/buttons, panel, dock) must never trigger global
-      // shortcuts. Shadow-DOM retargeting makes event.target the HOST for
-      // document listeners, so check composedPath() (browsers) with a
-      // contains() fallback (jsdom) BEFORE matching — otherwise Ctrl/Cmd
-      // + Alt typed in the editor could still enter capture mode.
-      if (rootRef.current) {
-        const path = event.composedPath?.() ?? [];
-        if (path.includes(rootRef.current)) return;
-        if (
-          event.target instanceof Node &&
-          rootRef.current.contains(event.target)
-        ) {
-          return;
-        }
-      }
-      const matched = matchHotkey(event);
+      const matched = matchStudioShortcut(event);
       if (!matched) return;
+      // Round-4 finding 3: the Studio-root special case is REMOVED — the
+      // contract disables shortcuts only for editable controls,
+      // IME/repeat/extra modifiers (all enforced in hotkeys.ts via the
+      // composed-path-aware editable guard). EVERY registered action
+      // (Pick/Multi/Area/Copy/V/L/K/?) works from focused NON-editable
+      // Studio controls, including while the toolbar is collapsed.
       event.preventDefault();
       event.stopPropagation();
 
       const action = matched.action;
 
-      // Toggle: open/close the dock.
+      // Toggle: open/close the dock (collapsing also dismisses any open
+      // auxiliary panel — presentation only).
       if (action === "toggle") {
-        setOpen((prev) => !prev);
+        setOpen((prev) => {
+          if (prev) setAuxPanel("none");
+          return !prev;
+        });
         return;
       }
 
-      // Copy: copy open annotations as markdown.
+      // Copy: expand first (contract: a shortcut invoked while collapsed
+      // expands the toolbar and runs the requested action); disabled at
+      // zero Open annotations like the toolbar button.
       if (action === "copy") {
+        if (openCountRef.current === 0) return;
+        setOpen(true);
         copyMarkdownRef.current();
         return;
       }
 
+      // Marker visibility: presentation-only toggle.
+      if (action === "visibility") {
+        setOpen(true);
+        setMarkersVisible((current) => !current);
+        return;
+      }
+
+      // Annotation list / shortcut help: expand and open (toggle closed
+      // when the same panel is already open).
+      if (action === "list") {
+        setOpen(true);
+        setAuxPanel((current) =>
+          current === "annotations" ? "none" : "annotations"
+        );
+        return;
+      }
+      if (action === "help") {
+        setOpen(true);
+        setAuxPanel((current) =>
+          current === "shortcuts" ? "none" : "shortcuts"
+        );
+        return;
+      }
+
       // Capture actions (pick/multi/area): expand first if collapsed,
-      // then safely exit the previous capture and enter the new mode.
+      // dismiss any auxiliary panel, then safely exit the previous
+      // capture and enter the new mode.
       setOpen(true);
+      setAuxPanel("none");
 
       if (action === "pick") {
         startPickingRef.current();
@@ -1793,13 +2215,44 @@ export function StudioToolbar({
     return () => document.removeEventListener("keydown", handleHotkey, true);
   }, []);
 
-  const panelVisible = open;
+  // Goal 01 v5: the capture-status panel is a separate anchored surface,
+  // hidden while an auxiliary panel (Help/List) is open — the underlying
+  // mode/draft state is preserved and resumes when the panel closes.
+  const statusPanelVisible =
+    open && auxPanel === "none" && mode.kind !== "idle";
+
+  // Help/List panel placements: anchored to their trigger buttons, with a
+  // dock-row fallback before the expanded bar has been measured.
+  const fallbackTrigger = (): AnchorRect => ({
+    left: position.x + dockWidth - 170,
+    top: position.y,
+    right: position.x + dockWidth - 70,
+    bottom: position.y + 48,
+    width: 100,
+    height: 48,
+  });
+  const helpPlacement = resolveAnchoredPlacement({
+    trigger: auxAnchors.shortcuts ?? fallbackTrigger(),
+    viewport: viewportOf(window),
+    width: 300,
+    maxHeight: Math.max(200, Math.round(window.innerHeight * 0.6)),
+    // Genuine anchoring: the RENDERED height, not maxHeight (round-6
+    // blocker 1).
+    surfaceHeight: helpSurfaceHeight ?? undefined,
+  });
+  const listPlacement = resolveAnchoredPlacement({
+    trigger: auxAnchors.annotations ?? fallbackTrigger(),
+    viewport: viewportOf(window),
+    width: Math.min(380, Math.max(0, window.innerWidth - 16)),
+    maxHeight: Math.max(200, Math.round(window.innerHeight * 0.65)),
+    surfaceHeight: listSurfaceHeight ?? undefined,
+  });
 
   // Goal 04: view-filter derived values (launcher count is ALWAYS the open
   // count, independent of the view; the list/markers use the visible list).
   const openCount = countOpenAnnotations(annotations);
-  const completedCount = selectCompletedAnnotations(annotations).length;
   const visibleAnnotations = selectVisibleAnnotations(annotations, viewFilter);
+  openCountRef.current = openCount;
 
   // Goal 03: marker-local editor anchor — prefer bottom-right of the
   // marker/region rect, flip + clamp inside the viewport (pure math).
@@ -1839,39 +2292,60 @@ export function StudioToolbar({
         ref={dockRef}
         className="ps-dock"
         style={{ left: layout.toggle.left, top: layout.toggle.top }}
-        onPointerDown={handleDockPointerDown}
       >
-        <button
-          type="button"
-          className="ps-toggle"
-          aria-label={
-            open
-              ? t("studio.toggle.close", "Close Portal Studio")
-              : openCount > 0
-                ? t(
-                    "studio.toggle.openCount",
-                    "Open Portal Studio ({{count}} annotations)",
-                  ).replace("{{count}}", String(openCount))
-                : t("studio.toggle.open", "Open Portal Studio")
+        <StudioToolbarShell
+          open={open}
+          openCount={openCount}
+          markersVisible={markersVisible}
+          auxPanel={auxPanel}
+          picking={picking}
+          multi={isMulti}
+          marquee={isMarquee}
+          t={t}
+          helpButtonRef={helpButtonRef}
+          listButtonRef={listButtonRef}
+          copyButtonRef={copyButtonRef}
+          tooltipsSuppressed={
+            auxPanel !== "none" ||
+            copyState === "manual" ||
+            copyState === "copied"
           }
-          title={getHotkey("toggle")?.shortcutLabel}
-          aria-expanded={open}
-          onClick={() => {
-            if (didDragRef.current) {
-              didDragRef.current = false;
-              return;
+          onDragStart={handleDockPointerDown}
+          onKeyMove={handleToggleKeyDown}
+          onExpand={() => setOpen(true)}
+          onCollapse={collapseToolbar}
+          onPick={() => {
+            setAuxPanel("none");
+            // Clicking the active Pick cancels it (contract §6).
+            if (mode.kind === "picking") {
+              cancelPicking();
+            } else {
+              startPicking();
             }
-            setOpen((current) => !current);
           }}
-          onKeyDown={handleToggleKeyDown}
-        >
-          <Wrench size={18} aria-hidden="true" />
-          {openCount > 0 ? (
-            <span className="ps-launcher-count" aria-hidden="true">
-              {openCount > 99 ? "99+" : openCount}
-            </span>
-          ) : null}
-        </button>
+          onMulti={() => {
+            setAuxPanel("none");
+            // Clicking the active Multi cancels it.
+            if (mode.kind === "multi") {
+              cancelMulti();
+            } else {
+              startMulti();
+            }
+          }}
+          onArea={() => {
+            setAuxPanel("none");
+            // Clicking the active Area cancels it.
+            if (mode.kind === "marquee") {
+              setMode({ kind: "idle" });
+            } else {
+              startMarquee();
+            }
+          }}
+          onCopy={copyMarkdown}
+          onToggleMarkers={() => setMarkersVisible((current) => !current)}
+          onToggleHelp={toggleHelpPanel}
+          onToggleList={toggleListPanel}
+        />
         {copyState === "copied" ? (
           <div className="ps-copy-feedback" role="status" aria-live="polite">
             {t("studio.copied", "Copied to clipboard")}
@@ -1879,13 +2353,18 @@ export function StudioToolbar({
         ) : null}
         {copyState === "manual" ? (
           <div
-            className={
-              position.y < COPY_FLIP_MIN_ABOVE
-                ? "ps-copy-fallback ps-more-menu-below"
-                : "ps-copy-fallback"
-            }
+            ref={(node) => {
+              if (node) {
+                const height = node.offsetHeight;
+                setCopyFallbackHeight((current) =>
+                  current === height ? current : height
+                );
+              }
+            }}
+            className="ps-copy-fallback"
             role="dialog"
             aria-label={t("studio.copyManual", "Copy manually")}
+            style={copyFallbackPlacement ?? undefined}
           >
             <p className="ps-hint">
               {t(
@@ -1906,7 +2385,7 @@ export function StudioToolbar({
             <button
               type="button"
               className="ps-button"
-              onClick={() => setCopyState("idle")}
+              onClick={closeCopyFallback}
             >
               {t("studio.close", "Close")}
             </button>
@@ -1914,404 +2393,85 @@ export function StudioToolbar({
         ) : null}
       </div>
 
-      {panelVisible ? (
-        <div
-          className="ps-panel"
-          style={layout.panel}
-          role="toolbar"
-          aria-label={t("studio.title", "Portal Studio")}
-        >
-          {/* Command row (Goal 01): direct actions, no separate menu */}
-          <div className="ps-command-row">
-            <span className="ps-title" style={{ flex: 1 }}>
-              {t("studio.title", "Portal Studio")}
-            </span>
-            <div
-              className="ps-drag-handle"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label={t("studio.dragHint", "Drag to reposition")}
-              onPointerDown={handleDockPointerDown}
-              style={{ cursor: "grab" }}
-            >
-              <GripVertical size={14} aria-hidden="true" />
-            </div>
-            <button
-              type="button"
-              className="ps-icon-button"
-              aria-label={t("studio.pick", "Pick element")}
-              title={getHotkey("pick")?.shortcutLabel}
-              onClick={startPicking}
-            >
-              <Wrench size={14} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="ps-icon-button"
-              aria-label={t("studio.multiSelect", "Multi-select")}
-              title={getHotkey("multi")?.shortcutLabel}
-              onClick={startMulti}
-            >
-              <CheckCircle2 size={14} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="ps-icon-button"
-              aria-label={t("studio.selectRegion", "Select region")}
-              title={getHotkey("area")?.shortcutLabel}
-              onClick={startMarquee}
-            >
-              <Eye size={14} aria-hidden="true" />
-            </button>
-            <button
-              ref={copyButtonRef}
-              type="button"
-              className="ps-icon-button"
-              aria-label={t("studio.copy", "Copy")}
-              title={getHotkey("copy")?.shortcutLabel}
-              onClick={copyMarkdown}
-            >
-              <Copy size={14} aria-hidden="true" />
-            </button>
-            {annotations.length > 0 ? (
-              <button
-                type="button"
-                className="ps-icon-button"
-                aria-label={
-                  annotations.some((a) => a.hidden)
-                    ? t("studio.showAllMarkers", "Show all markers")
-                    : t("studio.hideAllMarkers", "Hide all markers")
-                }
-                onClick={() => {
-                  const anyHidden = annotations.some((a) => a.hidden);
-                  enqueueMutation(
-                    annotations.map((a) => ({
-                      op: "setHidden",
-                      annotationId: a.annotationId,
-                      hidden: !anyHidden,
-                    }))
-                  );
-                }}
-              >
-                {annotations.some((a) => a.hidden) ? (
-                  <Eye size={14} aria-hidden="true" />
-                ) : (
-                  <EyeOff size={14} aria-hidden="true" />
-                )}
-              </button>
-            ) : null}
-            {/* Goal 04: view filter + Remove completed — DIRECT controls in
-                the expanded dock (no ellipsis menu). Two buttons with
-                aria-pressed on the ACTIVE view; changing the view closes
-                any open marker editor so it cannot linger over a
-                now-filtered annotation. */}
-            <button
-              type="button"
-              className="ps-button ps-view-toggle"
-              aria-pressed={viewFilter === "open"}
-              onClick={() => {
-                setViewFilter("open");
-                setRemoveCompletedConfirm(false);
-                closeMarkerEditor();
-              }}
-            >
-              {t("studio.viewOpen", "Open")}
-            </button>
-            <button
-              type="button"
-              className="ps-button ps-view-toggle"
-              aria-pressed={viewFilter === "all"}
-              onClick={() => {
-                setViewFilter("all");
-                setRemoveCompletedConfirm(false);
-                closeMarkerEditor();
-              }}
-            >
-              {t("studio.viewAll", "All")}
-            </button>
-            <button
-              type="button"
-              className="ps-button ps-danger"
-              disabled={completedCount === 0}
-              onClick={() => setRemoveCompletedConfirm((current) => !current)}
-            >
-              {t("studio.removeCompleted", "Remove completed ({{count}})").replace(
-                "{{count}}",
-                String(completedCount)
-              )}
-            </button>
-            {removeCompletedConfirm ? (
-              <span className="ps-annotation-confirm" role="alert">
-                {t(
-                  "studio.confirmRemoveCompleted",
-                  "Remove {{count}} completed annotation(s)? Open items stay."
-                ).replace("{{count}}", String(completedCount))}{" "}
-                <button
-                  type="button"
-                  className="ps-button ps-danger"
-                  disabled={editorSaving}
-                  onClick={() => {
-                    enqueueMutation([{ op: "removeCompleted" }]);
-                    setRemoveCompletedConfirm(false);
-                  }}
-                >
-                  {t("studio.remove", "Remove")}
-                </button>
-                <button
-                  type="button"
-                  className="ps-button"
-                  onClick={() => setRemoveCompletedConfirm(false)}
-                >
-                  {t("studio.cancel", "Cancel")}
-                </button>
-              </span>
-            ) : null}
-            <button
-              type="button"
-              className="ps-icon-button"
-              aria-label={t("studio.collapse", "Collapse")}
-              onClick={() => setOpen(false)}
-            >
-              <X size={14} aria-hidden="true" />
-            </button>
-          </div>
+      {auxPanel === "shortcuts" ? (
+        <StudioShortcutHelp
+          t={t}
+          style={helpPlacement}
+          surfaceRef={helpSurfaceRef}
+        />
+      ) : null}
 
-          {visibleAnnotations.length > 0 ? (
-            <div className="ps-section">
-              <p className="ps-label">
-                {t("studio.annotationsList", "Annotations")} (
-                {visibleAnnotations.length})
-              </p>
-              <ul className="ps-annotation-list">
-                {visibleAnnotations.map((annotation) => {
-                  // Display numbers derive from the CURRENT VISIBLE list
-                  // order (D-034 #4), so the Open view renumbers 1..N and
-                  // All shows the full order.
-                  const number = annotationDisplayNumber(
-                    visibleAnnotations,
-                    annotation.annotationId
-                  );
-                  const unresolved = isAnnotationUnresolved(annotation);
-                  const hidden = annotation.hidden === true;
-                  const completed = annotation.status === "completed";
-                  const editing = editingId === annotation.annotationId;
-                  const confirming = confirmDeleteId === annotation.annotationId;
-                  const dirty = editing && editValue !== annotation.comment;
-                  return (
-                    <li
-                      key={annotation.annotationId}
-                      className={
-                        hidden
-                          ? "ps-annotation-item ps-annotation-item-hidden"
-                          : completed
-                            ? "ps-annotation-item ps-annotation-item-completed"
-                            : "ps-annotation-item"
-                      }
-                    >
-                      <span
-                        className={
-                          completed
-                            ? "ps-marker-chip ps-marker-chip-completed"
-                            : "ps-marker-chip"
-                        }
-                      >
-                        {number ?? "?"}
-                      </span>
-                      <span className="ps-annotation-body">
-                        {editing ? (
-                          <textarea
-                            className="ps-textarea ps-annotation-edit"
-                            rows={2}
-                            autoFocus
-                            disabled={editorSaving}
-                            value={editValue}
-                            onChange={(event) => setEditValue(event.target.value)}
-                            onKeyDown={(event) => {
-                              // D-034 #1: Enter = newline, Ctrl/Cmd+Enter = save.
-                              if (
-                                event.key === "Enter" &&
-                                (event.ctrlKey || event.metaKey)
-                              ) {
-                                event.preventDefault();
-                                saveEdit();
-                              }
-                            }}
-                          />
-                        ) : (
-                          <span className="ps-annotation-comment">
-                            {annotation.comment.slice(0, 120) ||
-                              t("studio.emptyComment", "(empty)")}
-                          </span>
-                        )}
-                        {dirty ? (
-                          <span className="ps-unresolved">
-                            {t("studio.unsaved", "Unsaved")}
-                          </span>
-                        ) : null}
-                        {unresolved ? (
-                          <span className="ps-unresolved">
-                            {t("studio.unresolved", "Target not found")}
-                          </span>
-                        ) : null}
-                        {completed ? (
-                          <span className="ps-completed-label">
-                            {t("studio.completed", "Completed")}
-                          </span>
-                        ) : null}
-                        {hidden ? (
-                          <span className="ps-unresolved">
-                            {t("studio.hidden", "Hidden")}
-                          </span>
-                        ) : null}
-                        {confirming ? (
-                          <span className="ps-annotation-confirm" role="alert">
-                            {t(
-                              "studio.confirmDelete",
-                              "Delete this annotation?"
-                            )}
-                            <button
-                              type="button"
-                              className="ps-button ps-danger"
-                              disabled={editorSaving}
-                              onClick={confirmDelete}
-                            >
-                              {t("studio.delete", "Delete")}
-                            </button>
-                            <button
-                              type="button"
-                              className="ps-button"
-                              disabled={editorSaving}
-                              onClick={() => setConfirmDeleteId(null)}
-                            >
-                              {t("studio.cancel", "Cancel")}
-                            </button>
-                          </span>
-                        ) : null}
-                        {!confirming ? (
-                          <span className="ps-annotation-actions">
-                            <button
-                              type="button"
-                              className="ps-icon-button"
-                              aria-label={t(
-                                "studio.editAnnotation",
-                                "Edit comment"
-                              )}
-                              disabled={editorSaving}
-                              onClick={() => startEdit(annotation)}
-                            >
-                              <Pencil size={12} aria-hidden="true" />
-                            </button>
-                            {completed ? (
-                              <button
-                                type="button"
-                                className="ps-icon-button"
-                                aria-label={t("studio.reopen", "Reopen")}
-                                disabled={editorSaving}
-                                onClick={() =>
-                                  enqueueMutation([
-                                    {
-                                      op: "reopen",
-                                      annotationId: annotation.annotationId,
-                                    },
-                                  ])
-                                }
-                              >
-                                <RotateCcw size={12} aria-hidden="true" />
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                className="ps-icon-button"
-                                aria-label={t(
-                                  "studio.completeAnnotation",
-                                  "Complete"
-                                )}
-                                aria-pressed={completed}
-                                disabled={editorSaving}
-                                onClick={() =>
-                                  enqueueMutation([
-                                    {
-                                      op: "complete",
-                                      annotationId: annotation.annotationId,
-                                    },
-                                  ])
-                                }
-                              >
-                                <CheckCircle2 size={12} aria-hidden="true" />
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              className="ps-icon-button"
-                              aria-label={t(
-                                "studio.hideAnnotation",
-                                "Hide"
-                              )}
-                              aria-pressed={hidden}
-                              disabled={editorSaving}
-                              onClick={() =>
-                                enqueueMutation([
-                                  {
-                                    op: "setHidden",
-                                    annotationId: annotation.annotationId,
-                                    hidden: !hidden,
-                                  },
-                                ])
-                              }
-                            >
-                              {hidden ? (
-                                <EyeOff size={12} aria-hidden="true" />
-                              ) : (
-                                <Eye size={12} aria-hidden="true" />
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              className="ps-icon-button"
-                              aria-label={t(
-                                "studio.deleteAnnotation",
-                                "Delete"
-                              )}
-                              disabled={editorSaving}
-                              ref={(node) => {
-                                // Re-arm on every mount so the Esc focus
-                                // return targets a CONNECTED button (F-1).
-                                if (node && !confirming) {
-                                  confirmDeleteButtonRef.current = node;
-                                }
-                              }}
-                              onClick={() =>
-                                setConfirmDeleteId(annotation.annotationId)
-                              }
-                            >
-                              <Trash2 size={12} aria-hidden="true" />
-                            </button>
-                          </span>
-                        ) : null}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ) : null}
-          {visibleAnnotations.length === 0 && annotations.length > 0 ? (
-            <div className="ps-section">
-              <p className="ps-hint" role="status">
-                {t(
-                  "studio.emptyOpenView",
-                  "No open annotations — switch to All to review completed items."
-                )}
-              </p>
-            </div>
-          ) : null}
+      {auxPanel === "annotations" ? (
+        <StudioAnnotationListPanel
+          t={t}
+          style={listPlacement}
+          surfaceRef={listSurfaceRef}
+          annotations={annotations}
+          viewFilter={viewFilter}
+          onViewFilterChange={(filter) => {
+            setViewFilter(filter);
+            setRemoveCompletedConfirm(false);
+            closeMarkerEditor();
+          }}
+          editingId={editingId}
+          editValue={editValue}
+          onEditStart={startEdit}
+          onEditChange={setEditValue}
+          onEditSave={saveEdit}
+          confirmDeleteId={confirmDeleteId}
+          onConfirmDelete={setConfirmDeleteId}
+          onCancelDelete={() => setConfirmDeleteId(null)}
+          removeCompletedConfirm={removeCompletedConfirm}
+          onToggleRemoveCompleted={() =>
+            setRemoveCompletedConfirm((current) => !current)
+          }
+          onCancelRemoveCompleted={() => setRemoveCompletedConfirm(false)}
+          onRemoveCompleted={() => {
+            enqueueMutation([{ op: "removeCompleted" }]);
+            setRemoveCompletedConfirm(false);
+          }}
+          onComplete={(annotationId) =>
+            enqueueMutation([{ op: "complete", annotationId }])
+          }
+          onReopen={(annotationId) =>
+            enqueueMutation([{ op: "reopen", annotationId }])
+          }
+          onHideToggle={(annotationId) => {
+            const annotation = annotations.find(
+              (candidate) => candidate.annotationId === annotationId
+            );
+            if (!annotation) return;
+            enqueueMutation([
+              {
+                op: "setHidden",
+                annotationId,
+                hidden: !(annotation.hidden === true),
+              },
+            ]);
+          }}
+          onDelete={confirmDelete}
+          onItemSelect={(annotation) => openMarkerEditor(annotation)}
+          editorSaving={editorSaving}
+          deleteButtonRefs={deleteButtonRefs}
+          editButtonRefs={editButtonRefs}
+          removeCompletedTriggerRef={removeCompletedTriggerRef}
+          error={
+            auxPanel === "annotations" && mode.kind === "error"
+              ? mode.message
+              : null
+          }
+        />
+      ) : null}
+
+      {statusPanelVisible ? (
+        <div className="ps-status-panel" style={layout.panel}>
 
           {mode.kind === "picking" ? (
             <div className="ps-section" role="status" aria-live="polite">
               <p className="ps-hint">
                 {t(
                   "studio.pickHint",
-                  "Hover an element, then click or press Enter. Arrow keys move between the element and its ancestors. Shift adds to the selection. Esc cancels."
+                  "Hover an element, then click or press Enter. Arrow keys move between the element and its ancestors. Esc cancels."
                 )}
               </p>
               {hoverName ? (
@@ -2583,15 +2743,16 @@ export function StudioToolbar({
           can never be annotated by Studio itself. Unresolved targets stay
           in the list (grey chip) with no page anchor. */}
       {visibleAnnotations.map((annotation) => {
-        if (annotation.hidden === true) return null;
+        if (!markersVisible || annotation.hidden === true) return null;
         // Goal 06: markers only render when the annotation's routeKey
         // matches the current route (legacy annotations without pageContext
         // always render).
         if (!annotationMatchesRoute(annotation)) return null;
-        // Display numbers derive from the CURRENT VISIBLE list (D-034 #4),
-        // so marker numbers match the list chips in every view.
+        // Review P2: marker numbers are STABLE across Open/All filtering —
+        // always derived from the FULL annotations list so they match the
+        // list chips in every view.
         const number = annotationDisplayNumber(
-          visibleAnnotations,
+          annotations,
           annotation.annotationId
         );
         const completed = annotation.status === "completed";

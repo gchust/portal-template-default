@@ -31,15 +31,14 @@ describe("i18n key-set parity (en-US vs zh-CN)", () => {
   });
 
   it("covers every studio.* namespace key referenced by the code", () => {
-    // Spot-check the Annotation-first surface (G01–G05). The locale files
-    // use FLAT keys ("studio.toggle.open"), so look them up directly.
+    // Spot-check the Annotation-first surface (G01–G06). The locale files
+    // use FLAT keys ("studio.chipLabel"), so look them up directly.
     const enFlat = enUS as Record<string, unknown>;
     for (const key of [
-      "studio.toggle.open",
-      "studio.toggle.openCount",
-      "studio.toggle.close",
-      "studio.annotations",
-      "studio.annotationsList",
+      "studio.chipLabel",
+      "studio.dragToolbar",
+      "studio.expandToolbar",
+      "studio.collapseToolbar",
       "studio.unresolved",
       "studio.captureFailed",
       "studio.instruction",
@@ -58,17 +57,24 @@ describe("i18n key-set parity (en-US vs zh-CN)", () => {
       "studio.editAnnotation",
       "studio.hideAnnotation",
       "studio.deleteAnnotation",
-      "studio.copy",
+      "studio.copyAnnotations",
       "studio.copied",
       "studio.copyManual",
       "studio.copyManualHint",
       "studio.copyEmpty",
       "studio.completeAnnotation",
       "studio.completed",
-      "studio.collapse",
-      "studio.dragHint",
-      "studio.showAllMarkers",
-      "studio.hideAllMarkers",
+      "studio.visibilityShow",
+      "studio.visibilityHide",
+      "studio.helpTitle",
+      "studio.helpSafety",
+      "studio.helpEsc",
+      "studio.listAction",
+      "studio.listTitle",
+      "studio.listCounts",
+      "studio.viewFilter",
+      "studio.emptyOpenList",
+      "studio.emptyAllList",
     ]) {
       expect(enFlat[key], `missing en ${key}`).toBeDefined();
     }

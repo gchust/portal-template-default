@@ -87,11 +87,26 @@ const openAndPick = async (
   element: Element
 ) => {
   await user.click(
-    screen.getByRole("button", { name: "Open Portal Studio" })
+    screen.getByRole("button", { name: /Annotation tools/ })
   );
   await user.click(screen.getByRole("button", { name: "Pick element" }));
   element.focus();
 };
+
+/** Expand the collapsed chip (if present) and open the annotation-list
+ *  panel (if not already open). */
+const openList = async (user: ReturnType<typeof userEvent.setup>) => {
+  const chip = screen.queryByRole("button", { name: /Annotation tools/ });
+  if (chip) await user.click(chip);
+  const list = screen.queryByRole("button", { name: "Annotation list" });
+  if (list && list.getAttribute("aria-expanded") !== "true") {
+    await user.click(list);
+  }
+};
+
+/** Per-item hide button (exact — distinct from the toolbar "Hide markers"). */
+const hideItemButton = () =>
+  screen.getByRole("button", { name: "Hide", exact: true });
 
 beforeEach(async () => {
   vi.mocked(
@@ -110,7 +125,7 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
     await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
+      screen.getByRole("button", { name: /Annotation tools/ })
     );
     expect(
       screen.getByRole("toolbar", { name: "Portal Studio" })
@@ -125,7 +140,7 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
     await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
+      screen.getByRole("button", { name: /Annotation tools/ })
     );
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     await user.keyboard("{Escape}");
@@ -138,7 +153,7 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
     await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
+      screen.getByRole("button", { name: /Annotation tools/ })
     );
     await user.click(screen.getByRole("button", { name: "Select region" }));
     expect(
@@ -239,26 +254,26 @@ describe("StudioToolbar", () => {
     expect(JSON.stringify(payload)).not.toContain("test-token");
   });
 
-  it("supports Shift+Enter multi-select and plain Enter replace", async () => {
+  it("Pick is STRICTLY single-target: Shift+Enter commits one element, Shift+click never accumulates (review P1)", async () => {
     const user = userEvent.setup();
     const a = makePageElement("A", "row-a");
     const b = makePageElement("B", "row-b");
     render(<StudioToolbar config={config} />);
     await openAndPick(user, a);
+    // Shift+Enter behaves exactly like plain Enter: ONE element draft.
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    // Additive picks stay in picking mode and update the counter.
-    expect(screen.getByText(/Selected/)).toBeInTheDocument();
-    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
-
-    b.focus();
-    await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(screen.getByText("2", { selector: "strong" })).toBeInTheDocument();
-
-    // Plain Enter commits the draft with a replaced (single) selection.
-    a.focus();
-    await user.keyboard("{Enter}");
     expect(screen.getByText(/Captured/)).toBeInTheDocument();
     expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    // The draft is committed — no additive "Selected" counter path exists.
+    expect(screen.queryByText(/Selected/)).not.toBeInTheDocument();
+
+    // Re-enter picking: Shift+click must NOT toggle the second element in.
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    await user.click(b, { shiftKey: true });
+    expect(screen.getByText(/Captured/)).toBeInTheDocument();
+    // Strict single: the draft carries exactly one captured element.
+    expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
+    expect(screen.queryByText("2", { selector: "strong" })).not.toBeInTheDocument();
   });
 
   it("starts a new picking session with a clean selection after close/reopen", async () => {
@@ -296,14 +311,15 @@ describe("StudioToolbar", () => {
     });
 
     // Close and reopen the panel: expand/collapse is presentation-only (Goal 01),
-    // so the stale selection from the saved round persists. Clicking Pick again
-    // starts a fresh session (count resets to 0), then Shift+Enter picks the
-    // element fresh (count 1).
-    await user.click(screen.getByRole("button", { name: /Close Portal Studio/ }));
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // so the stale selection from the saved round persists. The saved mode is
+    // NOT picking, so one Pick click starts a fresh session, then Shift+Enter
+    // (strict single) commits a draft carrying exactly ONE element.
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(screen.getByText(/Captured/)).toBeInTheDocument();
     expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
   });
 
@@ -312,17 +328,19 @@ describe("StudioToolbar", () => {
     const row = makePageElement("Alice", "row-a");
     render(<StudioToolbar config={config} />);
     await openAndPick(user, row);
-    await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(screen.getByText(/Selected/)).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText(/Captured/)).toBeInTheDocument();
 
-    // Close the panel while picking with a non-empty selection, then reopen:
-    // expand/collapse is presentation-only (Goal 01), so the selection persists.
-    // Clicking Pick again starts a fresh session, Shift+Enter picks (count 1).
-    await user.click(screen.getByRole("button", { name: /Close Portal Studio/ }));
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // Close the panel while a draft is pending, then reopen:
+    // expand/collapse is presentation-only (Goal 01), so the draft persists.
+    // The pending mode is DRAFT (not picking), so one Pick click starts a
+    // fresh session — a Shift+Enter pick commits exactly ONE element.
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(screen.getByText(/Captured/)).toBeInTheDocument();
     expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
   });
 
@@ -362,11 +380,11 @@ describe("StudioToolbar", () => {
     });
     await user.click(screen.getByRole("button", { name: "Done" }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
-    // The stale selection must be gone: Shift+Enter on the same element adds
-    // it (counter 1) instead of toggling it out of an old selection.
+    // The stale selection must be gone: a fresh Shift+Enter pick commits a
+    // draft with exactly ONE element (never an accumulated counter).
     row.focus();
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(screen.getByText(/Selected/)).toBeInTheDocument();
+    expect(screen.getByText(/Captured/)).toBeInTheDocument();
     expect(screen.getByText("1", { selector: "strong" })).toBeInTheDocument();
   });
 
@@ -383,9 +401,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
@@ -456,14 +472,15 @@ describe("StudioToolbar", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getAllByRole("listitem")).toHaveLength(2);
     });
-    const list = screen.getByText("Annotations (2)");
-    expect(list).toBeInTheDocument();
+    // Panel header: localized title plus open/total counts.
+    expect(
+      screen.getByRole("region", { name: "Annotations" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("2 open · 2 total")).toBeInTheDocument();
     expect(screen.getByText("Bold the header")).toBeInTheDocument();
     expect(screen.getByText("Highlight the table")).toBeInTheDocument();
   });
@@ -542,6 +559,8 @@ describe("StudioToolbar", () => {
     expect(
       screen.getByRole("alert").textContent
     ).toContain("screenshot capture failed");
+    // The annotation is retained — visible in the annotation list.
+    await openList(user);
     expect(
       screen.getByText("keep me")
     ).toBeInTheDocument();
@@ -578,7 +597,7 @@ describe("StudioToolbar", () => {
     ]);
     render(<StudioToolbar config={config} />);
     await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
+      screen.getByRole("button", { name: /Annotation tools/ })
     );
     await user.click(screen.getByRole("button", { name: "Multi-select" }));
     await user.click(cellA);
@@ -613,7 +632,7 @@ describe("StudioToolbar", () => {
     const cellB = makePageElement("B", "cell-b");
     render(<StudioToolbar config={config} />);
     await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
+      screen.getByRole("button", { name: /Annotation tools/ })
     );
     await user.click(screen.getByRole("button", { name: "Multi-select" }));
     cellA.focus();
@@ -657,11 +676,9 @@ describe("StudioToolbar", () => {
   });
 
   const loadThen = async (user: ReturnType<typeof userEvent.setup>) => {
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
-      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
     });
   };
 
@@ -844,7 +861,7 @@ describe("StudioToolbar", () => {
     ]);
     render(<StudioToolbar config={config} />);
     await loadThen(user);
-    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await user.click(hideItemButton());
     await waitFor(() => {
       expect(screen.getByText("Hidden")).toBeInTheDocument();
     });
@@ -856,7 +873,7 @@ describe("StudioToolbar", () => {
         )
       ).toBe(true);
     });
-    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await user.click(hideItemButton());
     await waitFor(() => {
       expect(screen.queryByText("Hidden")).not.toBeInTheDocument();
     });
@@ -875,11 +892,9 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
-      expect(screen.getByText(/Annotations/)).toBeInTheDocument();
+      expect(screen.getByText("keep me")).toBeInTheDocument();
     });
     const deleteButton = screen.getByRole("button", { name: "Delete" });
     await user.click(deleteButton);
@@ -913,13 +928,11 @@ describe("StudioToolbar", () => {
       },
     ]);
     const { unmount } = render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await user.click(hideItemButton());
     // Immediately unmount (the debounce has NOT fired yet): the pending
     // mutation must flush with keepalive instead of being lost.
     unmount();
@@ -953,16 +966,14 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
     const postsBefore = fetchMock.mock.calls.filter(
       (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
     ).length;
-    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await user.click(screen.getByRole("button", { name: "Copy annotations" }));
     await waitFor(() => {
       expect(writeText).toHaveBeenCalled();
     });
@@ -1000,13 +1011,11 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await user.click(screen.getByRole("button", { name: "Copy annotations" }));
     const dialog = await screen.findByRole("dialog", {
       name: "Copy manually",
     });
@@ -1016,6 +1025,15 @@ describe("StudioToolbar", () => {
     );
     // The annotation is still there — Copy did not clear anything.
     expect(screen.getByText("manual copy")).toBeInTheDocument();
+    // Review P7: Esc closes the fallback and restores focus to the REAL
+    // Copy button (the ref is threaded through the toolbar shell).
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(dialog).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: "Copy annotations" })
+    ).toHaveFocus();
   });
 
   // ---- Goal 04 Complete (D-033 #13) ----
@@ -1069,9 +1087,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
@@ -1124,13 +1140,11 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await user.click(hideItemButton());
     await waitFor(() => {
       const posts = fetchMock.mock.calls.filter(
         (call) =>
@@ -1170,15 +1184,13 @@ describe("StudioToolbar", () => {
       },
     ]);
     const { unmount } = render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
     // Hide, then unmount before the 300 ms debounce fires: the pending
     // typed operation must be flushed by the unload path instead of lost.
-    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await user.click(hideItemButton());
     unmount();
     await waitFor(() => {
       const ops = mutateOperationsFrom(fetchMock).flat();
@@ -1222,16 +1234,14 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
     const postsBefore = fetchMock.mock.calls.filter(
       (call) => (call[1] as { method?: string } | undefined)?.method === "POST"
     ).length;
-    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await user.click(screen.getByRole("button", { name: "Copy annotations" }));
     await waitFor(() => {
       expect(writeText).toHaveBeenCalled();
     });
@@ -1269,13 +1279,11 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Copy" }));
+    await user.click(screen.getByRole("button", { name: "Copy annotations" }));
     const dialog = await screen.findByRole("dialog", {
       name: "Copy manually",
     });
@@ -1285,6 +1293,15 @@ describe("StudioToolbar", () => {
     );
     // The annotation is still there — Copy did not clear anything.
     expect(screen.getByText("manual copy")).toBeInTheDocument();
+    // Review P7: Esc closes the fallback and restores focus to the REAL
+    // Copy button (the ref is threaded through the toolbar shell).
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(dialog).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: "Copy annotations" })
+    ).toHaveFocus();
   });
 
   // ---- Goal 04 Complete (D-033 #13) ----
@@ -1302,13 +1319,11 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
-    );
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await user.click(hideItemButton());
     await waitFor(() => {
       const posts = fetchMock.mock.calls.filter(
         (call) =>
@@ -1325,16 +1340,16 @@ describe("StudioToolbar", () => {
     });
   });
 
-  it("closes the panel via the Collapse button in the command row", async () => {
+  it("closes the expanded bar via the Collapse toolbar button", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
     await user.click(
-      screen.getByRole("button", { name: "Open Portal Studio" })
+      screen.getByRole("button", { name: /Annotation tools/ })
     );
     const panel = screen.getByRole("toolbar", { name: "Portal Studio" });
     expect(panel).toBeInTheDocument();
-    // The command row has a Collapse button (Goal 01).
-    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    // The horizontal bar has a Collapse chrome button (Goal 01).
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
     expect(
       screen.queryByRole("toolbar", { name: "Portal Studio" })
     ).not.toBeInTheDocument();
@@ -1342,43 +1357,131 @@ describe("StudioToolbar", () => {
 
   // ---- Goal 01 dock (G01 AC3/AC4/AC5/AC7) ----
 
-  it("collapsed state renders the compact icon toolbar without the large panel", () => {
+  it("fresh mount is collapsed: horizontal chip with icon status slot, no toolbar, no badge", () => {
     render(<StudioToolbar config={config} />);
+    // The collapsed chip: drag handle + body (status slot + label) + expand.
     expect(
-      screen.getByRole("button", { name: "Open Portal Studio" })
+      screen.getByRole("button", { name: /Annotation tools/ })
     ).toBeInTheDocument();
-    // No More button or badge in collapsed state (Goal 01).
-    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("status", { name: "Annotations" })).not.toBeInTheDocument();
+    // Review P6: with zero open annotations the accessible name stays the
+    // plain localized label (no count).
+    expect(
+      screen.getByRole("button", { name: "Annotation tools", exact: true })
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.getByRole("button", { name: "Drag toolbar" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Expand toolbar" })
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("toolbar", { name: "Portal Studio" })
+    ).not.toBeInTheDocument();
+    // Zero Open annotations: the status slot shows the feedback ICON (no
+    // count text) and there is no detached badge anywhere.
+    const slot = document.querySelector(".ps-status-slot");
+    expect(slot?.textContent).toBe("");
+    expect(
+      document.querySelector(".ps-launcher-count")
     ).not.toBeInTheDocument();
     // No emoji glyphs in the toolbar (D-034 #5).
     const dock = document.querySelector(".ps-dock");
     expect(dock?.textContent).not.toContain("🛠");
   });
 
-  it("expanding sets aria-expanded and shows the panel anchored above the dock", async () => {
+  it("collapsed chip: one Open annotation shows 1; 100 Open shows 99+; label + Expand semantics", async () => {
+    const user = userEvent.setup();
+    viewRoutes([
+      openAnn("a", "only open"),
+      openAnn("b", "another open"),
+      openAnn("c", "third open"),
+    ]);
+    render(<StudioToolbar config={config} />);
+    // 3 Open annotations → count in the status slot AND in the localized
+    // accessible name of the chip (review P6).
+    await waitFor(() => {
+      expect(document.querySelector(".ps-status-slot")?.textContent).toBe("3");
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "Annotation tools (3 open)",
+      })
+    ).toBeInTheDocument();
+    // The chip label and Expand affordance are present with semantics.
+    expect(
+      screen.getByRole("button", { name: /Annotation tools/ })
+    ).toHaveAttribute("aria-expanded", "false");
+    // Expand via the dedicated Expand button opens the bar.
+    await user.click(screen.getByRole("button", { name: "Expand toolbar" }));
+    expect(
+      screen.getByRole("toolbar", { name: "Portal Studio" })
+    ).toBeInTheDocument();
+    // Swap the server data for 100 open annotations, then collapse — the
+    // open-state change refetches, and the chip slot shows the 99+ cap.
+    const many = [
+      ...Array.from({ length: 100 }, (_, i) =>
+        openAnn(`m${i}`, `open ${i}`)
+      ),
+    ];
+    viewRoutes(many);
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    await waitFor(() => {
+      expect(document.querySelector(".ps-status-slot")?.textContent).toBe("99+");
+    });
+    // The accessible name exposes the capped count too.
+    expect(
+      screen.getByRole("button", {
+        name: "Annotation tools (99+ open)",
+      })
+    ).toBeInTheDocument();
+  });
+
+  it("clicking the chip body expands the horizontal bar; the dock keeps its position", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
-    const toggle = screen.getByRole("button", { name: "Open Portal Studio" });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    const panel = screen.getByRole("toolbar", { name: "Portal Studio" });
-    // Panel layout comes from resolveDockLayout (inline left/top/bottom);
-    // position:fixed lives in the shadow stylesheet (not loaded in jsdom).
-    expect(panel.style.left).not.toBe("");
-    expect(panel.style.width).not.toBe("");
+    const chip = screen.getByRole("button", { name: /Annotation tools/ });
+    expect(chip).toHaveAttribute("aria-expanded", "false");
+    const dock = document.querySelector(".ps-dock") as HTMLElement;
+    const before = {
+      left: Number(dock.style.left.replace("px", "")),
+      top: Number(dock.style.top.replace("px", "")),
+    };
+    await user.click(chip);
+    // The expanded bar replaces the chip at the same dock position.
+    expect(
+      screen.getByRole("toolbar", { name: "Portal Studio" })
+    ).toBeInTheDocument();
+    expect(Number(dock.style.left.replace("px", ""))).toBe(before.left);
+    expect(Number(dock.style.top.replace("px", ""))).toBe(before.top);
+  });
+
+  it("pointer drag on the chip never expands the toolbar", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    const handle = screen.getByRole("button", { name: "Drag toolbar" });
+    // Drag the handle past the threshold and release over the chip body.
+    await user.pointer([
+      { keys: "[MouseLeft>]", target: handle, coords: { x: 10, y: 10 } },
+      { coords: { x: 200, y: 60 } },
+      { coords: { x: 260, y: 90 } },
+      { keys: "[/MouseLeft]", coords: { x: 260, y: 90 } },
+    ]);
+    // Still collapsed: no toolbar role, chip remains.
+    expect(
+      screen.queryByRole("toolbar", { name: "Portal Studio" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Annotation tools/ })
+    ).toBeInTheDocument();
   });
 
   it("keyboard arrows move the dock; Shift moves by the larger step", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
-    const toggle = screen.getByRole("button", { name: "Open Portal Studio" });
+    const handle = screen.getByRole("button", { name: "Drag toolbar" });
     const dock = document.querySelector(".ps-dock") as HTMLElement;
     const before = { left: Number(dock.style.left.replace("px", "")), top: Number(dock.style.top.replace("px", "")) };
-    toggle.focus();
+    handle.focus();
     await user.keyboard("{ArrowLeft}");
     await user.keyboard("{Shift>}{ArrowLeft}{/Shift}");
     await waitFor(() => {
@@ -1391,9 +1494,9 @@ describe("StudioToolbar", () => {
   it("keyboard drag never moves the dock outside the viewport", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
-    const toggle = screen.getByRole("button", { name: "Open Portal Studio" });
+    const handle = screen.getByRole("button", { name: "Drag toolbar" });
     const dock = document.querySelector(".ps-dock") as HTMLElement;
-    toggle.focus();
+    handle.focus();
     for (let index = 0; index < 200; index += 1) {
       await user.keyboard("{ArrowLeft}");
     }
@@ -1411,11 +1514,11 @@ describe("StudioToolbar", () => {
     const row = makePageElement("Alice", "row-a");
     render(<StudioToolbar config={config} />);
     // Open and enter pick mode.
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
     // Collapse while in pick mode.
-    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
     expect(
       screen.queryByRole("toolbar", { name: "Portal Studio" })
     ).not.toBeInTheDocument();
@@ -1426,9 +1529,8 @@ describe("StudioToolbar", () => {
     // The outline must remain hidden — proof the listener did not fire.
     const outline = document.querySelector(".ps-outline");
     expect(outline?.getAttribute("style")).toContain("display: none");
-    // Re-enter pick mode cleanly.
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
-    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    // Re-expand: the pending pick session resumes (listeners active again).
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
   });
 
@@ -1436,11 +1538,11 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     const row = makePageElement("Alice", "row-a");
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Multi-select" }));
     expect(screen.getByText(/Multi-select/)).toBeInTheDocument();
     // Collapse while in multi mode.
-    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
     expect(
       screen.queryByRole("toolbar", { name: "Portal Studio" })
     ).not.toBeInTheDocument();
@@ -1454,11 +1556,11 @@ describe("StudioToolbar", () => {
   it("collapsed Area mode does not intercept page pointer events", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Select region" }));
     expect(screen.getByText(/Drag over the page/)).toBeInTheDocument();
     // Collapse while in marquee mode.
-    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
     expect(
       screen.queryByRole("toolbar", { name: "Portal Studio" })
     ).not.toBeInTheDocument();
@@ -1468,7 +1570,7 @@ describe("StudioToolbar", () => {
     fireEvent.pointerMove(document.body, { clientX: 100, clientY: 100 });
     expect(screen.queryByText(/Drag over the page/)).not.toBeInTheDocument();
     // Re-enter marquee mode cleanly — proves the mode is still valid.
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Select region" }));
     expect(screen.getByText(/Drag over the page/)).toBeInTheDocument();
   });
@@ -1477,10 +1579,10 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     const row = makePageElement("Alice", "row-a");
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     // Collapse while in pick mode.
-    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
     // Arrow keys on the page should not be intercepted by picking listeners.
     fireEvent.keyDown(row, { key: "ArrowDown" });
     fireEvent.keyDown(row, { key: "Enter" });
@@ -1488,7 +1590,7 @@ describe("StudioToolbar", () => {
     const outline = document.querySelector(".ps-outline");
     expect(outline?.getAttribute("style")).toContain("display: none");
     // Re-expand — pick mode should still be pending (not consumed).
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
   });
 
@@ -1496,14 +1598,14 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     const row = makePageElement("Alice", "row-a");
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     // Pick mode is active — verify the hint.
     expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
     // Collapse — pick mode listeners are paused.
-    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
     // Re-expand — pick mode restored, hint visible again.
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
     // Pick an element after re-expand — works normally.
     row.focus();
@@ -1537,7 +1639,7 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
     // Open and enter pick mode.
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
     // Switch to multi via hotkey — pick mode exits, multi starts.
@@ -1549,7 +1651,7 @@ describe("StudioToolbar", () => {
   it("Ctrl+Alt+A switches from Pick to Area mode safely", async () => {
     const user = userEvent.setup();
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
     // Switch to area via hotkey.
@@ -1584,7 +1686,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
@@ -1614,7 +1716,7 @@ describe("StudioToolbar", () => {
     const row = makePageElement("Alice", "row-a");
     render(<StudioToolbar config={config} />);
     // Open, pick an element to enter draft mode (textarea visible).
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
     await user.keyboard("{Enter}");
@@ -1691,7 +1793,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Pick and save an annotation.
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
@@ -1704,8 +1806,9 @@ describe("StudioToolbar", () => {
     // Switch to multi via hotkey — saved annotation persists.
     fireEvent.keyDown(document, { key: "m", ctrlKey: true, altKey: true });
     expect(screen.getByText(/Multi-select/)).toBeInTheDocument();
-    // Re-enter pick — annotation still in list.
+    // Re-enter pick — annotation still in the list (open the list panel).
     fireEvent.keyDown(document, { key: "p", ctrlKey: true, altKey: true });
+    await user.click(screen.getByRole("button", { name: "Annotation list" }));
     expect(screen.getByText("saved note")).toBeInTheDocument();
   });
 
@@ -1713,7 +1816,7 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     const row = makePageElement("Alice", "row-a");
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: "Open Portal Studio" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Enter pick mode and pick an element → draft mode with comment textarea.
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
@@ -1913,8 +2016,8 @@ describe("StudioToolbar", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
-    // Open the panel — the list shows the updated comment (shared path).
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // Open the annotation list — it shows the updated comment (shared path).
+    await openList(user);
     expect(await screen.findByText("edited from marker")).toBeInTheDocument();
   });
 
@@ -1953,9 +2056,9 @@ describe("StudioToolbar", () => {
       "precious text"
     );
     // The FAILED comment must NOT be in shared state: close the editor and
-    // open the panel — the list still shows the last CONFIRMED comment.
+    // open the list — it still shows the last CONFIRMED comment.
     await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     expect(screen.getByText("original")).toBeInTheDocument();
     expect(screen.queryByText("precious text")).not.toBeInTheDocument();
   });
@@ -2113,7 +2216,7 @@ describe("StudioToolbar", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     expect(await screen.findByText("retry text")).toBeInTheDocument();
   });
 
@@ -2235,7 +2338,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/Annotations/)).toBeInTheDocument();
     });
@@ -2248,9 +2351,12 @@ describe("StudioToolbar", () => {
     await user.clear(textarea);
     await user.type(textarea, "marker save");
     await user.click(within(dialog).getByRole("button", { name: "Save comment" }));
-    // While the save is in flight the list Complete button is DISABLED —
-    // no newer action can be enqueued and dropped. (Scope to the LIST
-    // control; the marker editor's own Complete is disabled too.)
+    // Clicking the marker closed the list (outside click); reopen it while
+    // the save is in flight — the editor stays open (save lock) and the
+    // list Complete button is DISABLED, so no newer action can be enqueued
+    // and dropped. (Scope to the LIST control; the editor's Complete is
+    // disabled too.)
+    await user.click(screen.getByRole("button", { name: "Annotation list" }));
     const listComplete = document.querySelector(
       ".ps-annotation-item [aria-label='Complete']"
     ) as HTMLButtonElement;
@@ -2310,8 +2416,8 @@ describe("StudioToolbar", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
     // Goal 04: the just-completed marker is now hidden from the default
-    // Open view — open the panel and switch to All to reach it.
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // Open view — open the list panel and switch to All to reach it.
+    await openList(user);
     await user.click(screen.getByRole("button", { name: "All" }));
     // Completed annotation → Reopen button.
     const doneMarker = await screen.findByRole("button", {
@@ -2458,7 +2564,7 @@ describe("StudioToolbar", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
-  it("hotkey combos from NON-editable editor controls do not leak (mode idle, no preventDefault)", async () => {
+  it("hotkey combos DO fire from focused NON-editable Studio controls, incl. the marker editor's buttons (round-4 finding 3)", async () => {
     const user = userEvent.setup();
     makeMarkerPageElement("Alice", "row-a");
     markerRoutes([
@@ -2477,7 +2583,10 @@ describe("StudioToolbar", () => {
     });
     await user.click(marker);
     const dialog = screen.getByRole("dialog", { name: "Annotation editor" });
-    // Focus a NON-editable control inside the editor (the Complete button).
+    // Focus a NON-editable control inside the editor (the Complete button):
+    // the contract disables shortcuts only for EDITABLE controls, so
+    // Mod+Alt+P must activate Pick from here (and preventDefault fires
+    // because the shortcut positively matched).
     const completeButton = within(dialog).getByRole("button", { name: "Complete" });
     completeButton.focus();
     const keyEvent = new KeyboardEvent("keydown", {
@@ -2489,13 +2598,24 @@ describe("StudioToolbar", () => {
     });
     const spy = vi.spyOn(keyEvent, "preventDefault");
     completeButton.dispatchEvent(keyEvent);
-    // Mode must stay idle (no pick hint) and the shortcut must not be
-    // handled (preventDefault not called) — the guard covers ALL editor
-    // internals, not just editable targets.
+    expect(spy).toHaveBeenCalled();
+    expect(await screen.findByText(/Hover an element/)).toBeInTheDocument();
+    await user.keyboard("{Escape}");
     expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Drag over the page/)).not.toBeInTheDocument();
-    expect(spy).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    // Editable targets inside the editor remain guarded (round-3 finding 2).
+    const textarea = within(dialog).getByRole("textbox");
+    textarea.focus();
+    const editEvent = new KeyboardEvent("keydown", {
+      key: "p",
+      ctrlKey: true,
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const editSpy = vi.spyOn(editEvent, "preventDefault");
+    textarea.dispatchEvent(editEvent);
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    expect(editSpy).not.toHaveBeenCalled();
   });
 
   it("multi marker activation highlights every captured target temporarily", async () => {
@@ -2629,21 +2749,26 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     viewRoutes([openAnn("a", "open one"), doneAnn("b", "done one")]);
     render(<StudioToolbar config={config} />);
-    // 1 open + 1 completed → launcher shows 1 (open only).
+    // 1 open + 1 completed → collapsed chip shows 1 (open only).
     await waitFor(() => {
-      expect(screen.getByText("1", { selector: ".ps-launcher-count" })).toBeInTheDocument();
+      expect(
+        document.querySelector(".ps-status-slot")?.textContent
+      ).toBe("1");
     });
     // Switching to All must NOT change the launcher count.
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     await user.click(screen.getByRole("button", { name: "All" }));
-    expect(screen.getByText("1", { selector: ".ps-launcher-count" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    expect(
+      document.querySelector(".ps-status-slot")?.textContent
+    ).toBe("1");
   });
 
   it("default Open view hides completed items; All shows them with distinct styling and Reopen", async () => {
     const user = userEvent.setup();
     viewRoutes([openAnn("a", "open one"), doneAnn("b", "done one")]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     // Open view: only the open item is listed.
     await waitFor(() => {
       expect(screen.getByText("open one")).toBeInTheDocument();
@@ -2664,7 +2789,7 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     viewRoutes([openAnn("a", "keep open"), doneAnn("b", "remove done")]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     // All view so the completed item is visible during the flow.
     await user.click(screen.getByRole("button", { name: "All" }));
     await waitFor(() => {
@@ -2687,34 +2812,50 @@ describe("StudioToolbar", () => {
     });
   });
 
-  it("Remove completed with zero completed items is disabled", async () => {
+  it("Remove-completed is ABSENT at zero completed items (round-6 blocker 2)", async () => {
     const user = userEvent.setup();
     viewRoutes([openAnn("a", "only open")]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
-    const removeButton = await screen.findByRole("button", {
-      name: "Remove completed (0)",
+    await openList(user);
+    // Contract §9: "Remove N completed" appears only when N > 0 — the
+    // zero-count disabled control must not render at all.
+    await waitFor(() => {
+      expect(screen.getByText("only open")).toBeInTheDocument();
     });
-    expect(removeButton).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "Remove completed (0)" })
+    ).not.toBeInTheDocument();
+    expect(document.querySelector(".ps-list-footer")).toBeNull();
   });
 
-  it("completing the FINAL open item returns the launcher to Wrench and hides it in Open view (not deleted)", async () => {
+  it("completing the FINAL open item returns the launcher to the feedback icon and hides it in Open view (not deleted)", async () => {
     const user = userEvent.setup();
-    viewRoutes([openAnn("a", "last open")]);
+    const fetchMock = viewRoutes([openAnn("a", "last open")]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText("last open")).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: "Complete" }));
-    // The item leaves the Open view and the launcher shows no count.
+    // The item leaves the Open view (optimistic), and the typed mutation
+    // settles before collapsing (the collapse refetch must see the
+    // completed server state).
     await waitFor(() => {
       expect(screen.queryByText("last open")).not.toBeInTheDocument();
     });
+    await waitFor(() => {
+      const ops = mutateOperationsFrom(fetchMock).flat();
+      expect(ops.some((op) => op.op === "complete")).toBe(true);
+    });
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    const slot = document.querySelector(".ps-status-slot");
+    expect(slot?.textContent).toBe("");
     expect(
       document.querySelector(".ps-launcher-count")
     ).not.toBeInTheDocument();
-    // Not deleted: present in All with Reopen.
+    expect(screen.queryByRole("button", { name: /Wrench/ })).not.toBeInTheDocument();
+    // Not deleted: reopen the list and switch to All to see it.
+    await openList(user);
     await user.click(screen.getByRole("button", { name: "All" }));
     expect(screen.getByText("last open")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reopen" })).toBeInTheDocument();
@@ -2724,14 +2865,14 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     viewRoutes([doneAnn("b", "only done")]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByRole("status")).toHaveTextContent(/No open annotations/);
     });
     expect(screen.queryByText("only done")).not.toBeInTheDocument();
   });
 
-  it("marker labels renumber to the VISIBLE order in the Open view (P1 review)", async () => {
+  it("numbers are STABLE across Open/All: completed earlier keeps open items at 1 and 3 (review P2)", async () => {
     const user = userEvent.setup();
     makeMarkerPageElement("Alice", "row-a");
     viewRoutes([
@@ -2740,8 +2881,9 @@ describe("StudioToolbar", () => {
       { ...openAnn("open-2", "second open"), elements: [elementCapture("row-a")] },
     ]);
     render(<StudioToolbar config={config} />);
-    // Open view: the two OPEN items are numbered 1 and 2 in BOTH the list
-    // and the marker labels (previously the marker showed 1 and 3).
+    // Open view: the completed item is hidden, but the OPEN items KEEP
+    // their full-list numbers 1 and 3 in BOTH the marker labels and the
+    // list chips — filtering never renumbers.
     const markers = await screen.findAllByRole("button", {
       name: /open editor/,
     });
@@ -2750,17 +2892,32 @@ describe("StudioToolbar", () => {
       screen.getByRole("button", { name: "Annotation 1: open editor" })
     ).toBeInTheDocument();
     expect(
+      screen.getByRole("button", { name: "Annotation 3: open editor" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Annotation 2: open editor" })
+    ).not.toBeInTheDocument();
+    // The list chips show the same stable numbers.
+    await openList(user);
+    await waitFor(() => {
+      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
+    });
+    const chips = Array.from(
+      document.querySelectorAll(".ps-list-panel .ps-marker-chip")
+    ).map((chip) => chip.textContent);
+    expect(chips).toEqual(["1", "3"]);
+    // All view shows the full 1..3 numbering everywhere.
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(
       screen.getByRole("button", { name: "Annotation 2: open editor" })
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Annotation 3: open editor" })
-    ).not.toBeInTheDocument();
-    // All view restores the full 1..3 numbering.
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
-    await user.click(screen.getByRole("button", { name: "All" }));
-    expect(
       screen.getByRole("button", { name: "Annotation 3: open editor" })
     ).toBeInTheDocument();
+    const allChips = Array.from(
+      document.querySelectorAll(".ps-list-panel .ps-marker-chip")
+    ).map((chip) => chip.textContent);
+    expect(allChips).toEqual(["1", "2", "3"]);
   });
 
   it("mixed hidden + completed + open data stays independent across views and markers", async () => {
@@ -2772,7 +2929,11 @@ describe("StudioToolbar", () => {
       { ...openAnn("open-2", "mixed open two"), elements: [elementCapture("row-a")] },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    // Launcher counts the two OPEN items only (collapsed chip).
+    await waitFor(() => {
+      expect(document.querySelector(".ps-status-slot")?.textContent).toBe("2");
+    });
+    await openList(user);
     // Open view: both OPEN items listed (the hidden one keeps its Hidden
     // badge — hidden is independent of the view filter), completed hidden.
     await waitFor(() => {
@@ -2781,17 +2942,16 @@ describe("StudioToolbar", () => {
     });
     expect(screen.queryByText("mixed done")).not.toBeInTheDocument();
     expect(screen.getByText(/Hidden/)).toBeInTheDocument();
-    // Launcher counts the two OPEN items only.
-    expect(screen.getByText("2", { selector: ".ps-launcher-count" })).toBeInTheDocument();
     // All view: completed appears; hidden item still listed with its badge.
     await user.click(screen.getByRole("button", { name: "All" }));
     expect(screen.getByText("mixed done")).toBeInTheDocument();
     expect(screen.getByText(/Hidden/)).toBeInTheDocument();
-    // Visible-order numbering: All shows 1..3, Open renumbers to 1..2.
-    expect(screen.getByText("Annotations (3)")).toBeInTheDocument();
+    // Header counts: 2 OPEN of 3 total in both views (completed is not
+    // open); visible items renumber 1..3 in All, 1..2 in Open.
+    expect(screen.getByText("2 open · 3 total")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open" }));
     await waitFor(() => {
-      expect(screen.getByText("Annotations (2)")).toBeInTheDocument();
+      expect(screen.getAllByRole("listitem")).toHaveLength(2);
     });
   });
 
@@ -3004,7 +3164,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     const saveOne = async (comment: string) => {
       await user.click(screen.getByRole("button", { name: "Pick element" }));
       row.focus();
@@ -3022,8 +3182,8 @@ describe("StudioToolbar", () => {
     // An agent-side DELETE clears the task: refreshTask (panel close/open)
     // now finds no task and must DROP the stale snapshot.
     taskExists = false;
-    await user.click(screen.getByRole("button", { name: /Close Portal Studio/ }));
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await waitFor(() => {
       // refreshTask nulled the stale snapshot (GET serves no task).
     });
@@ -3106,7 +3266,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText("existing")).toBeInTheDocument();
     });
@@ -3172,7 +3332,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText(/server changed me/)).toBeInTheDocument();
     });
@@ -3180,7 +3340,7 @@ describe("StudioToolbar", () => {
     // by the client's fetch? No — the GET serves revision 2 in taskRevision
     // if present; seed it explicitly via the task payload).
     // Attempt a hide mutation.
-    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await user.click(hideItemButton());
     await waitFor(() => {
       expect(mutateCalls).toBeGreaterThanOrEqual(2);
     });
@@ -3258,11 +3418,11 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await openList(user);
     await waitFor(() => {
       expect(screen.getByText("original")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: "Hide" }));
+    await user.click(hideItemButton());
     await waitFor(() => {
       expect(screen.getByText("Hidden")).toBeInTheDocument();
     });
@@ -3312,7 +3472,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Annotation 1.
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
@@ -3388,7 +3548,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Annotation 1.
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
@@ -3401,6 +3561,7 @@ describe("StudioToolbar", () => {
     await user.click(screen.getByRole("button", { name: "Done" }));
     // Complete the only open annotation → task fully completed (the typed
     // mutate flush must settle so taskRef reflects the completed task).
+    await openList(user);
     await user.click(screen.getByRole("button", { name: "Complete" }));
     await waitFor(() => {
       const ops = mutateOperationsFrom(fetchMock).flat();
@@ -3486,7 +3647,7 @@ describe("StudioToolbar", () => {
       },
     ]);
     render(<StudioToolbar config={config} />);
-    await user.click(screen.getByRole("button", { name: /Open Portal Studio/ }));
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     // Annotation 1.
     await user.click(screen.getByRole("button", { name: "Pick element" }));
     row.focus();
@@ -3500,6 +3661,7 @@ describe("StudioToolbar", () => {
     const taskIdA = postedTaskIds[0];
     // Complete the only open annotation → the sticky task-level
     // completedAt is stamped by the typed mutate flush.
+    await openList(user);
     await user.click(screen.getByRole("button", { name: "Complete" }));
     await waitFor(() => {
       const ops = mutateOperationsFrom(fetchMock).flat();
@@ -3623,6 +3785,1317 @@ describe("StudioToolbar", () => {
         screen.queryByRole("dialog", { name: "Annotation editor" })
       ).not.toBeInTheDocument();
     });
+  });
+
+
+  // ---- Goal 01 v5: horizontal toolbar contract (action order, tooltips,
+  //      help, list, presentation-only visibility) ----
+
+  const barButtons = () => {
+    const bar = screen.getByRole("toolbar", { name: "Portal Studio" });
+    return within(bar)
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label"));
+  };
+
+  it("expanded feature order is Pick, Multi, Area, Copy, Visibility, Help, List with Collapse chrome after", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    // The toolbar role belongs to the horizontal bar ONLY (never the
+    // panels); the feature order is normative; Collapse sits after a
+    // divider as separate toolbar chrome.
+    expect(barButtons()).toEqual([
+      "Drag toolbar",
+      "Pick element",
+      "Multi-select",
+      "Select region",
+      "Copy annotations",
+      "Hide markers",
+      "Keyboard shortcuts",
+      "Annotation list",
+      "Collapse toolbar",
+    ]);
+    // Exactly one toolbar role in the whole Studio root.
+    expect(
+      screen.getAllByRole("toolbar", { name: "Portal Studio" })
+    ).toHaveLength(1);
+  });
+
+  it("all toolbar icons have localized accessible labels; no Wrench, X-collapse or reset controls remain", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const bar = screen.getByRole("toolbar", { name: "Portal Studio" });
+    const buttons = within(bar).getAllByRole("button");
+    expect(buttons.length).toBeGreaterThanOrEqual(8);
+    for (const button of buttons) {
+      expect((button.getAttribute("aria-label") ?? "").length).toBeGreaterThan(0);
+    }
+    // Superseded paths: no Wrench icon anywhere, no X collapse, no
+    // Reset-dock control, no detached badge class.
+    expect(document.querySelector(".ps-dock .lucide-wrench")).toBeNull();
+    expect(document.querySelector(".ps-dock .lucide-x")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Reset Dock/i })
+    ).not.toBeInTheDocument();
+    expect(document.querySelector(".ps-launcher-count")).toBeNull();
+  });
+
+  it("tooltips: focus opens immediately with action + platform shortcut; Esc closes", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const pick = screen.getByRole("button", { name: "Pick element" });
+    pick.focus();
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Pick element");
+    expect(tooltip.textContent).toContain("Ctrl+Alt+P");
+    // aria-describedby wiring points at the tooltip.
+    expect(pick.getAttribute("aria-describedby")).toBe(tooltip.id);
+    // Esc closes it.
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    });
+    // The drag grip has no fake keycap.
+    const grip = screen.getByRole("button", { name: "Drag toolbar" });
+    grip.focus();
+    const gripTip = await screen.findByRole("tooltip");
+    expect(gripTip.textContent).toBe("Drag toolbar");
+  });
+
+  it("collapsed chip Expand has the custom tooltip with label + keycap (review P5)", async () => {
+    render(<StudioToolbar config={config} />);
+    const expand = screen.getByRole("button", { name: "Expand toolbar" });
+    expand.focus();
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Expand toolbar");
+    expect(tooltip.textContent).toContain("Ctrl+Alt+K");
+    expect(expand.getAttribute("aria-describedby")).toBe(tooltip.id);
+  });
+
+  it("tooltips: hover opens after the delay and closes on leave", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("a", "hover me")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const copy = screen.getByRole("button", { name: "Copy annotations" });
+    await user.hover(copy);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    await waitFor(
+      () => {
+        expect(screen.getByRole("tooltip").textContent).toContain(
+          "Copy annotations"
+        );
+      },
+      { timeout: 1000 }
+    );
+    await user.unhover(copy);
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    });
+  });
+
+  it("capture actions expose aria-pressed and toggle off on re-click", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const pick = screen.getByRole("button", { name: "Pick element" });
+    const multi = screen.getByRole("button", { name: "Multi-select" });
+    const area = screen.getByRole("button", { name: "Select region" });
+    expect(pick).toHaveAttribute("aria-pressed", "false");
+    await user.click(pick);
+    expect(pick).toHaveAttribute("aria-pressed", "true");
+    // Clicking the active Pick cancels it.
+    await user.click(pick);
+    expect(pick).toHaveAttribute("aria-pressed", "false");
+    await user.click(multi);
+    expect(multi).toHaveAttribute("aria-pressed", "true");
+    expect(pick).toHaveAttribute("aria-pressed", "false");
+    await user.click(area);
+    expect(area).toHaveAttribute("aria-pressed", "true");
+    expect(multi).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("Copy is disabled at zero Open annotations (including all-completed tasks)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([doneAnn("b", "only done")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    expect(
+      screen.getByRole("button", { name: "Copy annotations" })
+    ).toBeDisabled();
+  });
+
+  it("toolbar marker visibility is presentation-only: no task mutation, markers hidden, per-item Hide untouched", async () => {
+    const user = userEvent.setup();
+    makeMarkerPageElement("Alice", "row-a");
+    const fetchMock = viewRoutes([
+      { ...openAnn("open-1", "visible one"), elements: [elementCapture("row-a")] },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const visibility = screen.getByRole("button", { name: "Hide markers" });
+    expect(visibility).toHaveAttribute("aria-pressed", "false");
+    // A resolved marker is rendered before the toggle.
+    expect(
+      screen.getByRole("button", { name: "Annotation 1: open editor" })
+    ).toBeInTheDocument();
+    await user.click(visibility);
+    // Presentation-only: markers hidden, button now "Show markers".
+    expect(
+      screen.queryByRole("button", { name: "Annotation 1: open editor" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Show markers" })
+    ).toHaveAttribute("aria-pressed", "true");
+    // NO task mutation was sent (no setHidden batch, nothing).
+    expect(mutateOperationsFrom(fetchMock).flat()).toEqual([]);
+    // Toggling back restores the markers without any mutation either.
+    await user.click(screen.getByRole("button", { name: "Show markers" }));
+    expect(
+      screen.getByRole("button", { name: "Annotation 1: open editor" })
+    ).toBeInTheDocument();
+    expect(mutateOperationsFrom(fetchMock).flat()).toEqual([]);
+    // The per-item Hide action remains the explicit persisted path.
+    await openList(user);
+    await waitFor(() => {
+      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
+    });
+    await user.click(hideItemButton());
+    await waitFor(() => {
+      const ops = mutateOperationsFrom(fetchMock).flat();
+      expect(
+        ops.some(
+          (op) => op.op === "setHidden" && op.annotationId === "open-1"
+        )
+      ).toBe(true);
+    });
+  });
+
+  it("Help opens from click and from the ? shortcut; content comes from the registry", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const helpButton = screen.getByRole("button", { name: "Keyboard shortcuts" });
+    await user.click(helpButton);
+    expect(helpButton).toHaveAttribute("aria-expanded", "true");
+    expect(helpButton).toHaveAttribute("aria-controls", "ps-shortcut-help");
+    const popover = screen.getByRole("region", {
+      name: "Keyboard shortcuts",
+    });
+    // Every registry action row (INCLUDING the help action's own `?` row,
+    // review P4) + the Esc row + the safety note.
+    expect(within(popover).getAllByText("Keyboard shortcuts").length).toBeGreaterThanOrEqual(2);
+    expect(within(popover).getByText("?", { exact: true })).toBeInTheDocument();
+    expect(within(popover).getByText("Pick element")).toBeInTheDocument();
+    expect(within(popover).getByText("Multi-select")).toBeInTheDocument();
+    expect(within(popover).getByText("Select region")).toBeInTheDocument();
+    expect(within(popover).getByText("Copy annotations")).toBeInTheDocument();
+    expect(within(popover).getByText("Hide markers")).toBeInTheDocument();
+    expect(within(popover).getByText("Annotation list")).toBeInTheDocument();
+    expect(within(popover).getByText("Collapse toolbar")).toBeInTheDocument();
+    expect(within(popover).getByText(/cancel the current capture/)).toBeInTheDocument();
+    expect(
+      within(popover).getByText(/ignored while typing in inputs/)
+    ).toBeInTheDocument();
+    // Close with Esc (focus returns to the trigger).
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "Keyboard shortcuts" })
+      ).not.toBeInTheDocument();
+    });
+    expect(helpButton).toHaveFocus();
+    // The ? shortcut opens the same registry-generated popover.
+    fireEvent.keyDown(document, { key: "?" });
+    expect(
+      screen.getByRole("region", { name: "Keyboard shortcuts" })
+    ).toBeInTheDocument();
+  });
+
+  it("List is the final feature action, toggles the panel, and Help/List are mutually exclusive", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("a", "list me")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const listButton = screen.getByRole("button", { name: "Annotation list" });
+    // List is the last feature action before the Collapse chrome.
+    const names = barButtons();
+    expect(names.indexOf("Annotation list")).toBe(names.length - 2);
+    await user.click(listButton);
+    expect(listButton).toHaveAttribute("aria-expanded", "true");
+    expect(listButton).toHaveAttribute("aria-controls", "ps-annotation-list");
+    const panel = screen.getByRole("region", { name: "Annotations" });
+    await waitFor(() => {
+      expect(within(panel).getByText("list me")).toBeInTheDocument();
+    });
+    // Exactly ONE list surface exists.
+    expect(document.querySelectorAll(".ps-list-panel")).toHaveLength(1);
+    // The toolbar remains visible while the panel is open.
+    expect(
+      screen.getByRole("toolbar", { name: "Portal Studio" })
+    ).toBeInTheDocument();
+    // Clicking the icon again closes it.
+    await user.click(listButton);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "Annotations" })
+      ).not.toBeInTheDocument();
+    });
+    // Mutual exclusion: opening Help closes the list and vice versa.
+    await user.click(listButton);
+    await user.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+    expect(
+      screen.queryByRole("region", { name: "Annotations" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Keyboard shortcuts" })
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Annotation list" }));
+    expect(
+      screen.queryByRole("region", { name: "Keyboard shortcuts" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Annotations" })
+    ).toBeInTheDocument();
+    // Escape closes the list with focus back on its trigger.
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "Annotations" })
+      ).not.toBeInTheDocument();
+    });
+    expect(listButton).toHaveFocus();
+  });
+
+  it("the expanded toolbar does NOT trap Tab — native focus navigation stays intact (review P3)", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const collapse = screen.getByRole("button", { name: "Collapse toolbar" });
+    collapse.focus();
+    const keyEvent = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    const spy = vi.spyOn(keyEvent, "preventDefault");
+    collapse.dispatchEvent(keyEvent);
+    // No open-wide focus trap: Tab is NOT intercepted (no preventDefault,
+    // no forced focus wrap inside the toolbar). Genuine dialogs (the Copy
+    // fallback) keep their own scoped trap.
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("unresolved list items do not open an invisible editor; one Esc closes the list (review P8)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([
+      openAnn("ann-unresolved", "no target here"),
+    ]);
+    render(<StudioToolbar config={config} />);
+    await openList(user);
+    await waitFor(() => {
+      expect(screen.getByText("no target here")).toBeInTheDocument();
+    });
+    // The item IS unresolved.
+    expect(screen.getByText(/Target not found/)).toBeInTheDocument();
+    // Its mutation actions remain available (edit/complete/hide/delete).
+    expect(
+      screen.getByRole("button", { name: "Edit comment" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Complete" })
+    ).toBeInTheDocument();
+    // Clicking the item body must NOT open an (invisible) marker editor.
+    await user.click(screen.getByText("no target here"));
+    expect(
+      screen.queryByRole("dialog", { name: "Annotation editor" })
+    ).not.toBeInTheDocument();
+    // ONE Esc closes the list (it is not consumed by a hidden editor).
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "Annotations" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("list Esc coordinator: inline-edit Esc cancels and returns focus to that row's Edit trigger (round-3 finding 3)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("ann-1", "edit me")]);
+    render(<StudioToolbar config={config} />);
+    await openList(user);
+    await waitFor(() => {
+      expect(screen.getByText("edit me")).toBeInTheDocument();
+    });
+    const editButton = screen.getByRole("button", { name: "Edit comment" });
+    await user.click(editButton);
+    const textarea = screen.getByDisplayValue("edit me");
+    await user.type(textarea, "!");
+    expect(screen.getByText("Unsaved")).toBeInTheDocument();
+    // ONE Esc cancels the inline edit (no saved mutation) and restores
+    // focus to THIS row's Edit trigger.
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue("edit me!")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("edit me")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Edit comment" })
+      ).toHaveFocus();
+    });
+    // Nothing was mutated.
+    expect(screen.queryByText("Unsaved")).not.toBeInTheDocument();
+  });
+
+  it("list Esc coordinator: multi-row delete confirm returns focus to the EXACT row (round-3 finding 3)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("ann-1", "row one"), openAnn("ann-2", "row two")]);
+    render(<StudioToolbar config={config} />);
+    await openList(user);
+    await waitFor(() => {
+      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(1);
+    });
+    // Open the confirmation on the SECOND row.
+    const deleteButtons = screen.getAllByRole("button", { name: "Delete" });
+    expect(deleteButtons).toHaveLength(2);
+    await user.click(deleteButtons[1]);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Delete this annotation?"
+    );
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+    // Focus returns to row TWO's Delete button — not the first row's.
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("button", { name: "Delete" })[1]
+      ).toHaveFocus();
+    });
+    // Nothing was deleted.
+    expect(screen.getByText("row one")).toBeInTheDocument();
+    expect(screen.getByText("row two")).toBeInTheDocument();
+  });
+
+  it("list Esc coordinator: remove-completed confirm Esc cancels and restores its trigger (round-3 finding 3)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("a", "open one"), doneAnn("b", "done one")]);
+    render(<StudioToolbar config={config} />);
+    await openList(user);
+    const removeTrigger = await screen.findByRole("button", {
+      name: "Remove completed (1)",
+    });
+    await user.click(removeTrigger);
+    expect(screen.getByRole("alert")).toHaveTextContent(/Open items stay/);
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("alert")
+      ).not.toBeInTheDocument();
+    });
+    // Focus returns to the Remove-completed trigger; nothing removed —
+    // the OPEN item is intact and the footer still counts the completed one.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Remove completed (1)" })
+      ).toHaveFocus();
+    });
+    expect(screen.getByText("open one")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove completed (1)" })
+    ).not.toBeDisabled();
+  });
+
+  it("list Esc coordinator: a hidden list transient never blocks Help Esc after Help/List switching (round-3 finding 3)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("ann-1", "switch me")]);
+    render(<StudioToolbar config={config} />);
+    await openList(user);
+    await waitFor(() => {
+      expect(screen.getByText("switch me")).toBeInTheDocument();
+    });
+    // Open a delete confirmation in the LIST…
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    // …then switch to Help: the list (and its transient UI) closes.
+    await user.click(
+      screen.getByRole("button", { name: "Keyboard shortcuts" })
+    );
+    expect(
+      screen.getByRole("region", { name: "Keyboard shortcuts" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("alert")
+    ).not.toBeInTheDocument();
+    // ONE Esc closes Help — it is NOT blocked by the hidden list transient.
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "Keyboard shortcuts" })
+      ).not.toBeInTheDocument();
+    });
+    // Saved annotations are untouched.
+    await openList(user);
+    expect(screen.getByText("switch me")).toBeInTheDocument();
+  });
+
+  /**
+   * jsdom lacks pointer capture — install no-op prototype methods via
+   * typed Object.defineProperty so the capture contract can be asserted
+   * (real browsers cover actual capture in the e2e drag tests).
+   * Round-4 finding 2: no unsafe type-escape casts anywhere in the diff —
+   * the DOM types already declare these methods on Element, and the
+   * original descriptors are restored safely.
+   */
+  const installPointerCaptureMocks = () => {
+    const proto = HTMLElement.prototype;
+    const restores: Array<() => void> = [];
+    const define = (
+      name: "setPointerCapture" | "hasPointerCapture" | "releasePointerCapture",
+      impl: (pointerId: number) => void | boolean
+    ) => {
+      const existing = Object.getOwnPropertyDescriptor(proto, name);
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        writable: true,
+        value: impl,
+      });
+      restores.push(() => {
+        if (existing) {
+          Object.defineProperty(proto, name, existing);
+        } else {
+          Reflect.deleteProperty(proto, name);
+        }
+      });
+    };
+    define("setPointerCapture", () => undefined);
+    define("hasPointerCapture", () => true);
+    define("releasePointerCapture", () => undefined);
+    return () => {
+      for (const restore of restores) restore();
+    };
+  };
+
+  it("dock drag uses REAL pointer capture with release on pointerup (round-3 finding 1)", async () => {
+    const restoreMocks = installPointerCaptureMocks();
+    const proto = HTMLElement.prototype;
+    const setSpy = vi
+      .spyOn(proto, "setPointerCapture")
+      .mockImplementation(() => undefined);
+    const hasSpy = vi
+      .spyOn(proto, "hasPointerCapture")
+      .mockImplementation(() => true);
+    const releaseSpy = vi
+      .spyOn(proto, "releasePointerCapture")
+      .mockImplementation(() => undefined);
+    try {
+      const user = userEvent.setup();
+      render(<StudioToolbar config={config} />);
+      const handle = screen.getByRole("button", { name: "Drag toolbar" });
+      await user.pointer([
+        { keys: "[MouseLeft>]", target: handle, coords: { x: 10, y: 10 } },
+        { coords: { x: 120, y: 60 } },
+        { keys: "[/MouseLeft]", coords: { x: 120, y: 60 } },
+      ]);
+      // The pointer was captured with the gesture's pointerId and released
+      // on pointerup.
+      expect(setSpy).toHaveBeenCalledTimes(1);
+      const pointerId = setSpy.mock.calls[0][0];
+      expect(typeof pointerId).toBe("number");
+      expect(hasSpy).toHaveBeenCalledWith(pointerId);
+      expect(releaseSpy).toHaveBeenCalledWith(pointerId);
+      // The drag itself moved the dock and did not expand anything.
+      expect(
+        screen.queryByRole("toolbar", { name: "Portal Studio" })
+      ).not.toBeInTheDocument();
+    } finally {
+      setSpy.mockRestore();
+      hasSpy.mockRestore();
+      releaseSpy.mockRestore();
+      restoreMocks();
+    }
+  });
+
+  it("dock drag aborts cleanly on window blur and lostpointercapture (round-3 finding 1)", async () => {
+    const restoreMocks = installPointerCaptureMocks();
+    const proto = HTMLElement.prototype;
+    const setSpy = vi
+      .spyOn(proto, "setPointerCapture")
+      .mockImplementation(() => undefined);
+    vi.spyOn(proto, "hasPointerCapture").mockImplementation(() => true);
+    vi.spyOn(proto, "releasePointerCapture").mockImplementation(() => undefined);
+    try {
+      const user = userEvent.setup();
+      render(<StudioToolbar config={config} />);
+      const handle = screen.getByRole("button", { name: "Drag toolbar" });
+      const dock = document.querySelector(".ps-dock") as HTMLElement;
+      const before = Number(dock.style.left.replace("px", ""));
+      await user.pointer([
+        { keys: "[MouseLeft>]", target: handle, coords: { x: 10, y: 10 } },
+      ]);
+      // Window blur aborts the drag: subsequent moves must NOT move the
+      // dock (listeners are dropped, nothing is persisted).
+      fireEvent.blur(window);
+      fireEvent.pointerMove(window, {
+        clientX: 300,
+        clientY: 300,
+        pointerId: setSpy.mock.calls[0][0],
+      });
+      expect(Number(dock.style.left.replace("px", ""))).toBe(before);
+      // lostpointercapture on the handle also aborts a NEW drag.
+      await user.pointer([
+        { keys: "[MouseLeft>]", target: handle, coords: { x: 10, y: 10 } },
+      ]);
+      fireEvent.pointerMove(window, {
+        clientX: -100,
+        clientY: -100,
+        pointerId: setSpy.mock.calls[1][0],
+      });
+      const afterDrag = Number(dock.style.left.replace("px", ""));
+      expect(afterDrag).toBeLessThan(before);
+      const lost = new Event("lostpointercapture");
+      Object.defineProperty(lost, "pointerId", {
+        value: setSpy.mock.calls[1][0],
+      });
+      fireEvent(handle, lost);
+      fireEvent.pointerMove(window, {
+        clientX: 300,
+        clientY: 300,
+        pointerId: setSpy.mock.calls[1][0],
+      });
+      expect(Number(dock.style.left.replace("px", ""))).toBe(afterDrag);
+    } finally {
+      setSpy.mockRestore();
+      restoreMocks();
+    }
+  });
+
+  it("manual Copy from a FOCUSED toolbar control suppresses its tooltip: zero tooltips, ONE Esc closes the fallback (round-6 addendum)", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error("denied")),
+      },
+    });
+    viewRoutes([openAnn("a", "focus copy")]);
+    render(<StudioToolbar config={config} />);
+    // No auxiliary panel open (a panel would suppress tooltips by design);
+    // just expand and wait for the loaded task so Copy is enabled.
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Copy annotations" })
+      ).not.toBeDisabled();
+    });
+    const copyButton = screen.getByRole("button", {
+      name: "Copy annotations",
+    });
+    copyButton.focus();
+    // The focused Copy button's tooltip opens…
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Copy annotations");
+    // …but the hotkey-triggered manual fallback suppresses it.
+    fireEvent.keyDown(copyButton, { key: "c", ctrlKey: true, altKey: true });
+    await screen.findByRole("dialog", { name: "Copy manually" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    // ONE Esc closes the fallback (the suppressed tooltip cannot steal it).
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Copy manually" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("collapsed focused-C: expansion + fallback leaves ZERO tooltips; one Esc closes the fallback (round-6 addendum)", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error("denied")),
+      },
+    });
+    viewRoutes([openAnn("a", "collapse copy")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    // Collapse and focus the chip drag handle → its tooltip opens.
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    const chipGrip = screen.getByRole("button", { name: "Drag toolbar" });
+    chipGrip.focus();
+    expect(await screen.findByRole("tooltip")).toBeInTheDocument();
+    // C from the collapsed grip: expands AND opens the manual fallback —
+    // the stale chip tooltip must NOT carry onto the bar grip.
+    fireEvent.keyDown(chipGrip, { key: "c", ctrlKey: true, altKey: true });
+    expect(
+      await screen.findByRole("toolbar", { name: "Portal Studio" })
+    ).toBeInTheDocument();
+    await screen.findByRole("dialog", { name: "Copy manually" });
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Copy manually" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("a focused collapsed Drag tooltip does NOT carry onto the expanded bar after shortcut-driven expansion (round-6 addendum)", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Collapse toolbar" }));
+    const chipGrip = screen.getByRole("button", { name: "Drag toolbar" });
+    chipGrip.focus();
+    expect(await screen.findByRole("tooltip")).toBeInTheDocument();
+    // Shortcut-driven expansion (P): the bar grip must mount with a FRESH
+    // closed tooltip (distinct stable keys force a remount).
+    fireEvent.keyDown(chipGrip, { key: "p", ctrlKey: true, altKey: true });
+    expect(
+      await screen.findByRole("toolbar", { name: "Portal Studio" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+  });
+
+  it("ONE Esc closes an open tooltip while capture stays active; the next Esc cancels capture (round-6 blocker 3)", async () => {
+    const user = userEvent.setup();
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const cases: Array<{
+      label: string;
+      hint: RegExp;
+    }> = [
+      { label: "Pick element", hint: /Hover an element/ },
+      { label: "Multi-select", hint: /toggle elements in\/out/ },
+      { label: "Select region", hint: /Drag over the page/ },
+    ];
+    for (const { label, hint } of cases) {
+      const action = screen.getByRole("button", { name: label });
+      await user.click(action);
+      expect(action).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByText(hint)).toBeInTheDocument();
+      // Focus the action button (blur first — the click already focused
+      // it, and the tooltip closed on click) → the registry tooltip opens.
+      action.blur();
+      action.focus();
+      const tooltip = await screen.findByRole("tooltip");
+      expect(tooltip.textContent).toContain(label);
+      // ONE Esc closes the TOOLTIP only — capture stays active.
+      await user.keyboard("{Escape}");
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
+      expect(action).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByText(hint)).toBeInTheDocument();
+      // The NEXT Esc cancels capture.
+      await user.keyboard("{Escape}");
+      await waitFor(() => {
+        expect(action).toHaveAttribute("aria-pressed", "false");
+      });
+      expect(screen.queryByText(hint)).not.toBeInTheDocument();
+    }
+  });
+
+  it("Help and List panels anchor ≈PLACEMENT_GAP above a bottom trigger, not maxHeight away (round-6 blocker 1)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("ann-1", "anchor me")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    // jsdom reports offsetHeight 0 — mock the rendered height so the
+    // above-flip anchoring is exercised exactly like a short real panel.
+    const heightGetter = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockReturnValue(220);
+    try {
+      const cases: Array<[string, string]> = [
+        ["Keyboard shortcuts", "Keyboard shortcuts"],
+        ["Annotation list", "Annotations"],
+      ];
+      for (const [buttonName, regionName] of cases) {
+        const trigger = screen.getByRole("button", { name: buttonName });
+        (trigger as HTMLElement & {
+          getBoundingClientRect(): DOMRect;
+        }).getBoundingClientRect = () =>
+          ({
+            left: 1000,
+            top: 700,
+            width: 40,
+            height: 40,
+            right: 1040,
+            bottom: 740,
+            x: 1000,
+            y: 700,
+            toJSON: () => ({}),
+          }) as DOMRect;
+        await user.click(trigger);
+        const panel = screen.getByRole("region", {
+          name: regionName,
+        }) as HTMLElement;
+        // Flipped ABOVE with the RENDERED height (220): the panel bottom
+        // ends ≈ PLACEMENT_GAP above the trigger top — NOT maxHeight away.
+        await waitFor(() => {
+          const top = Number(panel.style.top.replace("px", ""));
+          expect(Math.abs(top + 220 - (700 - 8))).toBeLessThanOrEqual(2);
+        });
+        await user.keyboard("{Escape}");
+        await waitFor(() => {
+          expect(screen.queryByRole("region", { name: regionName })).not.toBeInTheDocument();
+        });
+      }
+    } finally {
+      heightGetter.mockRestore();
+    }
+  });
+
+  it("an open Help/List panel re-anchors after a viewport resize (round-6 blocker 1)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("ann-1", "resize me")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    const listButton = screen.getByRole("button", { name: "Annotation list" });
+    (listButton as HTMLElement & {
+      getBoundingClientRect(): DOMRect;
+    }).getBoundingClientRect = () =>
+      ({
+        left: 1000,
+        top: 300,
+        width: 40,
+        height: 40,
+        right: 1040,
+        bottom: 340,
+        x: 1000,
+        y: 300,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    await user.click(listButton);
+    const panel = screen.getByRole("region", { name: "Annotations" }) as HTMLElement;
+    await waitFor(() => {
+      expect(panel.style.left).not.toBe("");
+    });
+    const firstLeft = Number(panel.style.left.replace("px", ""));
+    // The trigger moves left; a viewport resize must re-read the trigger
+    // rect and re-anchor the open panel.
+    (listButton as HTMLElement & {
+      getBoundingClientRect(): DOMRect;
+    }).getBoundingClientRect = () =>
+      ({
+        left: 500,
+        top: 300,
+        width: 40,
+        height: 40,
+        right: 540,
+        bottom: 340,
+        x: 500,
+        y: 300,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    fireEvent(window, new Event("resize"));
+    await waitFor(() => {
+      const movedLeft = Number(panel.style.left.replace("px", ""));
+      expect(movedLeft).toBeLessThan(firstLeft);
+    });
+  });
+
+  it("manual-Copy fallback Close button dismisses AND restores Copy focus (round-6 blocker 4)", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error("denied")),
+      },
+    });
+    viewRoutes([openAnn("a", "close focus")]);
+    render(<StudioToolbar config={config} />);
+    await openList(user);
+    await waitFor(() => {
+      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Copy annotations" })
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Copy manually",
+    });
+    // Keyboard-focus and ACTIVATE the visible Close button (not Esc).
+    const closeButton = within(dialog).getByRole("button", {
+      name: "Close",
+    });
+    closeButton.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(dialog).not.toBeInTheDocument();
+    });
+    // Focus returns to the real Copy button after render.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Copy annotations" })
+      ).toHaveFocus();
+    });
+  });
+
+  it("manual-Copy fallback is placed by the shared viewport-aware helper (round-3 finding 4)", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error("denied")),
+      },
+    });
+    viewRoutes([openAnn("a", "edge copy")]);
+    render(<StudioToolbar config={config} />);
+    await openList(user);
+    await waitFor(() => {
+      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Copy annotations" })
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Copy manually",
+    });
+    // The fallback is positioned by the shared placement utility anchored
+    // to the real Copy button — inline left/top/width, never the old
+    // CSS-only flip class.
+    const style = (dialog as HTMLElement).style;
+    expect(style.left).not.toBe("");
+    expect(style.top).not.toBe("");
+    expect(style.width).toBe("320px");
+    expect((dialog as HTMLElement).className).not.toContain(
+      "ps-more-menu-below"
+    );
+    // Round-4 finding 5: genuine near-trigger anchoring — with a real
+    // trigger rect, the below-placed dialog sits exactly PLACEMENT_GAP
+    // below the Copy button's bottom edge.
+    const copyButton = screen.getByRole("button", {
+      name: "Copy annotations",
+    });
+    (copyButton as HTMLElement & {
+      getBoundingClientRect(): DOMRect;
+    }).getBoundingClientRect = () =>
+      ({
+        left: 800,
+        top: 700,
+        width: 40,
+        height: 40,
+        right: 840,
+        bottom: 740,
+        x: 800,
+        y: 700,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    // Re-open the fallback after the rect mock is installed.
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(dialog).not.toBeInTheDocument();
+    });
+    await user.click(copyButton);
+    const reOpened = await screen.findByRole("dialog", {
+      name: "Copy manually",
+    });
+    expect(Number((reOpened as HTMLElement).style.top.replace("px", ""))).toBe(
+      740 + 8
+    );
+    // Esc still closes it race-free and restores Copy focus.
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(dialog).not.toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("button", { name: "Copy annotations" })
+    ).toHaveFocus();
+  });
+
+  it("dock drag listeners are removed with the EXACT callback+options added; lostpointercapture identity on the handle (round-5 blocker 2)", async () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    try {
+      render(<StudioToolbar config={config} />);
+      const handle = screen.getByRole("button", { name: "Drag toolbar" });
+      // Spy on the handle ELEMENT (React's root delegation installs its
+      // own listeners on the container, not on the handle).
+      const addHandleSpy = vi.spyOn(handle, "addEventListener");
+      const removeHandleSpy = vi.spyOn(handle, "removeEventListener");
+      const dock = document.querySelector(".ps-dock") as HTMLElement;
+      // Gesture 1 (pointerId 7) is REPLACED by gesture 2 (pointerId 8)
+      // before it ends — its listeners must be dropped immediately.
+      fireEvent.pointerDown(handle, { pointerId: 7, clientX: 10, clientY: 10 });
+      fireEvent.pointerDown(handle, { pointerId: 8, clientX: 20, clientY: 20 });
+      const before = Number(dock.style.left.replace("px", ""));
+      // A move with the STALE pointerId is ignored (replacement cleanup).
+      fireEvent.pointerMove(window, { pointerId: 7, clientX: 300, clientY: 300 });
+      expect(Number(dock.style.left.replace("px", ""))).toBe(before);
+      // A move with the ACTIVE pointerId drives the drag.
+      fireEvent.pointerMove(window, { pointerId: 8, clientX: 300, clientY: 300 });
+      expect(Number(dock.style.left.replace("px", ""))).toBeGreaterThan(before);
+      fireEvent.pointerUp(window, { pointerId: 8, clientX: 300, clientY: 300 });
+      // EXACT callback identity + capture options for every window drag
+      // listener: each add has a remove with the SAME function reference
+      // and the SAME options (capture=true). Equal counts alone are not
+      // enough — the test fails if the callback or options differ.
+      for (const type of ["pointermove", "pointerup", "pointercancel", "blur"]) {
+        const adds = addSpy.mock.calls.filter((call) => call[0] === type);
+        const removes = removeSpy.mock.calls.filter((call) => call[0] === type);
+        expect(adds.length, `${type} adds`).toBe(removes.length);
+        for (const add of adds) {
+          const matched = removes.some(
+            (remove) =>
+              remove[1] === add[1] && remove[2] === add[2]
+          );
+          expect(matched, `${type} exact callback+options`).toBe(true);
+        }
+      }
+      // The handle's lostpointercapture listener must be removed with the
+      // IDENTICAL callback it was added with (React never touches this
+      // event type, so the spy counts only the drag's listener).
+      const lostAdds = addHandleSpy.mock.calls.filter(
+        (call) => call[0] === "lostpointercapture"
+      );
+      const lostRemoves = removeHandleSpy.mock.calls.filter(
+        (call) => call[0] === "lostpointercapture"
+      );
+      expect(lostAdds.length).toBe(lostRemoves.length);
+      for (const add of lostAdds) {
+        const matched = lostRemoves.some(
+          (remove) => remove[1] === add[1] && remove[2] === add[2]
+        );
+        expect(matched, "lostpointercapture exact callback+options").toBe(
+          true
+        );
+      }
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
+  });
+
+  it("chip gesture: STALE up AND STALE cancel never end the active gesture; a dragged click never expands (round-5 blocker 1/2)", async () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    try {
+      render(<StudioToolbar config={config} />);
+      const chipOpen = screen.getByRole("button", { name: /Annotation tools/ });
+      // Pointer 2 REPLACES pointer 1 while both are down.
+      fireEvent.pointerDown(chipOpen, { pointerId: 1, clientX: 10, clientY: 10 });
+      fireEvent.pointerDown(chipOpen, { pointerId: 2, clientX: 20, clientY: 20 });
+      // STALE pointer 1 up must NOT end gesture 2 (its listeners survive).
+      fireEvent.pointerUp(window, { pointerId: 1, clientX: 300, clientY: 300 });
+      // STALE pointer 1 cancel must NOT end gesture 2 either.
+      fireEvent.pointerCancel(window, { pointerId: 1, clientX: 300, clientY: 300 });
+      // ACTIVE pointer 2 moves beyond the threshold → dragged=true…
+      fireEvent.pointerMove(window, { pointerId: 2, clientX: 400, clientY: 400 });
+      // …the ACTIVE end + click must NOT expand (drag suppresses the click).
+      fireEvent.pointerUp(window, { pointerId: 2, clientX: 400, clientY: 400 });
+      fireEvent.click(chipOpen);
+      expect(
+        screen.queryByRole("toolbar", { name: "Portal Studio" })
+      ).not.toBeInTheDocument();
+      // Exact symmetry after the whole sequence.
+      for (const type of ["pointermove", "pointerup", "pointercancel"]) {
+        const added = addSpy.mock.calls.filter((call) => call[0] === type).length;
+        const removed = removeSpy.mock.calls.filter((call) => call[0] === type).length;
+        expect(added, `${type} added`).toBe(removed);
+      }
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
+  });
+
+  it("chip gesture: ACTIVE pointer up and ACTIVE pointer cancel each end the gesture cleanly (round-5 blocker 2)", async () => {
+    const user = userEvent.setup();
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    try {
+      render(<StudioToolbar config={config} />);
+      const chipOpen = screen.getByRole("button", { name: /Annotation tools/ });
+      // Active UP ends gesture 11 → the following click expands.
+      fireEvent.pointerDown(chipOpen, { pointerId: 11, clientX: 10, clientY: 10 });
+      fireEvent.pointerUp(window, { pointerId: 11, clientX: 10, clientY: 10 });
+      fireEvent.click(chipOpen);
+      expect(
+        await screen.findByRole("toolbar", { name: "Portal Studio" })
+      ).toBeInTheDocument();
+      // Collapse; ACTIVE CANCEL ends gesture 12 → the click expands too.
+      await user.click(
+        screen.getByRole("button", { name: "Collapse toolbar" })
+      );
+      // The chip remounted after the collapse — query the FRESH node
+      // (never dispatch pointer events on a detached element).
+      const remountedChip = screen.getByRole("button", {
+        name: /Annotation tools/,
+      });
+      fireEvent.pointerDown(remountedChip, { pointerId: 12, clientX: 10, clientY: 10 });
+      fireEvent.pointerCancel(window, { pointerId: 12, clientX: 10, clientY: 10 });
+      fireEvent.click(remountedChip);
+      expect(
+        await screen.findByRole("toolbar", { name: "Portal Studio" })
+      ).toBeInTheDocument();
+      // Exact symmetry after both gestures.
+      for (const type of ["pointermove", "pointerup", "pointercancel"]) {
+        const added = addSpy.mock.calls.filter((call) => call[0] === type).length;
+        const removed = removeSpy.mock.calls.filter((call) => call[0] === type).length;
+        expect(added, `${type} added`).toBe(removed);
+      }
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
+  });
+
+  it("chip gesture listeners are removed on unmount mid-gesture (round-5 blocker 2)", async () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    try {
+      const { unmount } = render(<StudioToolbar config={config} />);
+      const chipOpen = screen.getByRole("button", { name: /Annotation tools/ });
+      // Start a gesture on the still-MOUNTED chip, then unmount
+      // immediately (never dispatch pointerdown on a detached chip).
+      fireEvent.pointerDown(chipOpen, { pointerId: 21, clientX: 10, clientY: 10 });
+      expect(chipOpen.isConnected).toBe(true);
+      unmount();
+      for (const type of ["pointermove", "pointerup", "pointercancel"]) {
+        const added = addSpy.mock.calls.filter((call) => call[0] === type).length;
+        const removed = removeSpy.mock.calls.filter((call) => call[0] === type).length;
+        expect(added, `${type} added after unmount`).toBe(removed);
+      }
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
+  });
+
+  it("unmount during a dock drag releases capture without errors (round-3 finding 1)", async () => {
+    const restoreMocks = installPointerCaptureMocks();
+    const proto = HTMLElement.prototype;
+    vi.spyOn(proto, "setPointerCapture").mockImplementation(() => undefined);
+    vi.spyOn(proto, "hasPointerCapture").mockImplementation(() => true);
+    vi.spyOn(proto, "releasePointerCapture").mockImplementation(() => undefined);
+    try {
+      const user = userEvent.setup();
+      const { unmount } = render(<StudioToolbar config={config} />);
+      const handle = screen.getByRole("button", { name: "Drag toolbar" });
+      await user.pointer([
+        { keys: "[MouseLeft>]", target: handle, coords: { x: 10, y: 10 } },
+        { coords: { x: 80, y: 50 } },
+      ]);
+      expect(() => unmount()).not.toThrow();
+    } finally {
+      restoreMocks();
+    }
+  });
+
+  it("Esc closes the TOPMOST list transient: delete confirm before inline edit, edit stays active (round-4 finding 4)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("ann-1", "edit me")]);
+    render(<StudioToolbar config={config} />);
+    await openList(user);
+    await waitFor(() => {
+      expect(screen.getByText("edit me")).toBeInTheDocument();
+    });
+    // Begin an inline edit…
+    await user.click(screen.getByRole("button", { name: "Edit comment" }));
+    const textarea = screen.getByDisplayValue("edit me");
+    await user.type(textarea, "!");
+    expect(screen.getByText("Unsaved")).toBeInTheDocument();
+    // …then open THIS row's Delete confirmation on top of the edit.
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Delete this annotation?"
+    );
+    // ONE Esc closes the CONFIRMATION first (topmost) — the inline edit
+    // stays active with its draft, nothing is mutated, and focus returns
+    // to the exact Delete trigger.
+    await user.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+    expect(screen.getByDisplayValue("edit me!")).toBeInTheDocument();
+    expect(screen.getByText("Unsaved")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Delete" })).toHaveFocus();
+    });
+    // The inline edit still owns the row (no plain comment text yet).
+    expect(screen.queryByText("edit me")).not.toBeInTheDocument();
+  });
+
+  it("keyboard dock movement closes auxiliary panels like drag (review P9)", async () => {
+    const user = userEvent.setup();
+    // Deterministic: earlier tests may have persisted a clamped position.
+    window.localStorage.clear();
+    viewRoutes([openAnn("ann-1", "dock move")]);
+    render(<StudioToolbar config={config} />);
+    await openList(user);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("region", { name: "Annotations" })
+      ).toBeInTheDocument();
+    });
+    const dock = document.querySelector(".ps-dock") as HTMLElement;
+    const before = Number(dock.style.left.replace("px", ""));
+    const grip = screen.getByRole("button", { name: "Drag toolbar" });
+    grip.focus();
+    await user.keyboard("{ArrowLeft}");
+    // The dock moved...
+    expect(Number(dock.style.left.replace("px", ""))).toBeLessThan(before);
+    // ...and the auxiliary panel closed (anchors can never go stale).
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "Annotations" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("hotkeys fire from focused NON-editable Studio controls; never from foreign-shadow editables (round-3 finding 2)", async () => {
+    const user = userEvent.setup();
+    viewRoutes([openAnn("ann-1", "focus me")]);
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: "Annotation tools" }));
+    // L from the focused LIST button (non-editable, inside the root).
+    const listButton = screen.getByRole("button", { name: "Annotation list" });
+    listButton.focus();
+    fireEvent.keyDown(listButton, { key: "l", ctrlKey: true, altKey: true });
+    expect(
+      screen.getByRole("region", { name: "Annotations" })
+    ).toBeInTheDocument();
+    // V from the focused Visibility button toggles presentation markers.
+    const visibility = screen.getByRole("button", { name: "Hide markers" });
+    visibility.focus();
+    fireEvent.keyDown(visibility, { key: "v", ctrlKey: true, altKey: true });
+    expect(
+      screen.getByRole("button", { name: "Show markers" })
+    ).toHaveAttribute("aria-pressed", "true");
+    // ? from a focused bar control opens the registry help popover.
+    const barGrip = screen.getByRole("button", { name: "Drag toolbar" });
+    barGrip.focus();
+    fireEvent.keyDown(barGrip, { key: "?" });
+    expect(
+      screen.getByRole("region", { name: "Keyboard shortcuts" })
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    // Round-4 finding 3: capture-activating shortcuts DO fire from focused
+    // non-editable Studio controls — P/M/A from the bar buttons.
+    const pick = screen.getByRole("button", { name: "Pick element" });
+    pick.focus();
+    fireEvent.keyDown(pick, { key: "p", ctrlKey: true, altKey: true });
+    expect(await screen.findByText(/Hover an element/)).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    const multi = screen.getByRole("button", { name: "Multi-select" });
+    multi.focus();
+    fireEvent.keyDown(multi, { key: "m", ctrlKey: true, altKey: true });
+    expect(
+      await screen.findByText(/toggle elements in\/out/)
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    const area = screen.getByRole("button", { name: "Select region" });
+    area.focus();
+    fireEvent.keyDown(area, { key: "a", ctrlKey: true, altKey: true });
+    expect(await screen.findByText(/Drag over the page/)).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    // K from a focused bar control collapses the toolbar.
+    fireEvent.keyDown(area, { key: "k", ctrlKey: true, altKey: true });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("toolbar", { name: "Portal Studio" })
+      ).not.toBeInTheDocument();
+    });
+    // Round-5 blocker 3: EVERY capture action works from a focused
+    // COLLAPSED-chip control — P/M/A/C each expand the toolbar and
+    // activate their action.
+    const collapsedShortcut = async (
+      key: string,
+      expectHint: () => void
+    ) => {
+      // If the bar is currently expanded, collapse it first via K from a
+      // focused bar control (Esc only cancels capture, never collapses).
+      if (screen.queryByRole("toolbar", { name: "Portal Studio" })) {
+        const barGrip = screen.getByRole("button", { name: "Drag toolbar" });
+        barGrip.focus();
+        fireEvent.keyDown(barGrip, { key: "k", ctrlKey: true, altKey: true });
+        await waitFor(() => {
+          expect(
+            screen.queryByRole("toolbar", { name: "Portal Studio" })
+          ).not.toBeInTheDocument();
+        });
+      }
+      const grip = screen.getByRole("button", { name: "Drag toolbar" });
+      grip.focus();
+      fireEvent.keyDown(grip, { key, ctrlKey: true, altKey: true });
+      expect(
+        await screen.findByRole("toolbar", { name: "Portal Studio" })
+      ).toBeInTheDocument();
+      expectHint();
+      // Cancel the activated capture mode so the next iteration starts
+      // from a clean idle state (the toolbar stays expanded).
+      await user.keyboard("{Escape}");
+    };
+    // P: expands + Pick hint.
+    await collapsedShortcut("p", () => {
+      expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    });
+    await user.keyboard("{Escape}");
+    // M: expands + Multi hint.
+    await collapsedShortcut("m", () => {
+      expect(screen.getByText(/toggle elements in\/out/)).toBeInTheDocument();
+    });
+    // A: expands + Area hint.
+    await collapsedShortcut("a", () => {
+      expect(screen.getByText(/Drag over the page/)).toBeInTheDocument();
+    });
+    // C: expands + copies the one Open annotation (deterministic stub).
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    await collapsedShortcut("c", () => {
+      expect(
+        screen.getByText("Copied to clipboard")
+      ).toBeInTheDocument();
+    });
+    await user.keyboard("{Escape}");
+
+    // A FOREIGN shadow-root editable never triggers shortcuts.
+    const host = document.createElement("div");
+    const shadow = host.attachShadow({ mode: "open" });
+    const input = document.createElement("input");
+    shadow.appendChild(input);
+    document.body.appendChild(host);
+    input.focus();
+    fireEvent.keyDown(input, { key: "p", ctrlKey: true, altKey: true });
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "l", ctrlKey: true, altKey: true });
+    expect(
+      screen.queryByRole("region", { name: "Annotations" })
+    ).not.toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "k", ctrlKey: true, altKey: true });
+    // K from the foreign editable is ignored too — the toolbar stays open.
+    expect(
+      screen.getByRole("toolbar", { name: "Portal Studio" })
+    ).toBeInTheDocument();
+    document.body.removeChild(host);
+  });
+
+  it("opening Help or List suspends page capture; closing returns to a safe state", async () => {
+    const user = userEvent.setup();
+    const row = makePageElement("Alice", "row-a");
+    render(<StudioToolbar config={config} />);
+    await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
+    await user.click(screen.getByRole("button", { name: "Pick element" }));
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    // Open the list while picking — capture hints suspend (status panel
+    // hidden) but the mode is preserved.
+    await user.click(screen.getByRole("button", { name: "Annotation list" }));
+    expect(screen.queryByText(/Hover an element/)).not.toBeInTheDocument();
+    // Closing the list resumes the pending pick mode.
+    await user.click(screen.getByRole("button", { name: "Annotation list" }));
+    expect(screen.getByText(/Hover an element/)).toBeInTheDocument();
+    row.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText(/Captured/)).toBeInTheDocument();
   });
 
 });

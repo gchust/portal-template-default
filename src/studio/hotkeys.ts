@@ -23,6 +23,9 @@ export type HotkeyAction =
   | "multi"
   | "area"
   | "copy"
+  | "visibility"
+  | "list"
+  | "help"
   | "toggle";
 
 export type HotkeyDef = {
@@ -31,44 +34,54 @@ export type HotkeyDef = {
   key: string;
   /** Platform-adjusted modifier label for tooltips. */
   shortcutLabel: string;
-  /** Accessible description. */
-  description: string;
 };
 
 /**
- * All five shortcuts. The `key` field is the physical key; matching uses
- * event.key.toUpperCase() after normalising Meta→Control on non-Mac.
+ * The Studio shortcut table (one typed source of truth, Goal 01 v5).
+ * Mod+Alt combos use `key` = the letter; the `?` help shortcut is matched
+ * separately by `matchHelpShortcut` (Shift+/ produces `?` on US layouts
+ * and `/` + shiftKey on some international layouts).
  */
 export const HOTKEYS: HotkeyDef[] = [
   {
     action: "pick",
     key: "P",
     shortcutLabel: `${MODIFIER.label}+P`,
-    description: "Pick element",
   },
   {
     action: "multi",
     key: "M",
     shortcutLabel: `${MODIFIER.label}+M`,
-    description: "Multi-select",
   },
   {
     action: "area",
     key: "A",
     shortcutLabel: `${MODIFIER.label}+A`,
-    description: "Select region",
   },
   {
     action: "copy",
     key: "C",
     shortcutLabel: `${MODIFIER.label}+C`,
-    description: "Copy annotations",
+  },
+  {
+    action: "visibility",
+    key: "V",
+    shortcutLabel: `${MODIFIER.label}+V`,
+  },
+  {
+    action: "list",
+    key: "L",
+    shortcutLabel: `${MODIFIER.label}+L`,
+  },
+  {
+    action: "help",
+    key: "?",
+    shortcutLabel: "?",
   },
   {
     action: "toggle",
     key: "K",
     shortcutLabel: `${MODIFIER.label}+K`,
-    description: "Toggle dock",
   },
 ] as const;
 
@@ -92,25 +105,44 @@ const EDITABLE_TAGNAMES = new Set([
 ]);
 
 /**
- * Returns true when the event target is an editable element where hotkeys
+ * Returns true when any node in the given composed path (or, failing that,
+ * the ancestor chain of the target) is an editable element where hotkeys
  * must not fire: <input>, <textarea>, <select>, [contenteditable], or any
- * ancestor with an editor-like role.
+ * node with an editor-like role.
+ *
+ * Round-3 finding 2: detection MUST inspect the composed path so editable
+ * controls inside EITHER the Studio shadow root OR a foreign page shadow
+ * root are recognized (a document-level listener retargets event.target to
+ * the shadow HOST; only the composed path still contains the real node).
  */
-export function isEditableTarget(target: EventTarget | null): boolean {
+const isEditableNode = (node: EventTarget | null): boolean => {
+  if (!(node instanceof Element)) return false;
+  if (EDITABLE_TAGNAMES.has(node.tagName)) return true;
+  // Check isContentEditable property (works in browsers) and attribute
+  // fallback for jsdom where the property may be undefined.
+  if (node instanceof HTMLElement && node.isContentEditable) return true;
+  const ce = node.getAttribute("contenteditable");
+  if (ce !== null && ce !== "false") return true;
+  const role = node.getAttribute("role");
+  return role === "textbox" || role === "searchbox" || role === "combobox";
+};
+
+export function isEditableTarget(
+  target: EventTarget | null,
+  path?: readonly EventTarget[] | null
+): boolean {
+  if (path && path.length > 0) {
+    for (const node of path) {
+      if (isEditableNode(node)) return true;
+    }
+    return false;
+  }
   if (!(target instanceof Element)) return false;
-  // Walk up to check contenteditable and editor roles.
+  // Fallback (no composed path available, e.g. synthetic jsdom events):
+  // walk the ancestor chain from the target.
   let el: Element | null = target;
   while (el && el !== document.body) {
-    if (EDITABLE_TAGNAMES.has(el.tagName)) return true;
-    // Check isContentEditable property (works in browsers) and attribute
-    // fallback for jsdom where the property may be undefined.
-    if (el instanceof HTMLElement && el.isContentEditable) return true;
-    const ce = el.getAttribute("contenteditable");
-    if (ce !== null && ce !== "false") return true;
-    const role = el.getAttribute("role");
-    if (role === "textbox" || role === "searchbox" || role === "combobox") {
-      return true;
-    }
+    if (isEditableNode(el)) return true;
     el = el.parentElement;
   }
   return false;
@@ -127,9 +159,49 @@ export function isEditableTarget(target: EventTarget | null): boolean {
  *
  * Returns the matched HotkeyDef or null.
  */
+/**
+ * Match the `?` shortcut-help key (Shift+/). Returns the help definition
+ * when the event is the bare `?` (US layout) or `/` with shift held
+ * (international layouts), with NO other modifiers, outside editable
+ * targets, not composing and not a repeat.
+ */
+const eventComposedPath = (event: KeyboardEvent): readonly EventTarget[] | null => {
+  try {
+    return typeof event.composedPath === "function"
+      ? event.composedPath()
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+export function matchHelpShortcut(event: KeyboardEvent): HotkeyDef | null {
+  if (isEditableTarget(event.target, eventComposedPath(event))) return null;
+  if (event.isComposing) return null;
+  if (event.repeat) return null;
+  if (event.ctrlKey || event.metaKey || event.altKey) return null;
+  const isQuestionMark =
+    event.key === "?" || (event.code === "Slash" && event.shiftKey);
+  if (!isQuestionMark) return null;
+  const help = byAction.get("help");
+  return help ?? null;
+}
+
+/**
+ * Match a KeyboardEvent against the Mod+Alt hotkey table.
+ *
+ * Safety guards:
+ * - Editable targets (input/textarea/select/contenteditable) → no match.
+ * - IME composition (event.isComposing) → no match.
+ * - Repeat events (event.repeat) → no match.
+ * - Only primary+alt modifiers must be held (no Shift, no extra modifiers).
+ *
+ * Returns the matched HotkeyDef or null. The `?` help shortcut is handled
+ * by matchHelpShortcut (callers should try it when this returns null).
+ */
 export function matchHotkey(event: KeyboardEvent): HotkeyDef | null {
-  // Guard: editable target.
-  if (isEditableTarget(event.target)) return null;
+  // Guard: editable target (composed-path aware, round-3 finding 2).
+  if (isEditableTarget(event.target, eventComposedPath(event))) return null;
   // Guard: IME composition.
   if (event.isComposing) return null;
   // Guard: repeat events.
@@ -154,4 +226,14 @@ export function matchHotkey(event: KeyboardEvent): HotkeyDef | null {
     }
   }
   return null;
+}
+
+/**
+ * Match either the Mod+Alt table or the `?` help key. Convenience used by
+ * the toolbar's single global listener.
+ */
+export function matchStudioShortcut(
+  event: KeyboardEvent
+): HotkeyDef | null {
+  return matchHotkey(event) ?? matchHelpShortcut(event);
 }
