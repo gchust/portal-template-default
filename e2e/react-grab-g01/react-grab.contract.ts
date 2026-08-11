@@ -40,35 +40,34 @@ const expectSourceContext = (
   proof: ElementProof,
   expectedComponent: string
 ) => {
-  expect(proof.context.filePath).not.toBeNull();
+  expect(proof.filePath).not.toBeNull();
   expect(
     path.resolve(
       "e2e/react-grab-g01",
-      proof.context.filePath!.replace(/\?.*$/, "")
+      proof.filePath!.replace(/\?.*$/, "")
     )
   ).toBe(path.resolve("e2e/react-grab-g01/fixture.tsx"));
-  expect(proof.context.lineNumber).toEqual(expect.any(Number));
-  expect(proof.context.lineNumber).toBeGreaterThan(0);
-  expect(proof.context.columnNumber).toEqual(expect.any(Number));
-  expect(proof.context.columnNumber).toBeGreaterThanOrEqual(0);
-  expect(proof.context.filePath).not.toContain("node_modules");
+  expect(proof.lineNumber).toEqual(expect.any(Number));
+  expect(proof.lineNumber).toBeGreaterThan(0);
+  expect(proof.columnNumber).toEqual(expect.any(Number));
+  expect(proof.columnNumber).toBeGreaterThanOrEqual(0);
+  expect(proof.filePath).not.toContain("node_modules");
 
   const componentEvidence = [
-    proof.context.componentName,
-    ...proof.context.stack.map((frame) => frame.functionName),
+    proof.componentName,
+    ...proof.stack.map((frame) => frame.componentName),
   ]
     .filter(Boolean)
     .join(" ");
   expect(componentEvidence).toContain(expectedComponent);
   expect(
-    proof.context.stack.some(
+    proof.stack.some(
       (frame) =>
-        !!frame.fileName &&
         path.resolve(
           "e2e/react-grab-g01",
-          frame.fileName.replace(/\?.*$/, "")
+          frame.filePath.replace(/\?.*$/, "")
         ) === path.resolve("e2e/react-grab-g01/fixture.tsx") &&
-        !frame.fileName.includes("node_modules")
+        !frame.filePath.includes("node_modules")
     )
   ).toBe(true);
 };
@@ -77,36 +76,32 @@ test.beforeAll(() => {
   mkdirSync(screenshotsRoot, { recursive: true });
 });
 
-test("exports all public primitives without mounting the default UI", async ({
+test("exposes the repository-owned adapter without mounting the default UI", async ({
   page,
 }) => {
   await openFixture(page);
-  const callableTypes = await callApi<Record<string, string>>(
+  const surface = await callApi<Record<string, string>>(
     page,
-    "callableTypes"
+    "engineSurface"
   );
   const ui = await callApi<ReturnType<ReactGrabG01Api["uiState"]>>(
     page,
     "uiState"
   );
 
-  expect(Object.keys(callableTypes).sort()).toEqual(
+  expect(Object.keys(surface).sort()).toEqual(
     [
-      "disposeBaselineStyles",
       "freeze",
-      "getElementAtPoint",
-      "getElementBounds",
-      "getElementContext",
-      "getElementSelector",
-      "getElementsAtPoint",
-      "isElementGrabbable",
-      "isFreezeActive",
+      "getBounds",
+      "getTargetAtPoint",
+      "getTargetsAtPoint",
+      "inspect",
+      "isFrozen",
+      "resolveUsefulTarget",
       "unfreeze",
     ].sort()
   );
-  expect(Object.values(callableTypes)).toEqual(
-    Array(10).fill("function")
-  );
+  expect(Object.values(surface)).toEqual(Array(8).fill("function"));
   expect(ui).toMatchObject({
     mountedUiAttributes: [],
     clipboardWrites: 0,
@@ -150,7 +145,6 @@ test("inspects the template shadcn button target", async ({ page }) => {
 
   expect(proof.id).toBe("fixture-shadcn-button");
   expect(proof.tagName).toBe("button");
-  expect(proof.grabbable).toBe(true);
   expect(proof.selector).toBeTruthy();
   expect(proof.bounds.width).toBeGreaterThan(0);
   expect(proof.bounds.height).toBeGreaterThan(0);
@@ -182,11 +176,13 @@ test("promotes a nested SVG point to its nearest useful button target", async ({
     tagName: "path",
   });
 
-  // The deterministic semantic rule promotes to the nearest useful target.
+  // The deterministic semantic rule promotes to the nearest useful target,
+  // and the adapter entry point agrees with the exported rule.
   expect(svg.selectedTarget).toEqual({
     id: "fixture-svg-button",
     tagName: "button",
   });
+  expect(svg.engineTarget).toEqual(svg.selectedTarget);
   expect(svg.promoted).toBe(true);
   expect(svg.promotionReason).toBe("svg-geometry-promotion");
   // The promoted button is a real composed ancestor present in the public
@@ -213,6 +209,7 @@ test("keeps a plain button hit direct and unpromoted", async ({ page }) => {
     id: "fixture-plain-button",
     tagName: "button",
   });
+  expect(plain.engineTarget).toEqual(plain.selectedTarget);
   expect(plain.promoted).toBe(false);
   expect(plain.promotionReason).toBe("direct");
 });
@@ -242,6 +239,7 @@ test("does not jump a standalone SVG shape to an unrelated ancestor", async ({
     id: "fixture-svg-standalone-path",
     tagName: "path",
   });
+  expect(standalone.engineTarget).toEqual(standalone.selectedTarget);
   expect(standalone.promoted).toBe(false);
   expect(standalone.promotionReason).toBe("svg-geometry-promotion");
 });
@@ -325,7 +323,7 @@ test("crosses a same-origin iframe and returns top-level bounds", async ({
   );
 });
 
-test("freezes, unfreezes and safely disposes baseline styles", async ({ page }) => {
+test("freezes, unfreezes and stays clean through the adapter", async ({ page }) => {
   await openFixture(page);
   const result = await callApi<
     ReturnType<ReactGrabG01Api["freezeCycle"]>

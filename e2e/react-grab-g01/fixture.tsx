@@ -1,8 +1,12 @@
-import { reactGrabPrimitives as primitives } from "./primitives";
 import {
-  type PromotionReason,
+  inspectionEngine,
   resolveUsefulTarget,
-} from "./target-promotion";
+} from "@/studio/inspection";
+import type {
+  InspectedElement,
+  PromotionReason,
+  ViewportRect,
+} from "@/studio/inspection";
 
 import {
   forwardRef,
@@ -16,35 +20,28 @@ import { createRoot } from "react-dom/client";
 
 import { Button } from "@/components/ui/button";
 
-type Bounds = ReturnType<typeof primitives.getElementBounds>;
-
-type SourceContext = {
+export type ElementProof = {
+  id: string;
+  tagName: string;
+  selector: string;
+  bounds: ViewportRect;
   componentName: string | null;
   filePath: string | null;
   lineNumber: number | null;
   columnNumber: number | null;
-  selector: string | null;
   stack: Array<{
-    functionName?: string;
-    fileName?: string;
-    lineNumber?: number;
-    columnNumber?: number;
+    filePath: string;
+    lineNumber: number;
+    columnNumber: number;
+    componentName: string | null;
   }>;
-};
-
-export type ElementProof = {
-  id: string;
-  tagName: string;
-  grabbable: boolean;
-  selector: string;
-  bounds: Bounds;
-  context: SourceContext;
 };
 
 export type HitProof = {
   point: { x: number; y: number };
   nativeTarget: { id: string; tagName: string; grabbable: boolean } | null;
   selectedTarget: { id: string; tagName: string } | null;
+  engineTarget: { id: string; tagName: string } | null;
   selectedStack: Array<{ id: string; tagName: string }>;
   promoted: boolean;
   promotionReason: PromotionReason;
@@ -57,7 +54,7 @@ type BootstrapState = {
 };
 
 export type ReactGrabG01Api = {
-  callableTypes: Record<string, string>;
+  engineSurface: Record<string, string>;
   inspect: (id: string) => Promise<ElementProof>;
   hit: (id: string, hideOverlay?: boolean) => HitProof;
   inspectShadow: () => Promise<ElementProof>;
@@ -268,34 +265,23 @@ const getIframeButton = (): Element => {
   return button;
 };
 
-const sourceContext = async (element: Element): Promise<SourceContext> => {
-  const context = await primitives.getElementContext(element);
+const inspectElement = async (element: Element): Promise<ElementProof> => {
+  const inspected: InspectedElement = await inspectionEngine.inspect(element);
   return {
-    componentName: context.componentName,
-    filePath: context.filePath,
-    lineNumber: context.lineNumber,
-    columnNumber: context.columnNumber,
-    selector: context.selector,
-    stack: context.stack.map((frame) => ({
-      functionName: frame.functionName,
-      fileName: frame.fileName,
-      lineNumber: frame.lineNumber,
-      columnNumber: frame.columnNumber,
-    })),
+    id: element.id,
+    tagName: inspected.tagName,
+    selector: inspected.selector,
+    bounds: inspected.bounds,
+    componentName: inspected.componentName,
+    filePath: inspected.source?.filePath ?? null,
+    lineNumber: inspected.source?.lineNumber ?? null,
+    columnNumber: inspected.source?.columnNumber ?? null,
+    stack: inspected.sourceStack.map((frame) => ({ ...frame })),
   };
 };
 
-const inspectElement = async (element: Element): Promise<ElementProof> => ({
-  id: element.id,
-  tagName: element.tagName.toLowerCase(),
-  grabbable: primitives.isElementGrabbable(element),
-  selector: primitives.getElementSelector(element),
-  bounds: primitives.getElementBounds(element),
-  context: await sourceContext(element),
-});
-
 const center = (element: Element) => {
-  const bounds = primitives.getElementBounds(element);
+  const bounds = inspectionEngine.getBounds(element);
   return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
 };
 
@@ -311,19 +297,20 @@ const hitElement = (element: Element, hideOverlay = false): HitProof => {
   try {
     const point = center(element);
     const nativeTarget = document.elementFromPoint(point.x, point.y);
-    const selection = resolveUsefulTarget(point.x, point.y, primitives);
+    const stack = inspectionEngine.getTargetsAtPoint(point.x, point.y);
+    const selection = resolveUsefulTarget(point.x, point.y);
+    const engineTarget = inspectionEngine.getTargetAtPoint(point.x, point.y);
     return {
       point,
       nativeTarget: nativeTarget
         ? {
             ...summarize(nativeTarget)!,
-            grabbable: primitives.isElementGrabbable(nativeTarget),
+            grabbable: stack.includes(nativeTarget),
           }
         : null,
-      selectedTarget: selection.target
-        ? summarize(selection.target)
-        : null,
-      selectedStack: selection.stack.map((candidate) => summarize(candidate)!),
+      selectedTarget: selection.target ? summarize(selection.target) : null,
+      engineTarget: engineTarget ? summarize(engineTarget) : null,
+      selectedStack: stack.map((candidate) => summarize(candidate)!),
       promoted: selection.promoted,
       promotionReason: selection.reason,
     };
@@ -353,9 +340,16 @@ if (!root) throw new Error("Missing fixture root");
 createRoot(root).render(<FixtureApp />);
 
 window.__REACT_GRAB_G01__ = {
-  callableTypes: Object.fromEntries(
-    Object.entries(primitives).map(([name, value]) => [name, typeof value])
-  ),
+  engineSurface: {
+    getTargetAtPoint: typeof inspectionEngine.getTargetAtPoint,
+    getTargetsAtPoint: typeof inspectionEngine.getTargetsAtPoint,
+    getBounds: typeof inspectionEngine.getBounds,
+    inspect: typeof inspectionEngine.inspect,
+    freeze: typeof inspectionEngine.freeze,
+    unfreeze: typeof inspectionEngine.unfreeze,
+    isFrozen: typeof inspectionEngine.isFrozen,
+    resolveUsefulTarget: typeof resolveUsefulTarget,
+  },
   inspect: (id) => inspectElement(getElement(id)),
   hit: (id, hideOverlay) => hitElement(getElement(id), hideOverlay),
   inspectShadow: () => inspectElement(getShadowButton()),
@@ -365,19 +359,18 @@ window.__REACT_GRAB_G01__ = {
   freezeCycle: () => {
     const bootstrap = window.__REACT_GRAB_G01_BOOTSTRAP__!;
     const errorCount = bootstrap.consoleErrors.length;
-    const before = primitives.isFreezeActive();
+    const before = inspectionEngine.isFrozen();
     let during = false;
     try {
-      primitives.freeze();
-      during = primitives.isFreezeActive();
+      inspectionEngine.freeze();
+      during = inspectionEngine.isFrozen();
     } finally {
-      primitives.unfreeze();
-      primitives.disposeBaselineStyles();
+      inspectionEngine.unfreeze();
     }
     return {
       before,
       during,
-      after: primitives.isFreezeActive(),
+      after: inspectionEngine.isFrozen(),
       consoleErrors: bootstrap.consoleErrors.slice(errorCount),
     };
   },

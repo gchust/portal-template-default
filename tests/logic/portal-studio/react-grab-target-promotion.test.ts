@@ -1,20 +1,19 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { reactGrabPrimitives } from "../../../e2e/react-grab-g01/primitives";
-import {
-  resolveUsefulTarget,
-} from "../../../e2e/react-grab-g01/target-promotion";
+import { resolveUsefulTarget } from "@/studio/inspection";
 
 /**
- * Goal 01 — G01-AC06 deterministic semantic target-promotion proof.
+ * Goal 01/02 — G01-AC06 deterministic semantic target-promotion proof,
+ * consumed through the repository-owned inspection adapter (shared contract
+ * §4: no test may import upstream directly after Goal 02).
  *
  * jsdom 30 implements no layout engine: `Document.prototype.elementFromPoint`
  * and `elementsFromPoint` are absent, so the REAL public react-grab
  * primitives cannot hit-test. This file installs a minimal, deterministic
  * containment shim for those two DOM APIs (deepest element first) and per-
  * element `getBoundingClientRect` rect stubs (jsdom returns zero rects), then
- * lets the real `react-grab/primitives` functions and the real promotion rule
- * run against ordinary DOM. The authoritative browser proof lives in
+ * lets the real adapter, the real primitives and the real promotion rule run
+ * against ordinary DOM. The authoritative browser proof lives in
  * `e2e/react-grab-g01/react-grab.contract.ts`; this unit proof pins the rule
  * logic and its negative properties.
  */
@@ -240,11 +239,10 @@ describe("react-grab semantic target promotion (Goal 01 G01-AC06)", () => {
   });
 
   it("promotes a nested SVG path to its nearest useful button target", () => {
-    const result = resolveUsefulTarget(30, 30, reactGrabPrimitives);
+    const result = resolveUsefulTarget(30, 30);
 
     // Honest upstream observation, preserved: the raw public selection is the
     // grabbable SVG path — the first entry of the public stack.
-    expect(reactGrabPrimitives.isElementGrabbable(fixture.svgPath)).toBe(true);
     expect(result.hit).toBe(fixture.svgPath);
     expect(result.stack[0]).toBe(fixture.svgPath);
 
@@ -259,7 +257,7 @@ describe("react-grab semantic target promotion (Goal 01 G01-AC06)", () => {
   });
 
   it("keeps a plain button hit direct", () => {
-    const result = resolveUsefulTarget(30, 500, reactGrabPrimitives);
+    const result = resolveUsefulTarget(30, 500);
 
     expect(result.hit).toBe(fixture.plainButton);
     expect(result.target).toBe(fixture.plainButton);
@@ -268,7 +266,7 @@ describe("react-grab semantic target promotion (Goal 01 G01-AC06)", () => {
   });
 
   it("does not jump a standalone SVG shape to an unrelated ancestor", () => {
-    const result = resolveUsefulTarget(30, 140, reactGrabPrimitives);
+    const result = resolveUsefulTarget(30, 140);
 
     expect(result.hit).toBe(fixture.standalonePath);
     expect(result.target).toBe(fixture.standalonePath);
@@ -278,7 +276,7 @@ describe("react-grab semantic target promotion (Goal 01 G01-AC06)", () => {
   });
 
   it("promotes a nested SVG path to the nearest interactive link", () => {
-    const result = resolveUsefulTarget(30, 270, reactGrabPrimitives);
+    const result = resolveUsefulTarget(30, 270);
 
     expect(result.hit).toBe(fixture.linkPath);
     expect(result.target).toBe(fixture.link);
@@ -287,7 +285,7 @@ describe("react-grab semantic target promotion (Goal 01 G01-AC06)", () => {
   });
 
   it("never skips a nearer interactive control on the way up", () => {
-    const result = resolveUsefulTarget(50, 400, reactGrabPrimitives);
+    const result = resolveUsefulTarget(50, 400);
 
     expect(result.hit).toBe(fixture.nestedPath);
     // The walk crosses the non-interactive span and stops at the button; it
@@ -299,7 +297,7 @@ describe("react-grab semantic target promotion (Goal 01 G01-AC06)", () => {
   });
 
   it("stops at the first non-ancestor instead of jumping to an interactive sibling", () => {
-    const result = resolveUsefulTarget(450, 30, reactGrabPrimitives);
+    const result = resolveUsefulTarget(450, 30);
 
     // The overlapping interactive sibling sits later in the public stack, but
     // it is NOT a composed ancestor: the walk must break and keep the shape.
@@ -313,7 +311,7 @@ describe("react-grab semantic target promotion (Goal 01 G01-AC06)", () => {
 
   it("reports no-target when nothing is grabbable at the point", () => {
     // Outside every fixture rect, including <main> (0,0,1200,800).
-    const result = resolveUsefulTarget(1250, 850, reactGrabPrimitives);
+    const result = resolveUsefulTarget(1250, 850);
 
     expect(result.target).toBeNull();
     expect(result.promoted).toBe(false);
