@@ -1,0 +1,14 @@
+00-shared-contract.md	16562 bytes	364 lines	sha256 def411a1e24c59c1864b456666a711bc9a44205bc6c8ee60047414ff7a8a661b
+01-goal-lock-upstream-contract.md	7873 bytes	196 lines	sha256 f61ee34757e2111238c9eccb1af96098af1ba03f82fc5c935d34872c2b44bc2a
+02-goal-build-single-inspection-domain.md	8060 bytes	189 lines	sha256 1a5cbebdc8cd16be680cfcd01b438504489254f0385df9618eec2a1ba4096cc2
+03-goal-atomic-production-cutover.md	9456 bytes	236 lines	sha256 2d64c8a0c580d0cf8fe3b423be3b47d56e19f05698b9eb5854e850aa1a9d9e43
+04-goal-freeze-region-and-runtime-quality.md	6708 bytes	152 lines	sha256 096a211f37fad761448a1a584058d7edf06b7b43209a3547e340fddfe02b0bb6
+05-goal-delete-legacy-and-compatibility.md	8469 bytes	213 lines	sha256 0796637c426855ac0d3b8282df51e40cae30954c41f64b769ba31331c115aba6
+06-goal-release-proof.md	6431 bytes	199 lines	sha256 d0e8e1a11a0bbd04ac467db8efe7032ec17facfa7fe535f1d1bca2d9128dd0e8
+AGENTS-snippet.md	772 bytes	5 lines	sha256 2bd0506824a49a50e7866c3fd5f73b9ea33903340551e254b8e8c3c7496051a9
+COPY-READY-GOAL-01.md	25634 bytes	589 lines	sha256 bc9aef8b22e72a5b8076136ae0929de46dd4d64b31ba963cd81c159621b146e8
+FINAL-ACCEPTANCE-MATRIX.md	3204 bytes	34 lines	sha256 8f3513be10ffd9bf18317c465c20da502a697913e56e7b725639c62a334ffcfa
+README.md	3204 bytes	51 lines	sha256 48e82913509e9425e9896530b8ba878ea401cf2725e8f6d07f5e31d1fc8c335b
+README.zh-CN.md	3466 bytes	67 lines	sha256 9afc0a922e7e8a9eb7b6c9cf827b434933dc9cf07c6d26a9c7f2a9894543a7bb
+RESEARCH-NOTES.md	3223 bytes	58 lines	sha256 431b4c28707b14cf02291df2ff7593a1e6e2240f1e824b7b3a2cad35eedfedce
+launchers.md	8146 bytes	207 lines	sha256 7c0d6b8fbccc86ca49345c098e41a52675893a5a8e2fd3d06302d5970ed2b10a

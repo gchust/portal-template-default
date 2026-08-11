@@ -44,12 +44,8 @@ Canonical NocoBase Registry source lives under `registry/`. In this source repos
 
 Keep Registry items portable and focused on reusable API adapters, hooks, components, and small demos. Update `registry.config.json` whenever an item's files, dependencies, or installation target changes. Validate Registry changes with the normal application build and the relevant regression scripts.
 
-## Portal Studio UX work — current source of truth
+## Portal Studio React Grab migration
 
-For Portal Studio UX work, the current source of truth is
-`docs/exec-plans/portal-studio-horizontal-toolbar-v5/`. Read the shared
-contract and only the currently assigned numbered Goal. Older
-vertical-panel or Wrench-launcher plans (e.g. `docs/exec-plans/portal-studio/`
-and `docs/exec-plans/portal-studio-annotation-first/`) are SUPERSEDED —
-do not implement their conflicting vertical-panel designs. Complete and
-independently verify one Goal before starting the next.
+For work under `src/studio`, first read `docs/exec-plans/portal-studio-react-grab-migration-v1/00-shared-contract.md` and only the currently assigned numbered Goal. Keep that Goal's `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` current. Complete and independently verify one Goal before starting the next.
+
+The final architecture has exactly one generic perception engine: `react-grab/primitives`. Do not add a legacy/custom fallback, do not directly depend on `element-source`, do not import React Grab's default UI, and do not preserve task schema v1-v5 compatibility. Preserve NocoBase-specific annotation, task, business-context, security, diagnostics, CLI, and Agent-completion behavior.

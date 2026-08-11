@@ -29,6 +29,7 @@ dist-ssr
 
 # Portal Studio dev runtime (session token + task files)
 /.portal-studio/
+/.portal-studio-evidence/
 
 # Editor directories and files
 
