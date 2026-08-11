@@ -246,6 +246,16 @@ describe("hotkeys — action matching", () => {
     const event = makeEvent({ key: "l", altKey: true, ...mod });
     expect(matchHotkey(event)?.action).toBe("list");
   });
+
+  it("uses event.code when Alt changes the typed letter into a symbol", () => {
+    const event = makeEvent({
+      key: "π",
+      code: "KeyP",
+      altKey: true,
+      ...mod,
+    });
+    expect(matchHotkey(event)?.action).toBe("pick");
+  });
 });
 
 // ---------------------------------------------------------------------------

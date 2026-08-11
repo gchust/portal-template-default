@@ -127,3 +127,70 @@ export function resolveMarkerEditorPosition(
   });
   return { left: placement.left, top: placement.top };
 }
+
+// ---------------------------------------------------------------------------
+// Goal 05 follow-up (manual-test finding): marker collision resolution.
+// Two annotations can legitimately resolve to targets whose anchors overlap
+// (adjacent small cells, or legacy captures with ambiguous selectors that
+// collapse onto one element). The markers must never cover each other: the
+// later marker is nudged along a diagonal until its footprint is free, while
+// the FIRST annotation keeps its exact anchor.
+// ---------------------------------------------------------------------------
+
+/** Marker footprint (the ≈30px hit box, incl. the ::before extension). */
+export const MARKER_FOOTPRINT = 30;
+
+export type MarkerAnchorInput = {
+  annotationId: string;
+  left: number;
+  top: number;
+};
+
+export type MarkerAnchorOutput = {
+  left: number;
+  top: number;
+};
+
+const footprintIntersects = (
+  a: { left: number; top: number },
+  b: { left: number; top: number }
+): boolean =>
+  !(
+    a.left + MARKER_FOOTPRINT <= b.left ||
+    b.left + MARKER_FOOTPRINT <= a.left ||
+    a.top + MARKER_FOOTPRINT <= b.top ||
+    b.top + MARKER_FOOTPRINT <= a.top
+  );
+
+/**
+ * Resolve a list of marker anchors so that no two footprints intersect.
+ * Anchors are processed in annotation order (the earlier annotation keeps
+ * its exact position); a colliding marker is nudged one footprint along a
+ * down-right diagonal until free (bounded — after MAX_MARKER_STEPS it
+ * stops, keeping the anchor on-screen rather than pushing it off).
+ */
+export function resolveMarkerCollisions(
+  anchors: MarkerAnchorInput[]
+): Map<string, MarkerAnchorOutput> {
+  const placed: Array<{ left: number; top: number }> = [];
+  const result = new Map<string, MarkerAnchorOutput>();
+  const MAX_MARKER_STEPS = 6;
+  for (const anchor of anchors) {
+    let step = 0;
+    let left = anchor.left;
+    let top = anchor.top;
+    while (
+      step < MAX_MARKER_STEPS &&
+      placed.some((existing) =>
+        footprintIntersects(existing, { left, top })
+      )
+    ) {
+      step += 1;
+      left = anchor.left + step * MARKER_FOOTPRINT;
+      top = anchor.top + step * MARKER_FOOTPRINT;
+    }
+    placed.push({ left, top });
+    result.set(anchor.annotationId, { left, top });
+  }
+  return result;
+}

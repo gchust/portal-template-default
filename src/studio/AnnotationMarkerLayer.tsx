@@ -15,6 +15,7 @@ import { annotationDisplayNumber } from "./annotation-selectors.ts";
 import {
   resolveAnnotationTarget,
   resolveAnnotationTargets,
+  resolveMarkerCollisions,
 } from "./markers.ts";
 import { annotationMatchesRoute } from "./route-context.ts";
 import type { LabelResolver } from "./studio-actions.ts";
@@ -80,6 +81,31 @@ export function AnnotationMarkerLayer({
     visibleAnnotations.find(
       (annotation) => annotation.annotationId === editorAnnotationId
     ) ?? null;
+  // Compute the base anchors for every renderable element marker, then
+  // resolve footprint collisions so no two markers cover each other (the
+  // manual-test overlap finding). Region markers render their own
+  // boundaries and are not staggered.
+  const baseAnchors = visibleAnnotations
+    .filter(
+      (annotation) =>
+        markersVisible &&
+        annotation.hidden !== true &&
+        annotationMatchesRoute(annotation) &&
+        !(annotation.kind === "region" && annotation.region)
+    )
+    .map((annotation) => {
+      const target = resolveAnnotationTarget(annotation);
+      if (!target) return null;
+      const rect = target.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return null;
+      return {
+        annotationId: annotation.annotationId,
+        left: rect.left - 6,
+        top: rect.top - 6,
+      };
+    })
+    .filter((anchor): anchor is NonNullable<typeof anchor> => anchor !== null);
+  const resolvedAnchors = resolveMarkerCollisions(baseAnchors);
   return (
     <>
       {visibleAnnotations.map((annotation) => {
@@ -148,13 +174,14 @@ export function AnnotationMarkerLayer({
         if (!target) return null;
         const rect = target.getBoundingClientRect();
         if (rect.width === 0 && rect.height === 0) return null;
+        const resolved = resolvedAnchors.get(annotation.annotationId);
         return (
           <div
             key={annotation.annotationId}
             className="ps-marker-anchor"
             style={{
-              left: rect.left - 6,
-              top: rect.top - 6,
+              left: resolved?.left ?? rect.left - 6,
+              top: resolved?.top ?? rect.top - 6,
             }}
           >
             <button

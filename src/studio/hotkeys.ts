@@ -217,7 +217,11 @@ export function matchHotkey(event: KeyboardEvent): HotkeyDef | null {
   if (isMac ? event.ctrlKey : event.metaKey) return null;
   if (!altHeld) return null;
 
-  const letter = event.key.length === 1 ? event.key.toUpperCase() : null;
+  // macOS Option changes event.key into a symbol (Option+P => "π"). Prefer
+  // the typed letter when available, then fall back to the physical KeyX code.
+  const letter = /^[a-z]$/i.test(event.key)
+    ? event.key.toUpperCase()
+    : /^Key([A-Z])$/.exec(event.code)?.[1] ?? null;
   if (!letter) return null;
 
   for (const def of HOTKEYS) {

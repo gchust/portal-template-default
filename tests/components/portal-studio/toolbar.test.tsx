@@ -6230,6 +6230,57 @@ describe("Goal 03 — stable marker/list semantics and viewport polish", () => {
     ).toBeInTheDocument();
   });
 
+  it("G03-06b: two markers with the SAME anchor are staggered so neither covers the other (manual-test fix)", async () => {
+    // Two annotations whose targets resolve to the SAME element (legacy
+    // ambiguous selectors, or a double pick of one cell) must not stack:
+    // the second marker is nudged diagonally.
+    markerElement("Alice", "row-g03-stagger");
+    taskRoutes([
+      {
+        annotationId: "ann-stagger-1",
+        kind: "element",
+        comment: "first",
+        createdAt: "2026-08-10T00:00:00.000Z",
+        status: "open",
+        elements: [captureOf("row-g03-stagger")],
+      },
+      {
+        annotationId: "ann-stagger-2",
+        kind: "element",
+        comment: "second",
+        createdAt: "2026-08-10T00:00:00.000Z",
+        status: "open",
+        elements: [captureOf("row-g03-stagger")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const first = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    const second = await screen.findByRole("button", {
+      name: "Annotation 2: open editor",
+    });
+    const firstAnchor = first.closest(".ps-marker-anchor") as HTMLElement;
+    const secondAnchor = second.closest(".ps-marker-anchor") as HTMLElement;
+    const leftOf = (el: HTMLElement) => Number(el.style.left.replace("px", ""));
+    const topOf = (el: HTMLElement) => Number(el.style.top.replace("px", ""));
+    // jsdom does not lay out fixed positioning — the INLINE styles carry
+    // the resolved anchors. The footprints must NOT intersect (the second
+    // marker is staggered diagonally).
+    const firstLeft = leftOf(firstAnchor);
+    const firstTop = topOf(firstAnchor);
+    const secondLeft = leftOf(secondAnchor);
+    const secondTop = topOf(secondAnchor);
+    const intersects =
+      firstLeft < secondLeft + 30 &&
+      secondLeft < firstLeft + 30 &&
+      firstTop < secondTop + 30 &&
+      secondTop < firstTop + 30;
+    expect(intersects).toBe(false);
+    expect(secondLeft - firstLeft).toBeGreaterThanOrEqual(30);
+    expect(secondTop - firstTop).toBeGreaterThanOrEqual(30);
+  });
+
   it("G03-04: clicking a list item focuses the target, opens the editor and highlights it", async () => {
     const user = userEvent.setup();
     markerElement("Alice", "row-g03-focus");

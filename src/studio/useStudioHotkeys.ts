@@ -8,7 +8,7 @@
  * IME/repeat/extra modifiers (enforced in hotkeys.ts via the
  * composed-path-aware editable guard).
  */
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 import { matchStudioShortcut } from "./hotkeys.ts";
 
@@ -39,7 +39,7 @@ export function useStudioHotkeys(
   const { openCountRef, savingRef } = gates;
   // Keep the actions callable from the mount-once listener without
   // re-registering on every render.
-  const actionsRef = { current: actions };
+  const actionsRef = useRef(actions);
   actionsRef.current = actions;
 
   useEffect(() => {

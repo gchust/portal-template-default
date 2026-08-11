@@ -46,13 +46,35 @@ describe("collectSelectorCandidates (D-044)", () => {
     expect(document.querySelector(path!.selector)).toBe(button);
   });
 
-  it("still produces plain path candidates for normal classes", () => {
+  it("still produces plain path candidates for normal classes (with positional :nth-child so sibling captures stay distinct)", () => {
     document.body.innerHTML = `<div class="row"><span class="cell">x</span></div>`;
     const span = document.querySelector("span")!;
     const plain = collectSelectorCandidates(span);
     expect(
       plain.find((candidate) => candidate.kind === "path")!.selector
-    ).toBe("body > div.row > span.cell");
+    ).toBe(
+      "body:nth-child(2) > div.row:nth-child(1) > span.cell:nth-child(1)"
+    );
+    // The selector resolves back to the SAME element.
+    expect(document.querySelector(plain.find((candidate) => candidate.kind === "path")!.selector)).toBe(span);
+  });
+
+  it("gives ADJACENT SIBLINGS distinct path candidates (marker-overlap fix)", () => {
+    document.body.innerHTML = `
+      <table><tbody><tr>
+        <td class="p-2"><div class="truncate">A</div></td>
+        <td class="p-2"><div class="truncate">B</div></td>
+      </tr></tbody></table>`;
+    const cells = Array.from(document.querySelectorAll("td"));
+    const first = collectSelectorCandidates(cells[0]);
+    const second = collectSelectorCandidates(cells[1]);
+    const firstPath = first.find((candidate) => candidate.kind === "path")!.selector;
+    const secondPath = second.find((candidate) => candidate.kind === "path")!.selector;
+    expect(firstPath).not.toBe(secondPath);
+    expect(secondPath).toContain("td.p-2:nth-child(2)");
+    // Each resolves to ITS OWN cell (no first-match collapse).
+    expect(document.querySelector(firstPath)).toBe(cells[0]);
+    expect(document.querySelector(secondPath)).toBe(cells[1]);
   });
 });
 

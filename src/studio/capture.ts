@@ -125,8 +125,19 @@ export function collectSelectorCandidates(
   for (let depth = 0; current && depth < MAX_SELECTOR_DEPTH; depth += 1) {
     const tag = current.tagName.toLowerCase();
     const partId = current.getAttribute("id");
+    // Positional info (:nth-child) keeps SIBLING captures distinct — two
+    // annotations on adjacent table cells used to produce the SAME
+    // class-based path (e.g. `td.p-2 > div.truncate`), so both markers
+    // resolved to the FIRST match and stacked exactly on top of each
+    // other (the marker-overlap bug). With nth-child each sibling gets
+    // its own selector.
+    const parent = current.parentElement;
+    const siblingIndex = parent
+      ? Array.prototype.indexOf.call(parent.children, current)
+      : -1;
+    const nth = siblingIndex >= 0 ? `:nth-child(${siblingIndex + 1})` : "";
     const part = partId
-      ? `${tag}#${escapeCss(partId)}`
+      ? `${tag}#${escapeCss(partId)}${nth}`
       : `${tag}${
           current.className
             ? // The first class is CSS-escaped: classes such as Tailwind's
@@ -135,7 +146,7 @@ export function collectSelectorCandidates(
               // unresolvable (acceptance-found, D-044).
               `.${escapeCss(String(current.className).trim().split(/\s+/)[0])}`
             : ""
-        }`;
+        }${nth}`;
     pathParts.unshift(part);
     current = current.parentElement;
   }

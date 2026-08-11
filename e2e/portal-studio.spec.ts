@@ -2615,6 +2615,25 @@ test("G01 v5: keyboard — ? help, Mod+Alt+L list, Mod+Alt+V markers, Mod+Alt+K 
   );
   await page.keyboard.press("Escape");
 
+  // macOS Option can turn event.key into a symbol (Option+P => "π"). The
+  // physical KeyP code must still activate Pick; CI uses Control as its Mod.
+  await page.evaluate(() => {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "π",
+        code: "KeyP",
+        ctrlKey: true,
+        altKey: true,
+        bubbles: true,
+        composed: true,
+      })
+    );
+  });
+  await expect(root.locator(".ps-status-panel")).toContainText(
+    "Hover an element"
+  );
+  await page.keyboard.press("Escape");
+
   // …and NEVER from a FOREIGN shadow-root editable control.
   await page.evaluate(() => {
     const host = document.createElement("div");

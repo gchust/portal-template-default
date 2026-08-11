@@ -9,6 +9,8 @@ import {
   MARKER_EDITOR_GAP,
   MARKER_EDITOR_HEIGHT,
   MARKER_EDITOR_WIDTH,
+  MARKER_FOOTPRINT,
+  resolveMarkerCollisions,
   resolveMarkerEditorPosition,
   resolveAnnotationTargets,
 } from "@/studio/markers";
@@ -180,5 +182,55 @@ describe("resolveAnnotationTargets — multi-target resolution", () => {
       region: { x: 0, y: 0, width: 100, height: 100 },
     };
     expect(resolveAnnotationTargets(annotation)).toEqual([]);
+  });
+});
+
+describe("resolveMarkerCollisions — markers never cover each other (manual-test finding)", () => {
+  it("keeps the FIRST annotation at its exact anchor when a later marker collides", () => {
+    const resolved = resolveMarkerCollisions([
+      { annotationId: "a", left: 100, top: 100 },
+      { annotationId: "b", left: 100, top: 100 },
+    ]);
+    expect(resolved.get("a")).toEqual({ left: 100, top: 100 });
+    const b = resolved.get("b")!;
+    // The second marker is nudged one footprint down-right.
+    expect(b.left).toBe(100 + MARKER_FOOTPRINT);
+    expect(b.top).toBe(100 + MARKER_FOOTPRINT);
+    // No footprint intersection remains.
+    const hit = (l: number, t: number) =>
+      l >= 100 && l < 100 + MARKER_FOOTPRINT && t >= 100 && t < 100 + MARKER_FOOTPRINT;
+    expect(hit(b.left, b.top)).toBe(false);
+  });
+
+  it("stacks three overlapping markers diagonally without intersections", () => {
+    const resolved = resolveMarkerCollisions([
+      { annotationId: "a", left: 50, top: 50 },
+      { annotationId: "b", left: 50, top: 50 },
+      { annotationId: "c", left: 50, top: 50 },
+    ]);
+    const positions = ["a", "b", "c"].map(
+      (id) => resolved.get(id)!
+    );
+    for (let i = 0; i < positions.length; i += 1) {
+      for (let j = i + 1; j < positions.length; j += 1) {
+        const p = positions[i];
+        const q = positions[j];
+        const intersects =
+          p.left < q.left + MARKER_FOOTPRINT &&
+          q.left < p.left + MARKER_FOOTPRINT &&
+          p.top < q.top + MARKER_FOOTPRINT &&
+          q.top < p.top + MARKER_FOOTPRINT;
+        expect(intersects).toBe(false);
+      }
+    }
+  });
+
+  it("does not move markers that already do not collide", () => {
+    const resolved = resolveMarkerCollisions([
+      { annotationId: "a", left: 100, top: 100 },
+      { annotationId: "b", left: 400, top: 300 },
+    ]);
+    expect(resolved.get("a")).toEqual({ left: 100, top: 100 });
+    expect(resolved.get("b")).toEqual({ left: 400, top: 300 });
   });
 });
