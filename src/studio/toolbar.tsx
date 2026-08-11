@@ -16,6 +16,10 @@ import { translate } from "@nocobase/portal-sdk/i18n";
 
 import { StudioAnnotationListPanel } from "./StudioAnnotationListPanel";
 import { StudioComposer } from "./StudioComposer";
+import { useStudioHotkeys } from "./useStudioHotkeys.ts";
+import { useActiveTaskSync } from "./useActiveTaskSync.ts";
+import { AnnotationEditorPopover } from "./AnnotationEditorPopover.tsx";
+import { AnnotationMarkerLayer } from "./AnnotationMarkerLayer.tsx";
 import { StudioShortcutHelp } from "./StudioShortcutHelp";
 import {
   StudioToolbarShell,
@@ -28,7 +32,6 @@ import {
 } from "./placement";
 
 import { sessionErrorMessage } from "./errors";
-import { matchStudioShortcut } from "./hotkeys";
 import {
   applyMutationOperations,
   isFullyCompletedTask,
@@ -69,14 +72,11 @@ import {
   resolveAnnotationTarget,
   resolveAnnotationTargets,
   resolveMarkerEditorPosition,
-  MARKER_EDITOR_WIDTH,
 } from "./markers";
 import { newTaskId } from "./task-id";
 import {
-  annotationDisplayNumber,
   countOpenAnnotations,
   groupToggleElement,
-  normalizeTask,
   selectVisibleAnnotations,
   type ViewFilter,
 } from "./task-model";
@@ -93,7 +93,6 @@ import {
   type BusinessContextItem,
   type ElementCapture,
   type PortalStudioTask,
-  type PortalStudioTaskV4,
   type Region,
   type SourceCandidate,
 } from "./types";
@@ -209,29 +208,7 @@ const regionStyle = (region: Region | undefined): CSSProperties => {
   };
 };
 
-/**
- * Goal 03 D: document-aware region anchor. The stored region is a
- * viewport rect captured at creation; adding the captured scroll offset
- * and subtracting the CURRENT scroll renders it in document coordinates
- * so the region follows content scrolling (the shared scroll listener
- * re-renders via markerTick). Annotations without pageContext fall back
- * to the raw viewport rect.
- */
-const regionStyleScrolled = (
-  region: Region | undefined,
-  scroll: { x: number; y: number } | undefined
-): CSSProperties => {
-  if (!region) return { display: "none" };
-  const left = scroll ? region.x + scroll.x - window.scrollX : region.x;
-  const top = scroll ? region.y + scroll.y - window.scrollY : region.y;
-  return {
-    display: "block",
-    left,
-    top,
-    width: region.width,
-    height: region.height,
-  };
-};
+
 
 const toRegion = (mode: ToolbarMode): Region | undefined => {
   if (mode.kind !== "marquee") return undefined;
@@ -319,7 +296,7 @@ export function StudioToolbar({
   const saveToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
-  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+
   // Re-resolution tick for the numbered marker overlay (route/scroll/
   // resize, D-033 #8).
   const [markerTick, setMarkerTick] = useState(0);
@@ -456,10 +433,7 @@ export function StudioToolbar({
   const copyButtonRef = useRef<HTMLButtonElement | null>(null);
   // Last-known task (loaded from the server) used to rebuild mutation
   // POSTs through the existing atomic rewrite (no new endpoints).
-  const taskRef = useRef<PortalStudioTask | null>(null);
-  // Goal 05: revision baseline = the last FETCHED task's taskRevision
-  // (set in refreshTask; read by the visibility-aware polling effect).
-  const lastTaskRevisionRef = useRef<number | null>(null);
+
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [outlineRect, setOutlineRect] = useState<DOMRect>();
   const [hoverName, setHoverName] = useState<string | null>(null);
@@ -1131,120 +1105,22 @@ export function StudioToolbar({
     };
   }, [auxPanel, commitDraft, isMarquee, open]);
 
-  // Load the persisted task (annotations + revision status; schema v4/v5
-  // dual read, D-033 #17). Runs on mount (the dock badge shows the live
-  // count without opening the panel), when the panel opens, and after a
-  // save so Copy always reflects the SERVER artifact (screenshot +
-  // heartbeat merged) — byte-identical to the print CLI (G04 parity).
-  const refreshTask = useCallback((): Promise<void> => {
-    if (typeof fetch !== "function") return Promise.resolve();
-    return fetch(config.endpoint, {
-      headers: { "X-Portal-Studio-Token": config.token },
-    })
-      .then((response) => (response.ok ? response.json() : null))
-      .then(
-        (
-          payload: {
-            task?: PortalStudioTask | PortalStudioTaskV4 | null;
-          } | null
-        ) => {
-          if (!payload?.task) {
-            // Goal 06: the active task no longer exists (explicit clear or
-            // an agent-side DELETE) — drop the stale local snapshot so the
-            // NEXT save creates a FRESH taskId instead of resurrecting the
-            // cleared task with its old annotations.
-            taskRef.current = null;
-            setAnnotations([]);
-            lastTaskRevisionRef.current = null;
-            return;
-          }
-          const normalized = normalizeTask(payload.task);
-          if (!normalized) return;
-          taskRef.current = normalized;
-          setAnnotations(normalized.annotations);
-          // Goal 05 (review P1): the revision baseline is ALWAYS the last
-          // FETCHED task's taskRevision — never whatever the first poll
-          // happened to read. This closes the race where a CLI completion
-          // lands after mount but before the first poll: the first poll
-          // then sees a revision DIFFERENT from this baseline and refetches.
-          lastTaskRevisionRef.current = normalized.taskRevision ?? 0;
-        }
-      )
-      .catch(() => {
-        // Dev server restarting; status stays hidden.
-      });
-  }, [config.endpoint, config.token]);
-
-  useEffect(() => {
-    refreshTask();
-    // Re-fetch when the dock expands/collapses (the launcher count and the
-    // list need fresh data). The visibility-aware revision poll covers
-    // server-side changes while open — no refetch needed when an auxiliary
-    // panel opens, so optimistic local state is never discarded.
-  }, [refreshTask, open]);
-
-  // Goal 05: visibility-aware revision polling. While the document is
-  // VISIBLE, poll the lightweight revision read about once per second and
-  // re-fetch the task ONLY when the server-owned taskRevision changes
-  // (CLI-completed items then leave the Open view / update All within two
-  // seconds). Paused while the page is hidden; exponential backoff on
-  // repeated failures. Completion is never inferred from HMR, source
-  // revision, timestamps or tests — only from the server revision.
-  useEffect(() => {
-    const revisionEndpoint = config.revisionEndpoint;
-    if (!revisionEndpoint) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let failures = 0;
-    const schedule = (ms: number) => {
-      if (cancelled) return;
-      timer = setTimeout(() => void poll(), ms);
-    };
-    const poll = async () => {
-      if (cancelled) return;
-      // Paused while hidden; visibilitychange re-polls when visible.
-      if (document.visibilityState !== "visible") return;
-      try {
-        const response = await fetch(revisionEndpoint, {
-          headers: { "X-Portal-Studio-Token": config.token },
-        });
-        if (!response.ok) throw new Error("revision read failed");
-        const payload = (await response.json()) as {
-          taskRevision?: number | null;
-        };
-        const revision =
-          typeof payload.taskRevision === "number" ? payload.taskRevision : 0;
-        const last = lastTaskRevisionRef.current;
-        // Compare against the last FETCHED task's revision (set by
-        // refreshTask). If we have never fetched (last === null) or the
-        // revision moved, re-fetch — refreshTask re-baselines the ref.
-        // Never accept the polled value as the baseline without fetching:
-        // a CLI completion between mount and the first poll must sync.
-        if (last === null || revision !== last) {
-          refreshTask();
-        }
-        failures = 0;
-        schedule(1000);
-      } catch {
-        // Dev server restarting or revision read failing: back off.
-        failures += 1;
-        schedule(Math.min(1000 * 2 ** failures, 15000));
-      }
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        if (timer) clearTimeout(timer);
-        void poll();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    schedule(1000);
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [refreshTask, config.endpoint, config.token, config.revisionEndpoint]);
+  // Goal 05: active-task state + sync (refresh, mount/expand refetch,
+  // visibility-aware revision poll) extracted to useActiveTaskSync.
+  const {
+    taskRef,
+    annotations,
+    setAnnotations,
+    lastTaskRevisionRef,
+    refreshTask,
+  } = useActiveTaskSync(
+    {
+      endpoint: config.endpoint,
+      token: config.token,
+      revisionEndpoint: config.revisionEndpoint,
+    },
+    open
+  );
 
   // Marker re-resolution (D-033 #8): re-query the live DOM on route
   // changes (body child mutations), scroll, and resize — markers follow
@@ -1561,7 +1437,7 @@ export function StudioToolbar({
       });
       return false;
     },
-    [config.mutateEndpoint, config.token, refreshTask]
+    [config.mutateEndpoint, config.token, refreshTask, lastTaskRevisionRef, setAnnotations, taskRef]
   );
 
   /**
@@ -1589,7 +1465,7 @@ export function StudioToolbar({
         void flushPendingOps();
       }, 300);
     },
-    [flushPendingOps]
+    [flushPendingOps, lastTaskRevisionRef, setAnnotations, taskRef]
   );
 
   /** Flush a pending mutation immediately (unload/reload safety). */
@@ -2295,101 +2171,55 @@ export function StudioToolbar({
   };
 
   // -----------------------------------------------------------------------
-  // Goal 02: global hotkeys
-  // -----------------------------------------------------------------------
-  const startPickingRef = useRef(startPicking);
-  startPickingRef.current = startPicking;
-  const startMultiRef = useRef(startMulti);
-  startMultiRef.current = startMulti;
-  const startMarqueeRef = useRef(startMarquee);
-  startMarqueeRef.current = startMarquee;
-  const copyMarkdownRef = useRef(copyMarkdown);
-  copyMarkdownRef.current = copyMarkdown;
-
-  useEffect(() => {
-    const handleHotkey = (event: KeyboardEvent) => {
-      const matched = matchStudioShortcut(event);
-      if (!matched) return;
-      // Round-4 finding 3: the Studio-root special case is REMOVED — the
-      // contract disables shortcuts only for editable controls,
-      // IME/repeat/extra modifiers (all enforced in hotkeys.ts via the
-      // composed-path-aware editable guard). EVERY registered action
-      // (Pick/Multi/Area/Copy/V/L/K/?) works from focused NON-editable
-      // Studio controls, including while the toolbar is collapsed.
-      event.preventDefault();
-      event.stopPropagation();
-
-      const action = matched.action;
-
-      // Toggle: open/close the dock (collapsing also dismisses any open
-      // auxiliary panel — presentation only).
-      if (action === "toggle") {
+  // Goal 02/05: global hotkeys — the mount-once listener lives in
+  // useStudioHotkeys (maintainability split); actions stay fresh via an
+  // internal ref so the listener never re-registers.
+  useStudioHotkeys(
+    {
+      toggle: () => {
         setOpen((prev) => {
           if (prev) setAuxPanel("none");
           return !prev;
         });
-        return;
-      }
-
-      // Copy: expand first (contract: a shortcut invoked while collapsed
-      // expands the toolbar and runs the requested action); disabled at
-      // zero Open annotations like the toolbar button.
-      if (action === "copy") {
-        if (openCountRef.current === 0) return;
+      },
+      copy: () => {
         setOpen(true);
-        copyMarkdownRef.current();
-        return;
-      }
-
-      // Marker visibility: presentation-only toggle.
-      if (action === "visibility") {
+        copyMarkdown();
+      },
+      visibility: () => {
         setOpen(true);
         setMarkersVisible((current) => !current);
-        return;
-      }
-
-      // Annotation list / shortcut help: expand and open (toggle closed
-      // when the same panel is already open).
-      if (action === "list") {
+      },
+      list: () => {
         setOpen(true);
         setAuxPanel((current) =>
           current === "annotations" ? "none" : "annotations"
         );
-        return;
-      }
-      if (action === "help") {
+      },
+      help: () => {
         setOpen(true);
         setAuxPanel((current) =>
           current === "shortcuts" ? "none" : "shortcuts"
         );
-        return;
-      }
-
-      // Capture actions (pick/multi/area): expand first if collapsed,
-      // dismiss any auxiliary panel, then safely exit the previous
-      // capture and enter the new mode. Strict serial saving: the
-      // corresponding global hotkeys are IGNORED while a save is pending.
-      if (
-        savingRef.current &&
-        (action === "pick" || action === "multi" || action === "area")
-      ) {
-        return;
-      }
-      setOpen(true);
-      setAuxPanel("none");
-
-      if (action === "pick") {
-        startPickingRef.current();
-      } else if (action === "multi") {
-        startMultiRef.current();
-      } else if (action === "area") {
-        startMarqueeRef.current();
-      }
-    };
-
-    document.addEventListener("keydown", handleHotkey, true);
-    return () => document.removeEventListener("keydown", handleHotkey, true);
-  }, []);
+      },
+      pick: () => {
+        setOpen(true);
+        setAuxPanel("none");
+        startPicking();
+      },
+      multi: () => {
+        setOpen(true);
+        setAuxPanel("none");
+        startMulti();
+      },
+      area: () => {
+        setOpen(true);
+        setAuxPanel("none");
+        startMarquee();
+      },
+    },
+    { openCountRef, savingRef }
+  );
 
   // Goal 01 v5: the capture-status panel is a separate anchored surface,
   // hidden while an auxiliary panel (Help/List) is open — the underlying
@@ -2890,120 +2720,19 @@ export function StudioToolbar({
         />
       ))}
 
-      {/* Annotation-first marker overlay (G02, D-033 #8/#9; Goal 03):
-          numbered, SEMANTIC BUTTON markers over resolved live targets;
-          region rects with dashed outlines carry a marker button at the
-          top-right corner. Rendered INSIDE the shadow host (D-034 #3
-          mounting rule) so markers never pollute evidence screenshots and
-          can never be annotated by Studio itself. Unresolved targets stay
-          in the list (grey chip) with no page anchor. */}
-      {visibleAnnotations.map((annotation) => {
-        if (!markersVisible || annotation.hidden === true) return null;
-        // Goal 06: markers only render when the annotation's routeKey
-        // matches the current route (legacy annotations without pageContext
-        // always render).
-        if (!annotationMatchesRoute(annotation)) return null;
-        // Review P2: marker numbers are STABLE across Open/All filtering —
-        // always derived from the FULL annotations list so they match the
-        // list chips in every view.
-        const number = annotationDisplayNumber(
-          annotations,
-          annotation.annotationId
-        );
-        const completed = annotation.status === "completed";
-        const chipClass = completed
-          ? "ps-marker-chip ps-marker-chip-onpage ps-marker-chip-button ps-marker-chip-completed"
-          : "ps-marker-chip ps-marker-chip-onpage ps-marker-chip-button";
-        const markerLabel = t(
-          "studio.marker.openEditor",
-          "Annotation {{number}}: open editor"
-        ).replace("{{number}}", String(number ?? "?"));
-        const markerRef = (node: HTMLButtonElement | null) => {
-          if (node) {
-            markerButtonRefs.current.set(annotation.annotationId, node);
-          } else {
-            markerButtonRefs.current.delete(annotation.annotationId);
-          }
-        };
-        const markerOnClick = () => {
-          // Save-in-flight lock (review): a marker click can neither close
-          // nor switch the editor while a save POST is pending, so a late
-          // success/failure stays attached to the ORIGINAL editor+draft.
-          if (editorSaving) return;
-          if (editorAnnotationId === annotation.annotationId) {
-            closeMarkerEditor();
-            return;
-          }
-          openMarkerEditor(annotation);
-        };
-        if (annotation.kind === "region" && annotation.region) {
-          return (
-            <div
-              key={annotation.annotationId}
-              className="ps-outline ps-region"
-              style={regionStyleScrolled(
-                annotation.region,
-                annotation.pageContext?.scroll
-              )}
-            >
-              <button
-                type="button"
-                ref={markerRef}
-                className={`${chipClass} ps-marker-region-chip`}
-                style={{ position: "absolute", top: 4, right: 4 }}
-                aria-label={markerLabel}
-                onClick={markerOnClick}
-              >
-                {number ?? "?"}
-              </button>
-            </div>
-          );
-        }
-        const target = resolveAnnotationTarget(annotation);
-        if (!target) return null;
-        const rect = target.getBoundingClientRect();
-        if (rect.width === 0 && rect.height === 0) return null;
-        void markerTick;
-        return (
-          <div
-            key={annotation.annotationId}
-            className="ps-marker-anchor"
-            style={{
-              left: rect.left - 6,
-              top: rect.top - 6,
-            }}
-          >
-            <button
-              type="button"
-              ref={markerRef}
-              className={chipClass}
-              aria-label={markerLabel}
-              onClick={markerOnClick}
-            >
-              {number ?? "?"}
-            </button>
-          </div>
-        );
-      })}
-
-      {/* Goal 03: temporary target highlight while the editor is open —
-          every resolved captured target is outlined (one outline for an
-          element, all members for a multi group); regions render their
-          own boundary. Also covers the list-item click highlight. */}
-      {editorAnnotation && editorAnnotation.kind !== "region"
-        ? resolveAnnotationTargets(editorAnnotation).map((target, index) => {
-            const rect = target.getBoundingClientRect();
-            if (rect.width === 0 && rect.height === 0) return null;
-            return (
-              <div
-                key={`${editorAnnotation.annotationId}-hl-${index}`}
-                className="ps-outline ps-selected ps-marker-highlight"
-                style={rectStyle(rect)}
-                aria-hidden="true"
-              />
-            );
-          })
-        : null}
+      {/* Goal 05: annotation marker layer + editor-open highlight —
+          extracted to AnnotationMarkerLayer. */}
+      <AnnotationMarkerLayer
+        t={t}
+        annotations={annotations}
+        visibleAnnotations={visibleAnnotations}
+        markersVisible={markersVisible}
+        editorAnnotationId={editorAnnotationId}
+        editorSaving={editorSaving}
+        markerButtonRefs={markerButtonRefs}
+        onOpenEditor={openMarkerEditor}
+        onCloseEditor={closeMarkerEditor}
+      />
 
       {/* Goal 03: marker-local editor — small, viewport-clamped dialog
           beside the marker. Events inside it are stopped from leaking to
@@ -3011,114 +2740,23 @@ export function StudioToolbar({
           isolation; the shadow host additionally keeps it out of page
           listeners and screenshots). */}
       {editorAnnotation && editorAnchor ? (
-        <div
-          ref={editorRef}
-          className="ps-marker-editor"
-          role="dialog"
-          aria-label={t("studio.editorTitle", "Annotation editor")}
-          style={{
-            left: editorAnchor.left,
-            top: editorAnchor.top,
-            width: MARKER_EDITOR_WIDTH,
-          }}
-          onPointerDown={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-        >
-          <p className="ps-label" id="ps-marker-editor-label">
-            {t("studio.editorNumber", "Annotation {{number}}").replace(
-              "{{number}}",
-              String(
-                annotationDisplayNumber(
-                  annotations,
-                  editorAnnotation.annotationId
-                ) ?? "?"
-              )
-            )}{" "}·{" "}
-            {t("studio.instruction", "Annotation comment")}
-          </p>
-          <textarea
-            className="ps-textarea"
-            rows={3}
-            autoFocus
-            aria-labelledby="ps-marker-editor-label"
-            disabled={editorSaving}
-            value={editorDraft}
-            onChange={(event) => setEditorDraft(event.target.value)}
-            onKeyDown={(event) => {
-              event.stopPropagation();
-              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                event.preventDefault();
-                saveEditorComment();
-              }
-            }}
-          />
-          {editorError ? (
-            <p className="ps-error" role="alert">
-              {editorError}
-            </p>
-          ) : null}
-          <div className="ps-actions">
-            <button
-              type="button"
-              className="ps-button ps-primary"
-              disabled={editorSaving}
-              onClick={saveEditorComment}
-            >
-              {editorSaving
-                ? t("studio.saving", "Saving task…")
-                : t("studio.saveComment", "Save comment")}
-            </button>
-            {editorAnnotation.status === "completed" ? (
-              <button
-                type="button"
-                className="ps-button"
-                disabled={editorSaving}
-                onClick={reopenEditorAnnotation}
-              >
-                {t("studio.reopen", "Reopen")}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="ps-button"
-                disabled={editorSaving}
-                onClick={completeEditorAnnotation}
-              >
-                {t("studio.completeAnnotation", "Complete")}
-              </button>
-            )}
-            {editorDeleteConfirm ? (
-              <span className="ps-annotation-confirm" role="alert">
-                {t("studio.confirmDelete", "Delete this annotation?")}{" "}
-                <button
-                  type="button"
-                  className="ps-button ps-danger"
-                  disabled={editorSaving}
-                  onClick={deleteEditorAnnotation}
-                >
-                  {t("studio.delete", "Delete")}
-                </button>
-                <button
-                  type="button"
-                  className="ps-button"
-                  disabled={editorSaving}
-                  onClick={() => setEditorDeleteConfirm(false)}
-                >
-                  {t("studio.cancel", "Cancel")}
-                </button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="ps-button ps-danger"
-                disabled={editorSaving}
-                onClick={() => setEditorDeleteConfirm(true)}
-              >
-                {t("studio.deleteAnnotation", "Delete")}
-              </button>
-            )}
-          </div>
-        </div>
+        <AnnotationEditorPopover
+          t={t}
+          annotation={editorAnnotation}
+          annotations={annotations}
+          anchor={editorAnchor}
+          surfaceRef={editorRef}
+          draft={editorDraft}
+          onDraftChange={setEditorDraft}
+          saving={editorSaving}
+          error={editorError}
+          deleteConfirm={editorDeleteConfirm}
+          onDeleteConfirmChange={setEditorDeleteConfirm}
+          onSave={saveEditorComment}
+          onComplete={completeEditorAnnotation}
+          onReopen={reopenEditorAnnotation}
+          onDelete={deleteEditorAnnotation}
+        />
       ) : null}
     </div>
   );

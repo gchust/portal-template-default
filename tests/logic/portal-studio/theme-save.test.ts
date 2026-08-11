@@ -8,7 +8,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { detectHostTheme } from "@/studio/index";
+import { detectHostTheme } from "@/studio/styles";
 import { sessionErrorMessage } from "@/studio/errors";
 import { newTaskId } from "@/studio/task-id";
 

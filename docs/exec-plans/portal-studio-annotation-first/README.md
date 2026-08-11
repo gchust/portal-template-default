@@ -1,3 +1,9 @@
+> **SUPERSEDED** — this plan set describes the older vertical/labeled-panel
+> or Wrench-launcher presentation. The current source of truth for Portal
+> Studio UX work is `docs/exec-plans/portal-studio-horizontal-toolbar-v5/`
+> (the accepted draggable horizontal icon-first toolbar). Do not implement
+> the conflicting designs here.
+
 # Portal Studio — Annotation-first redesign (executable series)
 
 Repository-grounded executable plan for the Annotation-first redesign of

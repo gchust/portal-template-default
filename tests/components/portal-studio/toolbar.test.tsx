@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { TOOLBAR_STYLES } from "@/studio/index";
+import { TOOLBAR_STYLES } from "@/studio/styles";
 import { StudioToolbar } from "@/studio/toolbar";
 import { applyMutationOperations } from "@/studio/mutation";
 

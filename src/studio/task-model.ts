@@ -191,20 +191,8 @@ export function normalizeTask(input: unknown): PortalStudioTask | null {
 }
 
 /**
- * Display number of an annotation: its LIVE 1-based order index in the
- * list (D-034 #4). Undefined when the id is not present. Never stored.
+ * Display numbers are provided by ./annotation-selectors (Goal 05 split).
  */
-export function annotationDisplayNumber(
-  annotations: Annotation[],
-  annotationId: string
-): number | undefined {
-  const index = annotations.findIndex(
-    (annotation) => annotation.annotationId === annotationId
-  );
-  return index === -1 ? undefined : index + 1;
-}
-
-
 
 /**
  * ---- Goal 03: pure annotation operations (D-033 #5/#10/#11, D-034 #4) ----
@@ -376,48 +364,18 @@ export function reopenAnnotation(
 }
 
 /**
- * ---- Goal 04: view-filter selectors (D-033 view filter) ----
- * Pure selectors over the annotations list. hidden, completed and
- * viewFilter are INDEPENDENT concepts: the view filter selects by status
- * only; hidden is a per-annotation flag applied at render time.
+ * Annotation selectors (Goal 05 split) — the pure view/numbering
+ * selectors moved to ./annotation-selectors; re-exported here for
+ * backward compatibility.
  */
-
-export type ViewFilter = "open" | "all";
-
-/** Only open annotations (the default view). */
-export function selectOpenAnnotations(
-  annotations: Annotation[]
-): Annotation[] {
-  return annotations.filter((annotation) => annotation.status === "open");
-}
-
-/** Only completed annotations. */
-export function selectCompletedAnnotations(
-  annotations: Annotation[]
-): Annotation[] {
-  return annotations.filter(
-    (annotation) => annotation.status === "completed"
-  );
-}
-
-/**
- * The annotations visible in a given view: all in "all", open-only in
- * "open". Hidden annotations are NOT excluded here (hidden is applied
- * separately at render time, D-033 #11).
- */
-export function selectVisibleAnnotations(
-  annotations: Annotation[],
-  viewFilter: ViewFilter
-): Annotation[] {
-  return viewFilter === "all"
-    ? annotations
-    : selectOpenAnnotations(annotations);
-}
-
-/** Launcher count: ALWAYS the open count, independent of the view. */
-export function countOpenAnnotations(annotations: Annotation[]): number {
-  return selectOpenAnnotations(annotations).length;
-}
+export {
+  annotationDisplayNumber,
+  countOpenAnnotations,
+  selectCompletedAnnotations,
+  selectOpenAnnotations,
+  selectVisibleAnnotations,
+  type ViewFilter,
+} from "./annotation-selectors.ts";
 
 /** Remove ONLY completed annotations (never open); pure. */
 export function removeCompletedAnnotations(

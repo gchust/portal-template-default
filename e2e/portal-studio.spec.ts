@@ -3660,3 +3660,418 @@ const barCloseForG04 = async (page: import("@playwright/test").Page) => {
     )
     .toBe(true);
 };
+
+
+/** Goal 05 (G05-06) — deterministic visual regression snapshots. These
+ *  tests live in THIS file so they share the single serial worker and the
+ *  same .portal-studio artifact lifecycle as the interaction suite (a
+ *  separate spec file would race the shared task file across workers).
+ */
+const VISUAL_DIR = path.resolve("test-results/visual");
+mkdirSync(VISUAL_DIR, { recursive: true });
+
+const seedTask = (openCount: number) => {
+  mkdirSync(path.join(studioDir, "tasks"), { recursive: true });
+  writeFileSync(
+    taskFile,
+    JSON.stringify({
+      schemaVersion: 5,
+      taskId: "task-visual-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+      url: resolvePortalTestURL(environment, "/users"),
+      title: "Users",
+      annotations: Array.from({ length: openCount }, (_, index) => ({
+        annotationId: `vis-${index + 1}`,
+        kind: "element",
+        comment: `Visual annotation ${index + 1}`,
+        createdAt: "2026-08-11T00:00:00.000Z",
+        status: "open",
+        elements: [],
+      })),
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    })
+  );
+};
+
+const noHorizontalOverflow = (page: import("@playwright/test").Page) =>
+  page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth + 1
+  );
+
+test("G05-06 collapsed chip: 0/1/9/100 open, focus, EN/ZH, no overflow", async ({
+  page,
+}) => {
+  // Start from a clean artifact (the studio fetches at mount).
+  rmSync(path.join(studioDir, "tasks"), { recursive: true, force: true });
+  await signIn(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  const root = page.locator("#portal-studio-root");
+
+  // 0 open: feedback icon slot.
+  await expect(root.locator(".ps-collapsed-chip")).toBeVisible();
+  await expect(root.locator(".ps-status-slot")).not.toHaveText(/\d/);
+  await expect(await noHorizontalOverflow(page)).toBe(true);
+  await page.screenshot({ path: `${VISUAL_DIR}/chip-0-open.png`, fullPage: false });
+
+  // 1 / 9 / 100 open counts (99+ cap).
+  for (const [count, expected] of [
+    [1, "1"],
+    [9, "9"],
+    [100, "99+"],
+  ] as const) {
+    seedTask(count);
+    await page.reload();
+    await page.locator("tbody tr").first().waitFor();
+    await expect(root.locator(".ps-status-slot")).toHaveText(expected);
+    await expect(await noHorizontalOverflow(page)).toBe(true);
+    await page.screenshot({
+      path: `${VISUAL_DIR}/chip-${count}-open.png`,
+      fullPage: false,
+    });
+  }
+  // Chip body click expands (never a drag).
+  await root.locator(".ps-chip-open").click();
+  await expect(root.locator("[role='toolbar']")).toBeVisible();
+  await page.screenshot({
+    path: `${VISUAL_DIR}/chip-expanded-from-100.png`,
+    fullPage: false,
+  });
+
+  // Focus: collapse, then the Expand button receives visible focus
+  // (hit target/focus).
+  await root.getByRole("button", { name: "Collapse toolbar" }).click();
+  await expect(root.locator(".ps-collapsed-chip")).toBeVisible();
+  await root.locator(".ps-chip-expand").focus();
+  await expect(root.locator(".ps-chip-expand")).toBeFocused();
+  await page.screenshot({
+    path: `${VISUAL_DIR}/chip-expand-focused.png`,
+    fullPage: false,
+  });
+});
+
+test("G05-06 expanded toolbar: order, active states, tooltips, Help, List, 1440/375, dark host", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  const root = page.locator("#portal-studio-root");
+  await root.locator(".ps-chip-open").click();
+  const bar = root.locator("[role='toolbar']");
+
+  // Exact horizontal order + no wrap.
+  const labels = await bar
+    .getByRole("button")
+    .evaluateAll((buttons) =>
+      buttons.map((button) => button.getAttribute("aria-label"))
+    );
+  expect(labels).toEqual([
+    "Drag toolbar",
+    "Pick element",
+    "Multi-select",
+    "Select region",
+    "Copy annotations",
+    "Hide markers",
+    "Keyboard shortcuts",
+    "Annotation list",
+    "Collapse toolbar",
+  ]);
+  await expect(await noHorizontalOverflow(page)).toBe(true);
+  await page.screenshot({
+    path: `${VISUAL_DIR}/toolbar-order-1440.png`,
+    fullPage: false,
+  });
+
+  // Capture active states (Pick / Multi / Area pressed).
+  await bar.getByRole("button", { name: "Pick element" }).click();
+  await expect(
+    bar.getByRole("button", { name: "Pick element" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.screenshot({
+    path: `${VISUAL_DIR}/toolbar-pick-active.png`,
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+  await bar.getByRole("button", { name: "Multi-select" }).click();
+  await expect(
+    bar.getByRole("button", { name: "Multi-select" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await bar.getByRole("button", { name: "Select region" }).click();
+  await expect(
+    bar.getByRole("button", { name: "Select region" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+
+  // Tooltips for every action (focus each).
+  for (const name of [
+    "Pick element",
+    "Multi-select",
+    "Select region",
+    "Copy annotations",
+    "Hide markers",
+    "Keyboard shortcuts",
+    "Annotation list",
+  ]) {
+    const action = bar.getByRole("button", { name });
+    await action.focus();
+    await expect(root.locator(".ps-tooltip")).toBeVisible();
+  }
+  await page.screenshot({
+    path: `${VISUAL_DIR}/toolbar-tooltip.png`,
+    fullPage: false,
+  });
+
+  // Help popover.
+  await bar.getByRole("button", { name: "Keyboard shortcuts" }).click();
+  await expect(root.locator("#ps-shortcut-help")).toBeVisible();
+  await page.screenshot({
+    path: `${VISUAL_DIR}/toolbar-help.png`,
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+
+  // List panel Open/All (with seeded annotations).
+  seedTask(3);
+  await page.reload();
+  await page.locator("tbody tr").first().waitFor();
+  await root.locator(".ps-chip-open").click();
+  await root.getByRole("button", { name: "Annotation list" }).click();
+  await expect(root.locator(".ps-list-panel")).toBeVisible();
+  await page.screenshot({
+    path: `${VISUAL_DIR}/list-open.png`,
+    fullPage: false,
+  });
+  await root.getByRole("button", { name: "All", exact: true }).click();
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(3);
+  await page.screenshot({
+    path: `${VISUAL_DIR}/list-all.png`,
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+
+  // 375×667: no wrap, no overflow, bar inside.
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.waitForTimeout(300);
+  await expect(await noHorizontalOverflow(page)).toBe(true);
+  const barBox = (await bar.boundingBox())!;
+  expect(barBox.x + barBox.width).toBeLessThanOrEqual(375);
+  await page.screenshot({
+    path: `${VISUAL_DIR}/toolbar-375.png`,
+    fullPage: false,
+  });
+
+  // Dark host: force the theme attribute and snapshot the toolbar.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.evaluate(() => {
+    const host = document.querySelector(
+      "#portal-studio-root"
+    ) as HTMLElement & { shadowRoot: ShadowRoot };
+    host.dataset.psTheme = "dark";
+  });
+  await page.waitForTimeout(200);
+  await page.screenshot({
+    path: `${VISUAL_DIR}/toolbar-dark-host.png`,
+    fullPage: false,
+  });
+});
+
+test("G05-06 annotation surfaces: composer, marker editor, completed/unresolved/hidden, long list", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  const root = page.locator("#portal-studio-root");
+  await root.locator(".ps-chip-open").click();
+
+  // Composer beside a captured target (within the viewport).
+  await root.getByRole("button", { name: "Pick element" }).click();
+  await page.locator("tbody tr").first().hover();
+  await page.locator("tbody tr").first().click();
+  await expect(root.locator(".ps-composer")).toBeVisible();
+  const composerBox = (await root.locator(".ps-composer").boundingBox())!;
+  expect(composerBox.x).toBeGreaterThanOrEqual(0);
+  expect(composerBox.x + composerBox.width).toBeLessThanOrEqual(1440);
+  expect(composerBox.y + composerBox.height).toBeLessThanOrEqual(900);
+  await page.screenshot({
+    path: `${VISUAL_DIR}/composer-1440.png`,
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+
+  // Marker editor over a seeded marker: seed annotations whose selector
+  // candidates match a resolvable page target (planted AFTER the reload,
+  // which otherwise clears the injected element).
+  const capture = {
+    tagName: "div",
+    selectorCandidates: [{ kind: "id", selector: "#g05-marker-target" }],
+    componentCandidates: [],
+    sourceCandidates: [],
+    snapshot: { text: "target", attributes: { id: "g05-marker-target" }, childCount: 0 },
+  };
+  mkdirSync(path.join(studioDir, "tasks"), { recursive: true });
+  writeFileSync(
+    taskFile,
+    JSON.stringify({
+      schemaVersion: 5,
+      taskId: "task-visual-marker",
+      createdAt: "2026-08-11T00:00:00.000Z",
+      url: resolvePortalTestURL(environment, "/users"),
+      title: "Users",
+      annotations: [1, 2, 3].map((number) => ({
+        annotationId: `vis-marker-${number}`,
+        kind: "element",
+        comment: `Marker ${number}`,
+        createdAt: "2026-08-11T00:00:00.000Z",
+        status: "open",
+        elements: [capture],
+      })),
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    })
+  );
+  await page.reload();
+  await page.locator("tbody tr").first().waitFor();
+  await page.evaluate(() => {
+    const target = document.createElement("div");
+    target.id = "g05-marker-target";
+    target.style.cssText =
+      "position:fixed;left:200px;top:300px;width:120px;height:40px;z-index:1";
+    document.body.appendChild(target);
+  });
+  await root.locator(".ps-chip-open").click();
+  await page.waitForTimeout(400);
+  const marker = root.locator(".ps-marker-anchor button").first();
+  await expect(marker).toBeVisible();
+  await marker.focus();
+  await page.keyboard.press("Enter");
+  await expect(root.getByRole("dialog", { name: "Annotation editor" })).toBeVisible();
+  const editorBox = (await root
+    .locator(".ps-marker-editor")
+    .boundingBox())!;
+  expect(editorBox.x).toBeGreaterThanOrEqual(0);
+  expect(editorBox.x + editorBox.width).toBeLessThanOrEqual(1440);
+  expect(editorBox.y + editorBox.height).toBeLessThanOrEqual(900);
+  await page.screenshot({
+    path: `${VISUAL_DIR}/marker-editor.png`,
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+
+  // Completed / unresolved / hidden items in the list.
+  mkdirSync(path.join(studioDir, "tasks"), { recursive: true });
+  writeFileSync(
+    taskFile,
+    JSON.stringify({
+      schemaVersion: 5,
+      taskId: "task-visual-2",
+      createdAt: "2026-08-11T00:00:00.000Z",
+      url: resolvePortalTestURL(environment, "/users"),
+      title: "Users",
+      annotations: [
+        {
+          annotationId: "vis-completed",
+          kind: "element",
+          comment: "Completed item",
+          createdAt: "2026-08-11T00:00:00.000Z",
+          status: "completed",
+          completedAt: "2026-08-11T01:00:00.000Z",
+          elements: [],
+        },
+        {
+          annotationId: "vis-unresolved",
+          kind: "element",
+          comment: "Unresolved item",
+          createdAt: "2026-08-11T00:00:00.000Z",
+          status: "open",
+          elements: [
+            {
+              tagName: "td",
+              selectorCandidates: [
+                { kind: "id", selector: "#does-not-exist-xyz" },
+              ],
+              componentCandidates: [],
+              sourceCandidates: [],
+              snapshot: { text: "gone", attributes: {}, childCount: 0 },
+            },
+          ],
+        },
+        {
+          annotationId: "vis-hidden",
+          kind: "element",
+          comment: "Hidden item",
+          createdAt: "2026-08-11T00:00:00.000Z",
+          status: "open",
+          hidden: true,
+          elements: [],
+        },
+        ...Array.from({ length: 40 }, (_, index) => ({
+          annotationId: `vis-long-${index}`,
+          kind: "element",
+          comment: `Long list item ${index}`,
+          createdAt: "2026-08-11T00:00:00.000Z",
+          status: "open",
+          elements: [],
+        })),
+      ],
+      businessContext: [],
+      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    })
+  );
+  await page.reload();
+  await page.locator("tbody tr").first().waitFor();
+  await root.locator(".ps-chip-open").click();
+  await root.getByRole("button", { name: "Annotation list" }).click();
+  await expect(root.locator(".ps-list-panel")).toBeVisible();
+  await root.getByRole("button", { name: "All", exact: true }).click();
+  await expect(root.locator(".ps-annotation-item-completed")).toHaveCount(1);
+  await expect(root.locator(".ps-unresolved").first()).toBeVisible();
+  await page.screenshot({
+    path: `${VISUAL_DIR}/list-states.png`,
+    fullPage: false,
+  });
+  // Long list: the panel scrolls INTERNALLY (no page overflow).
+  await expect(await noHorizontalOverflow(page)).toBe(true);
+  const panelBox = (await root.locator(".ps-list-panel").boundingBox())!;
+  expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(1440);
+  await page.screenshot({
+    path: `${VISUAL_DIR}/list-long.png`,
+    fullPage: false,
+  });
+});
+
+test("G05-06 HMR: no duplicate Shadow root after a reload; single host", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  await expect(page.locator("#portal-studio-root")).toHaveCount(1);
+  const shadowOk = await page.evaluate(() => {
+    const host = document.querySelector("#portal-studio-root") as HTMLElement & {
+      shadowRoot: ShadowRoot;
+    };
+    return !!host?.shadowRoot && host.shadowRoot.querySelector("[role='toolbar'], .ps-collapsed-chip") !== null;
+  });
+  expect(shadowOk).toBe(true);
+  await page.reload();
+  await page.locator("tbody tr").first().waitFor();
+  await expect(page.locator("#portal-studio-root")).toHaveCount(1);
+  const shadowOkAfterReload = await page.evaluate(() => {
+    const host = document.querySelector("#portal-studio-root") as HTMLElement & {
+      shadowRoot: ShadowRoot;
+    };
+    return !!host?.shadowRoot && host.shadowRoot.querySelector("[role='toolbar'], .ps-collapsed-chip") !== null;
+  });
+  expect(shadowOkAfterReload).toBe(true);
+  await page.screenshot({
+    path: `${VISUAL_DIR}/hmr-single-shadow-root.png`,
+    fullPage: false,
+  });
+});

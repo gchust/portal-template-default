@@ -43,3 +43,13 @@ Route access currently centralizes role constraints only. Keep NocoBase resource
 Canonical NocoBase Registry source lives under `registry/`. In this source repository, normal development and builds load it directly; do not copy it into `src/extensions` for preview. Registry items must import stable Portal runtime, client, authentication, ACL, routing, and extension contracts from documented `@nocobase/portal-sdk` exports. Imports to user-owned host UI and composition must use the `@/` alias. Relative imports must stay within that Registry item's own root so the item remains portable after installation. Registry items target this Portal Template's React, shadcn Base UI, and pnpm toolchain. They must never import Ant Design or NocoBase's Ant Design-based client components.
 
 Keep Registry items portable and focused on reusable API adapters, hooks, components, and small demos. Update `registry.config.json` whenever an item's files, dependencies, or installation target changes. Validate Registry changes with the normal application build and the relevant regression scripts.
+
+## Portal Studio UX work — current source of truth
+
+For Portal Studio UX work, the current source of truth is
+`docs/exec-plans/portal-studio-horizontal-toolbar-v5/`. Read the shared
+contract and only the currently assigned numbered Goal. Older
+vertical-panel or Wrench-launcher plans (e.g. `docs/exec-plans/portal-studio/`
+and `docs/exec-plans/portal-studio-annotation-first/`) are SUPERSEDED —
+do not implement their conflicting vertical-panel designs. Complete and
+independently verify one Goal before starting the next.
