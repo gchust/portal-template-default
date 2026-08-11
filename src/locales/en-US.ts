@@ -179,6 +179,7 @@ export const starter = {
   "studio.viewFilter": "View",
   "studio.marker.openEditor": "Annotation {{number}}: open editor",
   "studio.editorTitle": "Annotation editor",
+  "studio.editorNumber": "Annotation {{number}}",
   "studio.saveComment": "Save comment",
   "studio.reopen": "Reopen",
   "studio.conflict": "The task changed on the server — your change was not applied. Review the current state and retry.",

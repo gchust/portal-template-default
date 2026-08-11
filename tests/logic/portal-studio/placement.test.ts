@@ -311,3 +311,76 @@ describe("Goal 02 composer placement — clamps at every viewport edge", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Goal 03 (G03-08/09): 375×667 narrow viewport — every anchored surface
+// stays inside the viewport; nothing can overflow the page.
+// ---------------------------------------------------------------------------
+
+describe("Goal 03 — 375×667 narrow viewport", () => {
+  const NARROW = { width: 375, height: 667 };
+
+  it("the composer (width 300) fits a mid-page target with room below", () => {
+    const p = resolveAnchoredPlacement({
+      trigger: { left: 40, top: 200, right: 340, bottom: 240, width: 300, height: 40 },
+      viewport: NARROW,
+      width: 300,
+      maxHeight: Math.round(NARROW.height * 0.45),
+      surfaceHeight: 140,
+    });
+    expect(p.left).toBeGreaterThanOrEqual(0);
+    expect(p.left + p.width).toBeLessThanOrEqual(NARROW.width);
+    expect(p.top + 140).toBeLessThanOrEqual(NARROW.height);
+  });
+
+  it("the composer flips above a target near the bottom edge", () => {
+    const p = resolveAnchoredPlacement({
+      trigger: {
+        left: 40,
+        top: NARROW.height - 80,
+        right: 340,
+        bottom: NARROW.height - 40,
+        width: 300,
+        height: 40,
+      },
+      viewport: NARROW,
+      width: 300,
+      maxHeight: Math.round(NARROW.height * 0.45),
+      surfaceHeight: 140,
+    });
+    expect(p.left).toBeGreaterThanOrEqual(0);
+    expect(p.left + p.width).toBeLessThanOrEqual(NARROW.width);
+    expect(p.top + 140).toBeLessThanOrEqual(NARROW.height);
+    // Flipped above the trigger (bottom edge), still inside.
+    expect(p.top + 140).toBeLessThanOrEqual(NARROW.height - 40 + 8);
+  });
+
+  it("the list panel (width 380) clamps inside 375 and stays below the dock", () => {
+    const p = resolveAnchoredPlacement({
+      trigger: { left: 335, top: 600, right: 375, bottom: 648, width: 40, height: 48 },
+      viewport: NARROW,
+      width: 380,
+      maxHeight: 520,
+      surfaceHeight: 300,
+    });
+    expect(p.left).toBeGreaterThanOrEqual(0);
+    expect(p.left + p.width).toBeLessThanOrEqual(NARROW.width);
+    expect(p.top + 300).toBeLessThanOrEqual(NARROW.height);
+  });
+
+  it("375×667 never overflows: right edge of any surface ≤ viewport width", () => {
+    // Sweep the trigger across the full width at several heights.
+    for (const left of [0, 100, 200, 300, 350]) {
+      const p = resolveAnchoredPlacement({
+        trigger: { left, top: 300, right: left + 60, bottom: 340, width: 60, height: 40 },
+        viewport: NARROW,
+        width: 320,
+        maxHeight: 400,
+        surfaceHeight: 200,
+      });
+      expect(p.left).toBeGreaterThanOrEqual(0);
+      expect(p.left + p.width).toBeLessThanOrEqual(NARROW.width);
+      expect(p.top + 200).toBeLessThanOrEqual(NARROW.height);
+    }
+  });
+});

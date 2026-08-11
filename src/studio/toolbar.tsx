@@ -209,6 +209,30 @@ const regionStyle = (region: Region | undefined): CSSProperties => {
   };
 };
 
+/**
+ * Goal 03 D: document-aware region anchor. The stored region is a
+ * viewport rect captured at creation; adding the captured scroll offset
+ * and subtracting the CURRENT scroll renders it in document coordinates
+ * so the region follows content scrolling (the shared scroll listener
+ * re-renders via markerTick). Annotations without pageContext fall back
+ * to the raw viewport rect.
+ */
+const regionStyleScrolled = (
+  region: Region | undefined,
+  scroll: { x: number; y: number } | undefined
+): CSSProperties => {
+  if (!region) return { display: "none" };
+  const left = scroll ? region.x + scroll.x - window.scrollX : region.x;
+  const top = scroll ? region.y + scroll.y - window.scrollY : region.y;
+  return {
+    display: "block",
+    left,
+    top,
+    width: region.width,
+    height: region.height,
+  };
+};
+
 const toRegion = (mode: ToolbarMode): Region | undefined => {
   if (mode.kind !== "marquee") return undefined;
   return normalizeRegion(
@@ -2487,8 +2511,11 @@ export function StudioToolbar({
     const viewport = viewportOf(window);
     if (editorAnnotation.kind === "region" && editorAnnotation.region) {
       const r = editorAnnotation.region;
+      const scroll = editorAnnotation.pageContext?.scroll;
+      const left = scroll ? r.x + scroll.x - window.scrollX : r.x;
+      const top = scroll ? r.y + scroll.y - window.scrollY : r.y;
       return resolveMarkerEditorPosition(
-        { left: r.x, top: r.y, width: r.width, height: r.height },
+        { left, top, width: r.width, height: r.height },
         viewport
       );
     }
@@ -2676,7 +2703,24 @@ export function StudioToolbar({
             ]);
           }}
           onDelete={confirmDelete}
-          onItemSelect={(annotation) => openMarkerEditor(annotation)}
+          onItemSelect={(annotation) => {
+            // Goal 03 F: clicking an item scrolls the target into view
+            // and focuses it when resolvable (the editor-open highlight
+            // below outlines every resolved target).
+            const targets = resolveAnnotationTargets(annotation);
+            if (targets.length > 0) {
+              // Optional-call: jsdom has no scrollIntoView; the real
+              // browser scrolls the target into view.
+              targets[0].scrollIntoView?.({ block: "center" });
+              // Focus the page target when focusable (scroll already
+              // happened — never scroll again for the focus itself).
+              const first = targets[0] as Element & {
+                focus?: (options?: { preventScroll?: boolean }) => void;
+              };
+              first.focus?.({ preventScroll: true });
+            }
+            openMarkerEditor(annotation);
+          }}
           editorSaving={editorSaving}
           deleteButtonRefs={deleteButtonRefs}
           editButtonRefs={editButtonRefs}
@@ -2890,7 +2934,10 @@ export function StudioToolbar({
             <div
               key={annotation.annotationId}
               className="ps-outline ps-region"
-              style={regionStyle(annotation.region)}
+              style={regionStyleScrolled(
+                annotation.region,
+                annotation.pageContext?.scroll
+              )}
             >
               <button
                 type="button"
@@ -2932,10 +2979,11 @@ export function StudioToolbar({
         );
       })}
 
-      {/* Goal 03: temporary multi-target highlight while the editor is
-          open on a multi annotation — every resolved captured target is
-          outlined so the group is visible at once. */}
-      {editorAnnotation && editorAnnotation.kind === "multi"
+      {/* Goal 03: temporary target highlight while the editor is open —
+          every resolved captured target is outlined (one outline for an
+          element, all members for a multi group); regions render their
+          own boundary. Also covers the list-item click highlight. */}
+      {editorAnnotation && editorAnnotation.kind !== "region"
         ? resolveAnnotationTargets(editorAnnotation).map((target, index) => {
             const rect = target.getBoundingClientRect();
             if (rect.width === 0 && rect.height === 0) return null;
@@ -2970,6 +3018,15 @@ export function StudioToolbar({
           onKeyDown={(event) => event.stopPropagation()}
         >
           <p className="ps-label" id="ps-marker-editor-label">
+            {t("studio.editorNumber", "Annotation {{number}}").replace(
+              "{{number}}",
+              String(
+                annotationDisplayNumber(
+                  annotations,
+                  editorAnnotation.annotationId
+                ) ?? "?"
+              )
+            )}{" "}·{" "}
             {t("studio.instruction", "Annotation comment")}
           </p>
           <textarea

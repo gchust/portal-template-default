@@ -3191,3 +3191,350 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
     .click();
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 });
+
+// =====================================================================
+// Goal 03 — Stable Marker/List Semantics and Viewport Polish (G03-01..10)
+// =====================================================================
+
+test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region scroll, 375x667", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+  const bar = root.locator("[role='toolbar']");
+
+  // ---- G03-01: create 1 open + 2 completed + 3 open (three annotations,
+  // complete the middle one) — numbers must stay FULL-ORDER everywhere.
+  const targets = [
+    page.locator("tbody tr").first().locator("td").nth(0),
+    page.locator("tbody tr").first().locator("td").nth(1),
+    page.locator("tbody tr").first().locator("td").nth(2),
+  ];
+  for (let index = 0; index < targets.length; index += 1) {
+    await startPicking(page);
+    await targets[index].hover();
+    await targets[index].click();
+    await page
+      .locator("#portal-studio-root textarea")
+      .fill(`G03 annotation ${index + 1}`);
+    await page.keyboard.press("Control+Enter");
+    await expectOpenCount(root, String(index + 1));
+  }
+  // Markers 1, 2, 3 all exist (full order).
+  for (const number of [1, 2, 3]) {
+    await expect(
+      root.getByRole("button", { name: `Annotation ${number}: open editor` })
+    ).toBeVisible();
+  }
+  // Complete the MIDDLE annotation via the list (All view).
+  await openList(page);
+  await root.getByRole("button", { name: "All", exact: true }).click();
+  await root
+    .locator(".ps-annotation-item [aria-label='Complete']")
+    .nth(1)
+    .click();
+  await expect
+    .poll(() => readActiveTask().annotations.filter((a) => a.status === "open").length)
+    .toBe(2);
+  // Open view: markers 1 and 3 only; the list shows "1 open · 3 total".
+  await root.getByRole("button", { name: "Open", exact: true }).click();
+  await expect(
+    root.getByRole("button", { name: "Annotation 2: open editor" })
+  ).toHaveCount(0);
+  await expect(
+    root.getByRole("button", { name: "Annotation 1: open editor" })
+  ).toBeVisible();
+  await expect(
+    root.getByRole("button", { name: "Annotation 3: open editor" })
+  ).toBeVisible();
+  await expect(root.locator(".ps-list-counts")).toHaveText("2 open · 3 total");
+  // Editor shows the stable number for #3.
+  await root.getByRole("button", { name: "Annotation 3: open editor" }).click();
+  const editor = root.getByRole("dialog", { name: "Annotation editor" });
+  await expect(editor).toContainText("Annotation 3 · Annotation comment");
+  await page.keyboard.press("Escape");
+
+  // Copy (open-only) keeps FULL-ORDER numbers — "Annotation 1" + "Annotation 3"
+  // (the async clipboard rejection settles via the poll, like the G04 flow).
+  let copied = "";
+  await expect
+    .poll(
+      async () => {
+        await bar.getByRole("button", { name: "Copy annotations" }).click();
+        const fb = root.locator(".ps-copy-fallback textarea");
+        if (await fb.isVisible().catch(() => false)) {
+          copied = await fb.inputValue();
+        } else {
+          copied = await page.evaluate(() =>
+            navigator.clipboard.readText().catch(() => "")
+          );
+        }
+        return copied;
+      },
+      { timeout: 15000 }
+    )
+    .toContain("Annotation 3");
+  expect(copied).toContain("### Annotation 1: [element]");
+  expect(copied).not.toContain("### Annotation 2:");
+  // Close the fallback (topmost) and the list deterministically — the
+  // poll's final Copy click resolves asynchronously (one Esc per surface).
+  await expect
+    .poll(
+      async () => {
+        if ((await root.locator(".ps-copy-fallback").count()) > 0) {
+          await page.keyboard.press("Escape");
+        } else if ((await root.locator(".ps-list-panel").count()) > 0) {
+          await page.keyboard.press("Escape");
+        }
+        return (
+          (await root.locator(".ps-copy-fallback").count()) === 0 &&
+          (await root.locator(".ps-list-panel").count()) === 0
+        );
+      },
+      { timeout: 10000 }
+    )
+    .toBe(true);
+
+  // ---- G03-02/03: global visibility is presentation-only; per-item
+  // Hide stays independent.
+  const before = readActiveTask().annotations.map((a) => a.annotationId);
+  // The visibility toggle's label flips (Hide ↔ Show) — match either.
+  const visibilityToggle = bar.getByRole("button", {
+    name: /Hide markers|Show markers/,
+  });
+  await visibilityToggle.click();
+  await expect(root.locator(".ps-marker-anchor")).toHaveCount(0);
+  const afterToggle = readActiveTask();
+  expect(afterToggle.annotations.map((a) => a.annotationId)).toEqual(before);
+  await visibilityToggle.click();
+  await expect(root.locator(".ps-marker-anchor")).toHaveCount(2);
+
+  // ---- G03-03: per-item Hide stays independent of the global toggle.
+  await openList(page);
+  await root.locator(".ps-annotation-item [aria-label='Hide']").first().click();
+  await expect(root.locator(".ps-marker-anchor")).toHaveCount(1);
+  await root.locator(".ps-annotation-item [aria-label='Hide']").first().click();
+  await expect(root.locator(".ps-marker-anchor")).toHaveCount(2);
+  await bar.getByRole("button", { name: "Annotation list" }).click();
+  await expect(root.locator(".ps-list-panel")).toHaveCount(0);
+
+  // ---- G03-06: marker visual box ≥20px and a ~30px HIT TARGET around it.
+  const marker = root.locator(".ps-marker-anchor button").first();
+  const markerBox = (await marker.boundingBox())!;
+  expect(markerBox.width).toBeGreaterThanOrEqual(20);
+  expect(markerBox.height).toBeGreaterThanOrEqual(20);
+  const hitIsMarker = await page.evaluate(
+    ([x, y]) => {
+      const el = document.elementFromPoint(x, y);
+      return !!el?.closest?.("#portal-studio-root, [data-portal-studio-root]");
+    },
+    [markerBox.x + markerBox.width / 2 + 12, markerBox.y + markerBox.height / 2]
+  );
+  // The extended hit target (~30px) is part of the marker button.
+  expect(hitIsMarker).toBe(true);
+  // Keyboard focus + Enter opens the editor.
+  await marker.focus();
+  await page.keyboard.press("Enter");
+  await expect(editor).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // ---- G03-04: clicking a list item focuses the target + highlights it.
+  await openList(page);
+  await root.getByRole("button", { name: "Annotation 1: select" }).click();
+  await expect(editor).toBeVisible();
+  await expect(root.locator(".ps-marker-highlight")).toHaveCount(1);
+  // The captured target received focus before the editor mounted; the
+  // editor's autofocus then owns the typing focus (either is acceptable).
+  const focusState = await page.evaluate(() => {
+    const active = document.activeElement;
+    return {
+      inRow: !!active?.closest?.("tbody tr"),
+      inHost:
+        active?.id === "portal-studio-root" ||
+        !!active?.closest?.("#portal-studio-root, [data-portal-studio-root]"),
+    };
+  });
+  expect(focusState.inRow || focusState.inHost).toBe(true);
+  await page.keyboard.press("Escape");
+
+  // ---- G03-05: region anchors follow content scrolling (document-aware).
+  await bar.getByRole("button", { name: "Select region" }).click();
+  const tableBox = (await page.locator("tbody").boundingBox())!;
+  await page.mouse.move(tableBox.x + 20, tableBox.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(tableBox.x + 220, tableBox.y + 60, { steps: 6 });
+  await page.mouse.up();
+  await page.locator("#portal-studio-root textarea").fill("G03 region");
+  await page.keyboard.press("Control+Enter");
+  await expect(
+    root.locator(".ps-save-toast", { hasText: "Annotation saved" })
+  ).toBeVisible();
+  const regionOverlay = root.locator(".ps-outline.ps-region").first();
+  const beforeScroll = (await regionOverlay.boundingBox())!;
+  // Make the page scrollable, scroll down, and assert the region FOLLOWS.
+  await page.evaluate(() => {
+    const spacer = document.createElement("div");
+    spacer.id = "g03-spacer";
+    spacer.style.height = "800px";
+    document.body.appendChild(spacer);
+    window.scrollTo(0, 200);
+  });
+  await page.waitForTimeout(250);
+  const afterScroll = (await regionOverlay.boundingBox())!;
+  expect(Math.round(beforeScroll.y - afterScroll.y)).toBeGreaterThanOrEqual(190);
+  await page.evaluate(() => {
+    document.getElementById("g03-spacer")?.remove();
+    window.scrollTo(0, 0);
+  });
+  await page.waitForTimeout(200);
+
+  // ---- G03-07: every anchored surface stays fully inside the viewport.
+  await startPicking(page);
+  await targets[0].hover();
+  await targets[0].click();
+  await expect(root.locator(".ps-composer")).toBeVisible();
+  await openList(page);
+  const surfaces = [
+    root.locator(".ps-composer"),
+    root.locator(".ps-list-panel"),
+  ];
+  for (const surface of surfaces) {
+    await expect(surface).toBeVisible();
+    const box = (await surface.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(1440);
+    expect(box.y + box.height).toBeLessThanOrEqual(900);
+  }
+  // Close the composer via its Cancel button (the first Esc closes the
+  // list panel — the aux panel is the topmost transient here).
+  await root
+    .getByRole("dialog", { name: "Annotation" })
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await expect(root.locator(".ps-composer")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(root.locator(".ps-list-panel")).toHaveCount(0);
+
+  // ---- G03-08/09: 375×667 — List and composer stay inside, no overflow.
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.waitForTimeout(300);
+  await openList(page);
+  const list375 = (await root.locator(".ps-list-panel").boundingBox())!;
+  expect(list375.x).toBeGreaterThanOrEqual(0);
+  expect(list375.x + list375.width).toBeLessThanOrEqual(375);
+  expect(list375.y + list375.height).toBeLessThanOrEqual(667);
+  expect(await viewportFits(page)).toBe(true);
+  // G03 blocker regression: the OPEN list panel paints ABOVE the page
+  // markers — the stable numbers must never be covered by marker chips.
+  const zLive = await page.evaluate(() => {
+    const host = document.querySelector(
+      "#portal-studio-root"
+    ) as HTMLElement & { shadowRoot: ShadowRoot };
+    const sr = host.shadowRoot;
+    const zOf = (el: Element | null) =>
+      el ? Number(getComputedStyle(el).zIndex) : 0;
+    return {
+      marker: zOf(sr.querySelector(".ps-marker-anchor")),
+      anchors: sr.querySelectorAll(".ps-marker-anchor").length,
+      regions: sr.querySelectorAll(".ps-marker-region-chip").length,
+      panel: zOf(sr.querySelector(".ps-list-panel")),
+      css: sr.querySelector("style")?.textContent ?? "",
+    };
+  });
+  expect(zLive.panel).toBeGreaterThan(zLive.marker);
+  const cssZ = (selector: string) => {
+    const match = zLive.css.match(
+      new RegExp(`\\.ps-${selector}[^}]*z-index:\\s*(\\d+)`)
+    );
+    return match ? Number(match[1]) : 0;
+  };
+  expect(cssZ("marker-anchor")).toBe(2147483002);
+  expect(cssZ("list-panel")).toBe(2147483003);
+  expect(cssZ("marker-editor")).toBe(2147483004);
+  expect(cssZ("copy-fallback")).toBe(2147483005);
+  expect(cssZ("tooltip")).toBe(2147483006);
+  expect(cssZ("composer")).toBe(2147483007);
+  expect(cssZ("save-toast")).toBe(2147483008);
+  await page.screenshot({
+    path: "test-results/g03-list-375.png",
+    fullPage: false,
+  });
+  await bar.getByRole("button", { name: "Annotation list" }).click();
+  await startPicking(page);
+  await targets[1].hover();
+  await targets[1].click();
+  await expect(root.locator(".ps-composer")).toBeVisible();
+  const composer375 = (await root.locator(".ps-composer").boundingBox())!;
+  expect(composer375.x).toBeGreaterThanOrEqual(0);
+  expect(composer375.x + composer375.width).toBeLessThanOrEqual(375);
+  expect(composer375.y + composer375.height).toBeLessThanOrEqual(667);
+  expect(await viewportFits(page)).toBe(true);
+  await page.screenshot({
+    path: "test-results/g03-composer-375.png",
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+
+  // ---- G03-10: markers stay route-gated (only on the captured route).
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(resolvePortalTestURL(environment, "/dev/ai-chat"));
+  await page.waitForTimeout(1200);
+  const root2 = page.locator("#portal-studio-root");
+  // The users-route annotations must NOT render markers on /dev/ai-chat.
+  await expect(root2.locator(".ps-marker-anchor")).toHaveCount(0);
+
+  // Cleanup: back to /users and delete everything (All view — the
+  // completed item is hidden in the default Open view).
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  await openList(page);
+  await root.getByRole("button", { name: "All", exact: true }).click();
+  for (let index = 0; index < 4; index += 1) {
+    await root
+      .locator(".ps-annotation-item [aria-label='Delete']")
+      .first()
+      .click();
+    await root.locator(".ps-annotation-confirm").waitFor();
+    await root
+      .locator(".ps-annotation-confirm button", { hasText: "Delete" })
+      .click();
+    await expect
+      .poll(() => readActiveTask().annotations.length)
+      .toBe(3 - index);
+  }
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+  // ---- ZH evidence at 375×667: the composer stays inside the narrow
+  // viewport in Chinese too (cancelled — no annotation persists).
+  await page.route("**/api/app:getLang*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: { lang: "zh-CN", resources: {} } }),
+    });
+  });
+  await page.reload();
+  await page.locator("tbody tr").first().waitFor();
+  await page.setViewportSize({ width: 375, height: 667 });
+  await root.locator(".ps-chip-open").click();
+  await root.getByRole("button", { name: "拾取元素" }).click();
+  await page.locator("tbody tr").first().locator("td").nth(1).hover();
+  await page.locator("tbody tr").first().locator("td").nth(1).click();
+  await expect(root.getByRole("dialog", { name: "批注" })).toBeVisible();
+  const zhComposer = (await root.locator(".ps-composer").boundingBox())!;
+  expect(zhComposer.x).toBeGreaterThanOrEqual(0);
+  expect(zhComposer.x + zhComposer.width).toBeLessThanOrEqual(375);
+  expect(zhComposer.y + zhComposer.height).toBeLessThanOrEqual(667);
+  expect(await viewportFits(page)).toBe(true);
+  await page.screenshot({
+    path: "test-results/g03-composer-375-zh.png",
+    fullPage: false,
+  });
+  await page.keyboard.press("Escape");
+  await expect(root.locator(".ps-composer")).toHaveCount(0);
+  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+});

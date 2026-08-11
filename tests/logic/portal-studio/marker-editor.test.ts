@@ -71,7 +71,12 @@ describe("resolveMarkerEditorPosition — viewport edges", () => {
       VIEWPORT,
       EDITOR
     );
-    expect(pos.left).toBe(0);
+    // The SHARED placement path clamps inside the viewport with its
+    // standard margin (Goal 03 E — one placement utility for every
+    // surface, including the marker editor).
+    expect(pos.left).toBeGreaterThanOrEqual(0);
+    expect(pos.left).toBeLessThanOrEqual(4);
+    expect(pos.left + EDITOR.width).toBeLessThanOrEqual(VIEWPORT.width);
   });
 
   it("clamps the right edge for markers at the right boundary", () => {
@@ -81,7 +86,9 @@ describe("resolveMarkerEditorPosition — viewport edges", () => {
       EDITOR
     );
     expect(pos.left + EDITOR.width).toBeLessThanOrEqual(VIEWPORT.width);
-    expect(pos.left).toBe(VIEWPORT.width - EDITOR.width);
+    // Right-aligned near the marker's right edge via the shared path
+    // (the shared helper insets the clamp by its standard margin).
+    expect(pos.left).toBeGreaterThan(VIEWPORT.width - EDITOR.width - 8);
   });
 
   it("stays fully inside a very small viewport", () => {
@@ -94,14 +101,18 @@ describe("resolveMarkerEditorPosition — viewport edges", () => {
     expect(pos.top + EDITOR.height).toBeLessThanOrEqual(tiny.height);
   });
 
-  it("clamps to the origin for viewports SMALLER than the editor", () => {
-    // The pure geometry cannot shrink the box — it must never place the
-    // anchor off-viewport; the actual fit (max-width/max-height + scroll)
-    // is the dialog CSS, proven by the small-viewport Playwright test.
+  it("stays on-viewport for viewports SMALLER than the editor", () => {
+    // The pure geometry cannot shrink the box — the shared path clamps
+    // the anchor inside the viewport (its margin); the actual fit
+    // (max-width/max-height + scroll) is the dialog CSS, proven by the
+    // small-viewport Playwright test.
     const tiny = { width: 200, height: 150 };
     const pos = resolveMarkerEditorPosition(markerAt(100, 50), tiny, EDITOR);
-    expect(pos.left).toBe(0);
-    expect(pos.top).toBe(0);
+    // The shared path keeps the ANCHOR on-viewport (the pure geometry
+    // cannot shrink the box; the actual fit is the dialog CSS, proven by
+    // the small-viewport Playwright test).
+    expect(pos.left).toBeGreaterThanOrEqual(0);
+    expect(pos.top).toBeGreaterThanOrEqual(0);
   });
 });
 

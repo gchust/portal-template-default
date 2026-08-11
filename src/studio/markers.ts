@@ -15,6 +15,7 @@
  * annotated by Studio itself (isStudioElement covers the host).
  */
 
+import { resolveAnchoredPlacement } from "./placement";
 import type { Annotation, ElementCapture } from "./types";
 
 /** Resolve the live DOM target of an annotation, or null when unresolved. */
@@ -103,19 +104,26 @@ export function resolveMarkerEditorPosition(
   },
   gap: number = MARKER_EDITOR_GAP
 ): MarkerEditorPosition {
-  // Right-align the editor with the marker's right edge (preferred).
-  let left = markerRect.left + markerRect.width - editor.width;
-  if (left < 0) left = 0;
-  if (left + editor.width > viewport.width) {
-    left = Math.max(0, viewport.width - editor.width);
-  }
-  // Prefer below the marker; flip above when there is no room below.
-  const below = markerRect.top + markerRect.height + gap;
-  const above = markerRect.top - gap - editor.height;
-  let top = below + editor.height <= viewport.height ? below : above;
-  if (top < 0) top = 0;
-  if (top + editor.height > viewport.height) {
-    top = Math.max(0, viewport.height - editor.height);
-  }
-  return { left: Math.round(left), top: Math.round(top) };
+  // Goal 03 E: the marker editor uses the SAME viewport-aware anchored
+  // placement path as every other surface (tooltips, Help, List,
+  // composer, Copy fallback) — resolveAnchoredPlacement owns the
+  // right-align/flip/clamp math. The trigger is built so the preferred
+  // placement is right-aligned with the marker's right edge and below it.
+  const placement = resolveAnchoredPlacement({
+    trigger: {
+      left: markerRect.left + markerRect.width - editor.width,
+      top: markerRect.top,
+      right: markerRect.left + markerRect.width,
+      bottom: markerRect.top + markerRect.height,
+      width: markerRect.width,
+      height: markerRect.height,
+    },
+    viewport,
+    width: editor.width,
+    maxHeight: editor.height,
+    gap,
+    preferredSide: "below",
+    surfaceHeight: editor.height,
+  });
+  return { left: placement.left, top: placement.top };
 }

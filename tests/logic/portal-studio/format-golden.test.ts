@@ -173,6 +173,37 @@ describe("formatTaskMarkdown — Goal 04 includeCompleted option", () => {
     expect(openOnly).not.toContain("status: completed");
   });
 
+  it("G03-01: the OPEN-only copy keeps FULL-ORDER numbers (1 open / 2 completed / 3 open → Annotation 1 and Annotation 3)", () => {
+    const mixed = {
+      ...v5Fixture,
+      annotations: [
+        { ...v5Fixture.annotations[0], status: "open" },
+        { ...v5Fixture.annotations[1], status: "completed" },
+        {
+          annotationId: "ann-3",
+          kind: "element",
+          comment: "Third item",
+          createdAt: "2026-08-08T11:00:00.000Z",
+          status: "open",
+          elements: [],
+        },
+      ],
+    };
+    const openOnly = formatTaskMarkdown(mixed, { includeCompleted: false });
+    // The filtered list has 2 items but they keep their FULL-ORDER
+    // numbers 1 and 3 — never renumbered 1 and 2.
+    expect(openOnly).toContain("## Annotations (2)");
+    expect(openOnly).toContain("### Annotation 1: [element] ann-1");
+    expect(openOnly).toContain("### Annotation 3: [element] ann-3");
+    expect(openOnly).not.toContain("Annotation 2:");
+    expect(openOnly).not.toContain("status: completed");
+    // The all-mode copy numbers every annotation in full order.
+    const all = formatTaskMarkdown(mixed, { includeCompleted: true });
+    expect(all).toContain("### Annotation 1: [element] ann-1");
+    expect(all).toContain("### Annotation 2: [region] ann-2");
+    expect(all).toContain("### Annotation 3: [element] ann-3");
+  });
+
   it("includeCompleted:false with only completed annotations renders an empty list", () => {
     const onlyDone = {
       ...v5Fixture,

@@ -171,6 +171,7 @@ export const starter = {
   "studio.viewFilter": "视图",
   "studio.marker.openEditor": "标注 {{number}}：打开编辑器",
   "studio.editorTitle": "标注编辑器",
+  "studio.editorNumber": "批注 {{number}}",
   "studio.saveComment": "保存评论",
   "studio.reopen": "重新打开",
   "studio.conflict": "任务已在服务器上变更——你的修改未被应用。请查看当前状态后重试。",

@@ -19,7 +19,7 @@ import { StudioToolbar, type PortalStudioConfig } from "./toolbar";
 
 const HOST_ID = "portal-studio-root";
 
-const TOOLBAR_STYLES = `
+export const TOOLBAR_STYLES = `
 .ps-root {
   position: fixed;
   inset: 0;
@@ -273,7 +273,9 @@ const TOOLBAR_STYLES = `
   display: flex;
   flex-direction: column;
   gap: 8px;
-  z-index: 2147483001;
+  /* Goal 03 blocker fix: the fallback is an open Studio surface — page
+     markers must never cover it (previously 3001, below marker anchors). */
+  z-index: 2147483005;
 }
 .ps-copy-text {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -298,6 +300,11 @@ const TOOLBAR_STYLES = `
 .ps-help-popover,
 .ps-list-panel {
   position: fixed;
+  /* Goal 03 blocker fix: open panel content must never be covered by
+     page markers/outlines (marker anchors sit at 2147483002) — panels
+     paint ABOVE them, below the marker editor/dialog layer. */
+  z-index: 2147483003;
+  overscroll-behavior: contain;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: #18181b;
@@ -393,7 +400,7 @@ const TOOLBAR_STYLES = `
    target/group/region. The horizontal toolbar never hosts it. */
 .ps-composer {
   position: fixed;
-  z-index: 2147483006;
+  z-index: 2147483007;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: #18181b;
@@ -424,10 +431,10 @@ const TOOLBAR_STYLES = `
 /* Goal 02: compact non-blocking save toast (replaces the Saved panel). */
 .ps-save-toast {
   position: fixed;
+  z-index: 2147483008;
   left: 50%;
   bottom: 92px;
   transform: translateX(-50%);
-  z-index: 2147483007;
   padding: 8px 14px;
   border-radius: 9999px;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -456,7 +463,7 @@ const TOOLBAR_STYLES = `
    role=tooltip wired through aria-describedby (no native title). */
 .ps-tooltip {
   position: fixed;
-  z-index: 2147483005;
+  z-index: 2147483006;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -564,22 +571,31 @@ const TOOLBAR_STYLES = `
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 16px;
+  min-width: 20px;
+  height: 20px;
   padding: 0 4px;
   border-radius: 9999px;
   background: var(--ps-accent, #6366f1);
   color: var(--ps-primary-foreground, #ffffff);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1;
 }
 /* Goal 03: markers are semantic buttons — clickable, keyboard-focusable. */
 .ps-marker-chip-button {
+  position: relative;
   pointer-events: auto;
   cursor: pointer;
   border: none;
   font-family: inherit;
+}
+/* Goal 03 C: a ≈30px HIT TARGET around the ≈20px visual chip — the
+   ::before is part of the button's hit-testing box. */
+.ps-marker-chip-button::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: inherit;
 }
 .ps-marker-chip-button:hover {
   filter: brightness(1.15);
@@ -612,7 +628,7 @@ const TOOLBAR_STYLES = `
    Save/Delete reachable via scrolling (review P1). */
 .ps-marker-editor {
   position: fixed;
-  z-index: 2147483003;
+  z-index: 2147483004;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: #18181b;

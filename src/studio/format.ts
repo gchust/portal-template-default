@@ -13,7 +13,7 @@
  * type stripping works; NO runtime imports beyond the pure task model.
  */
 
-import { normalizeTask } from "./task-model.ts";
+import { annotationDisplayNumber, normalizeTask } from "./task-model.ts";
 import type {
   Annotation,
   ElementCapture,
@@ -196,9 +196,16 @@ export function formatTaskMarkdown(
     );
   }
   lines.push("", `## Annotations (${annotations.length})`, "");
-  annotations.forEach((annotation, index) => {
+  annotations.forEach((annotation) => {
+    // Goal 03 A: display numbers are STABLE full-order numbers shared by
+    // marker/list/editor/Copy — the OPEN-only copy must show "Annotation
+    // 1" and "Annotation 3" for a 1-open/2-completed/3-open task, never
+    // renumber the filtered list.
+    const displayNumber =
+      annotationDisplayNumber(task.annotations, annotation.annotationId) ??
+      annotations.indexOf(annotation) + 1;
     lines.push(
-      `### Annotation ${index + 1}: [${annotation.kind}] ${annotation.annotationId}`,
+      `### Annotation ${displayNumber}: [${annotation.kind}] ${annotation.annotationId}`,
       ""
     );
     lines.push(`Comment: ${annotation.comment || "(empty)"}`, "");

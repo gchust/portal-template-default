@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { TOOLBAR_STYLES } from "@/studio/index";
 import { StudioToolbar } from "@/studio/toolbar";
 import { applyMutationOperations } from "@/studio/mutation";
 
@@ -6057,5 +6058,243 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
     await user.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
     await user.click(screen.getByRole("button", { name: "Annotation list" }));
     expect(screen.getByRole("region", { name: "Annotations" })).toBeInTheDocument();
+  });
+});
+
+// =====================================================================
+// Goal 03 — Stable Marker/List Semantics and Viewport Polish
+// (proofs G03-01..G03-10; spec:
+// /root/goals/portal-studio-horizontal-toolbar-v5/03-goal-marker-list-and-viewport-polish.md)
+// =====================================================================
+
+describe("Goal 03 — stable marker/list semantics and viewport polish", () => {
+  /** makePageElement + a non-zero rect (markers skip zero-sized targets). */
+  const markerElement = (
+    text: string,
+    id: string,
+    rect = { left: 100, top: 200, width: 200, height: 40 }
+  ) => {
+    const element = makePageElement(text, id);
+    (element as HTMLElement & { getBoundingClientRect(): DOMRect }).getBoundingClientRect =
+      () =>
+        ({
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+          right: rect.left + rect.width,
+          bottom: rect.top + rect.height,
+          x: rect.left,
+          y: rect.top,
+          toJSON: () => ({}),
+        }) as DOMRect;
+    return element;
+  };
+
+  const captureOf = (id: string) => ({
+    tagName: "tr",
+    selectorCandidates: [{ kind: "id", selector: `#${id}` }],
+    componentCandidates: [],
+    sourceCandidates: [],
+    snapshot: { text: id, attributes: {}, childCount: 0 },
+  });
+
+  const taskRoutes = (annotations: unknown[]) => {
+    const current = [...annotations];
+    return mockFetchRoutes([
+      {
+        url: "/__portal-studio/tasks",
+        method: "GET",
+        respond: async () =>
+          jsonResponse({
+            task: {
+              schemaVersion: 5,
+              taskId: "task-g03",
+              createdAt: "2026-08-10T00:00:00.000Z",
+              url: "http://127.0.0.1:4173/users",
+              title: "Users",
+              annotations: current,
+              businessContext: [],
+              redaction: {
+                droppedKeys: [],
+                redactedValues: 0,
+                truncatedValues: 0,
+              },
+              taskRevision: 1,
+            },
+          }),
+      },
+      {
+        url: "/__portal-studio/tasks",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, taskId: "task-g03" }),
+      },
+      {
+        url: "/__portal-studio/screenshots",
+        method: "POST",
+        respond: async () => jsonResponse({ ok: true, file: "g03.png" }),
+      },
+    ]);
+  };
+
+  const openListPanel = async (user: ReturnType<typeof userEvent.setup>) => {
+    const chip = screen.queryByRole("button", { name: /Annotation tools/ });
+    if (chip) await user.click(chip);
+    const list = screen.getByRole("button", { name: "Annotation list" });
+    if (list.getAttribute("aria-expanded") !== "true") {
+      await user.click(list);
+    }
+  };
+
+  it("G03-01: the marker EDITOR shows the stable full-order number (1 open / 2 completed / 3 open)", async () => {
+    const user = userEvent.setup();
+    markerElement("A", "row-g03-a");
+    markerElement("B", "row-g03-b", { left: 120, top: 260, width: 200, height: 40 });
+    taskRoutes([
+      {
+        annotationId: "ann-g03-1",
+        kind: "element",
+        comment: "first open",
+        createdAt: "2026-08-10T00:00:00.000Z",
+        status: "open",
+        elements: [captureOf("row-g03-a")],
+      },
+      {
+        annotationId: "ann-g03-2",
+        kind: "element",
+        comment: "completed middle",
+        createdAt: "2026-08-10T00:00:00.000Z",
+        status: "completed",
+        elements: [captureOf("row-g03-b")],
+      },
+      {
+        annotationId: "ann-g03-3",
+        kind: "element",
+        comment: "third open",
+        createdAt: "2026-08-10T00:00:00.000Z",
+        status: "open",
+        elements: [captureOf("row-g03-b")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const third = await screen.findByRole("button", {
+      name: "Annotation 3: open editor",
+    });
+    await user.click(third);
+    const editor = screen.getByRole("dialog", { name: "Annotation editor" });
+    // The editor label carries the STABLE number from the full order.
+    expect(editor).toHaveTextContent("Annotation 3 · Annotation comment");
+    // Open view keeps full-order numbers too: markers 1 and 3 exist.
+    expect(
+      screen.getByRole("button", { name: "Annotation 1: open editor" })
+    ).toBeInTheDocument();
+  });
+
+  it("G03-06: marker visual ≈20px with a ≈30px hit target, keyboard-focusable", async () => {
+    const user = userEvent.setup();
+    markerElement("Alice", "row-g03-size");
+    taskRoutes([
+      {
+        annotationId: "ann-g03-size",
+        kind: "element",
+        comment: "sized",
+        createdAt: "2026-08-10T00:00:00.000Z",
+        status: "open",
+        elements: [captureOf("row-g03-size")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    const marker = await screen.findByRole("button", {
+      name: "Annotation 1: open editor",
+    });
+    // jsdom does not compute layout from the shadow stylesheet — the
+    // DECLARATIONS are asserted here (the real browser bounding box is
+    // asserted in the G03 e2e).
+    expect(TOOLBAR_STYLES).toContain("min-width: 20px;");
+    expect(TOOLBAR_STYLES).toContain("height: 20px;");
+    expect(TOOLBAR_STYLES).toContain("font-size: 11px;");
+    // The hit target extends ≈5px on every side of the 20px visual chip
+    // (::before inset −5px → ≈30px total hit box).
+    expect(TOOLBAR_STYLES).toContain(".ps-marker-chip-button::before");
+    expect(TOOLBAR_STYLES).toContain("inset: -5px;");
+    // Keyboard activation opens the editor (localized label + Enter).
+    marker.focus();
+    await user.keyboard("{Enter}");
+    expect(
+      screen.getByRole("dialog", { name: "Annotation editor" })
+    ).toBeInTheDocument();
+  });
+
+  it("G03-04: clicking a list item focuses the target, opens the editor and highlights it", async () => {
+    const user = userEvent.setup();
+    markerElement("Alice", "row-g03-focus");
+    taskRoutes([
+      {
+        annotationId: "ann-g03-focus",
+        kind: "element",
+        comment: "click me",
+        createdAt: "2026-08-10T00:00:00.000Z",
+        status: "open",
+        elements: [captureOf("row-g03-focus")],
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await screen.findByRole("button", { name: "Annotation 1: open editor" });
+    await openListPanel(user);
+    // Click the item body (the selectable comment span).
+    await user.click(
+      screen.getByRole("button", { name: "Annotation 1: select" })
+    );
+    // The target received focus before the editor mounted (scrollIntoView
+    // is a no-op in jsdom); the editor's own autofocus then takes over as
+    // the typing surface — the effective focus is inside the editor.
+    const editor = screen.getByRole("dialog", { name: "Annotation editor" });
+    expect(editor.contains(document.activeElement)).toBe(true);
+    // The editor opens and the target is highlighted while it is open.
+    expect(editor).toBeInTheDocument();
+    expect(document.querySelector(".ps-marker-highlight")).not.toBeNull();
+  });
+
+  it("G03-08b: open panels paint ABOVE page markers (z-index ladder, blocker regression)", async () => {
+    // The blocker: .ps-marker-anchor (2147483002) used to cover the
+    // z-index-less panels — the list's stable numbers were hidden under
+    // page markers. The panel group must sit above 3002 and the ladder
+    // 3002 < panels 3003 < editor 3004 < fallback 3005 < tooltip 3006 <
+    // composer 3007 < toast 3008 must hold (relative topmost order of
+    // editor/composer/tooltip/toast preserved).
+    expect(TOOLBAR_STYLES).toContain("z-index: 2147483002;"); // markers
+    expect(TOOLBAR_STYLES).toContain("z-index: 2147483003;"); // panels
+    expect(TOOLBAR_STYLES).toContain("z-index: 2147483004;"); // editor
+    expect(TOOLBAR_STYLES).toContain("z-index: 2147483005;"); // fallback
+    expect(TOOLBAR_STYLES).toContain("z-index: 2147483006;"); // tooltip
+    expect(TOOLBAR_STYLES).toContain("z-index: 2147483007;"); // composer
+    expect(TOOLBAR_STYLES).toContain("z-index: 2147483008;"); // toast
+    // The panel z-index lives in the SHARED Status/Help/List group (no
+    // side effects: all three panels get the same layer).
+    const group =
+      /(\.ps-status-panel,\s*\.ps-help-popover,\s*\.ps-list-panel\s*\{[^}]*z-index: 2147483003;)/;
+    expect(TOOLBAR_STYLES).toMatch(group);
+  });
+
+  it("G03-08: the list panel's internal scroll cannot chain to the page (overscroll-behavior: contain)", async () => {
+    const user = userEvent.setup();
+    taskRoutes([
+      {
+        annotationId: "ann-g03-scroll",
+        kind: "region",
+        comment: "region item",
+        createdAt: "2026-08-10T00:00:00.000Z",
+        status: "open",
+        elements: [],
+        region: { x: 100, y: 100, width: 200, height: 120 },
+      },
+    ]);
+    render(<StudioToolbar config={config} />);
+    await openListPanel(user);
+    // The anchored panels all contain scroll chaining (G03-08).
+    expect(TOOLBAR_STYLES).toContain("overscroll-behavior: contain");
+    expect(TOOLBAR_STYLES).toContain(".ps-list-panel");
+    const panel = screen.getByRole("region", { name: "Annotations" });
+    expect(panel).toBeInTheDocument();
   });
 });
