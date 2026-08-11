@@ -3551,6 +3551,11 @@ describe("StudioToolbar", () => {
     expect(postedTaskIds).toHaveLength(2);
     expect(postedTaskIds[0]).toBe(postedTaskIds[1]);
     expect((postedTaskBodies[1] as { annotations: unknown[] }).annotations).toHaveLength(2);
+    // G04-03: createdAt is IMMUTABLE — the second add preserves the
+    // original creation time of the active task.
+    const firstBody = postedTaskBodies[0] as { createdAt: string };
+    const secondBody = postedTaskBodies[1] as { createdAt: string };
+    expect(secondBody.createdAt).toBe(firstBody.createdAt);
   });
 
   it("taskId lifecycle: a new batch after FULL completion starts a fresh taskId", async () => {

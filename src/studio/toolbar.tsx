@@ -2077,7 +2077,14 @@ export function StudioToolbar({
     const task: PortalStudioTask = {
       schemaVersion: TASK_SCHEMA_VERSION,
       taskId,
-      createdAt: new Date().toISOString(),
+      // Goal 04 C: createdAt is IMMUTABLE — preserved while annotations
+      // are added to the active task; only a genuinely NEW task (no
+      // existing task, or a fresh batch after full completion) gets a
+      // new creation time.
+      createdAt:
+        !existingTask || fullyCompleted
+          ? new Date().toISOString()
+          : existingTask.createdAt,
       url: window.location.href,
       title: document.title,
       // New batch after full completion: the completed task is superseded

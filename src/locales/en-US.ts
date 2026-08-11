@@ -138,7 +138,7 @@ export const starter = {
   "studio.savedToast": "Annotation saved",
   "studio.errorSave": "Unable to save",
   "studio.sessionStale":
-    "Portal Studio 端点拒绝了请求（404）——开发服务器可能已重启（请刷新页面），或当前来源不受信任（仅开发机可用，除非插件启用 allowRemote）",
+    "The Portal Studio endpoint rejected the request (404) — the dev server may have restarted (refresh the page), or the current origin is untrusted (dev machine only, unless the plugin enables allowRemote)",
   "studio.selectRegion": "Select region",
   "studio.multiSelect": "Multi-select",
   "studio.multiHint": "Multi-select: click to toggle elements in/out of ONE annotation. Arrow keys move, Space toggles, Enter opens the comment editor, Esc cancels.",

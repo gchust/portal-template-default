@@ -34,7 +34,6 @@ import type { Plugin, ViteDevServer } from "vite";
 
 import {
   atomicWriteSessionFile,
-  atomicWriteTaskFile,
   buildHeartbeatReport,
   buildRevisionInfo,
   clearActiveTask,
@@ -60,10 +59,9 @@ import {
   sanitizeDiagnostics,
   sanitizeTask,
   SESSION_FILENAME,
-  stampTaskRevision,
   updateActiveTaskEvidence,
   verifySessionToken,
-  writeActiveTaskWithRevision,
+  writeActiveTaskSerialized,
 } from "./endpoint";
 import { existsSync, readFileSync } from "node:fs";
 import { isTaskCompleted } from "./format.ts";
@@ -761,65 +759,79 @@ export function portalStudioPlugin(
               writeJsonResponse(response, 400, { error: "invalid_mutation_request" });
               return;
             }
-            const current = readActiveTask(studioRoot);
-            if (!current) {
-              writeJsonResponse(response, 404, { error: "no_active_task" });
-              return;
-            }
-            // P2-2 review: the typed ops apply against the NORMALIZED v5
-            // task (legacy v1–v4 artifacts have no annotations[] and would
-            // crash the pure apply). normalizeTask is lossless (D-033 #17)
-            // and rejects unrecognized payloads.
-            const normalizedCurrent = normalizeTask(current);
-            if (!normalizedCurrent) {
-              writeJsonResponse(response, 400, { error: "invalid_task" });
-              return;
-            }
-            if (request.taskId !== normalizedCurrent.taskId) {
-              writeJsonResponse(response, 400, { error: "task_id_mismatch" });
-              return;
-            }
-            const currentRevision = readTaskRevision(studioRoot);
-            if (request.expectedTaskRevision !== currentRevision) {
-              // 409 + current metadata/task → refresh + retry + conflict UI.
-              writeJsonResponse(response, 409, {
-                ok: false,
-                error: "revision_conflict",
-                taskRevision: currentRevision,
-                task: current,
-              });
-              return;
-            }
-            const applied = applyMutationOperations(
-              normalizedCurrent,
-              request.operations
-            );
-            if (!applied.ok) {
+            // Goal 04 B / §13: the typed mutation runs at the ONE
+            // authoritative serialized write boundary — the locked
+            // authoritative read, the expected-revision validation, the
+            // normalize+apply+sanitize merge, the revision/updatedAt stamp
+            // and the atomic persist are ONE critical section. A stale
+            // writer gets a 409 (refresh + retry + conflict UI) and never
+            // writes stale whole-task JSON.
+            const written = writeActiveTaskSerialized(studioRoot, {
+              expectedTaskRevision: request.expectedTaskRevision,
+              apply: (authoritative) => {
+                if (!authoritative) {
+                  return { ok: false, error: "no_active_task" };
+                }
+                // P2-2 review: the typed ops apply against the NORMALIZED
+                // v5 task (legacy v1–v4 artifacts have no annotations[]
+                // and would crash the pure apply).
+                const normalized = normalizeTask(authoritative);
+                if (!normalized) return { ok: false, error: "invalid_task" };
+                if (request.taskId !== normalized.taskId) {
+                  return { ok: false, error: "task_id_mismatch" };
+                }
+                const applied = applyMutationOperations(
+                  normalized,
+                  request.operations
+                );
+                if (!applied.ok) return applied;
+                // Defense in depth: the merged task passes the same server
+                // whitelist sanitizer as the create path (redaction,
+                // bounds, additive evidence, pageContext preserved).
+                const sanitized = sanitizeTask(applied.task, {
+                  studioRoot,
+                });
+                if (!sanitized) {
+                  return { ok: false, error: "invalid_task" };
+                }
+                return { ok: true, task: sanitized };
+              },
+            });
+            if (!written.ok) {
+              if (written.error === "revision_conflict") {
+                // 409 + current metadata/task → refresh + retry + UI.
+                writeJsonResponse(response, 409, {
+                  ok: false,
+                  error: "revision_conflict",
+                  taskRevision: written.taskRevision,
+                  task: written.task,
+                });
+                return;
+              }
+              if (written.error === "no_active_task") {
+                writeJsonResponse(response, 404, { error: "no_active_task" });
+                return;
+              }
+              if (written.error === "lock_timeout") {
+                writeJsonResponse(response, 503, { error: "write_busy" });
+                return;
+              }
               writeJsonResponse(response, 400, {
                 error:
-                  applied.error === "annotation_not_found"
+                  written.error === "annotation_not_found"
                     ? "annotation_not_found"
-                    : "invalid_mutation",
+                    : written.error === "task_id_mismatch"
+                      ? "task_id_mismatch"
+                      : "invalid_mutation",
               });
-              return;
-            }
-            // Defense in depth: the merged task passes the same server
-            // whitelist sanitizer as the create path (redaction, bounds,
-            // additive evidence, pageContext preserved).
-            const sanitized = sanitizeTask(applied.task, { studioRoot });
-            if (!sanitized) {
-              writeJsonResponse(response, 400, { error: "invalid_task" });
-              return;
-            }
-            const written = writeActiveTaskWithRevision(studioRoot, sanitized);
-            if (!written.ok) {
-              writeJsonResponse(response, 400, { error: "write_failed" });
               return;
             }
             writeJsonResponse(response, 200, {
               ok: true,
               taskRevision: written.revision,
-              task: sanitized,
+              // The authoritative persisted task (the mutation client uses
+              // it to update its local mirror).
+              task: readActiveTask(studioRoot),
             });
             return;
           }
@@ -934,75 +946,82 @@ export function portalStudioPlugin(
           }
 
           // P2-3 review: the create/save POST is revision-aware when the
-          // client supplies its last-known taskRevision. If the artifact
-          // moved (another client, or an agent-side DELETE/CLI completion
-          // between the browser's last fetch and this save), return 409
-          // with the current state instead of silently overwriting it.
+          // client supplies its last-known taskRevision.
           const rawRecord = isRecordLike(raw) ? raw : {};
           const expectedCreateRevision =
             typeof rawRecord.expectedTaskRevision === "number"
               ? rawRecord.expectedTaskRevision
               : undefined;
-          if (expectedCreateRevision !== undefined) {
-            const currentOnDisk = readActiveTask(studioRoot);
-            const currentRevision = readTaskRevision(studioRoot);
-            if (expectedCreateRevision !== currentRevision) {
-              writeJsonResponse(response, 409, {
-                ok: false,
-                error: "revision_conflict",
-                taskRevision: currentRevision,
-                task: currentOnDisk,
-              });
-              return;
-            }
-          }
-
-          const names = task.annotations.flatMap((annotation) =>
-            annotation.elements.flatMap((element) =>
-              element.componentCandidates
-                .map((candidate) => candidate.name)
-                .filter((name): name is string => typeof name === "string")
-            )
-          );
-          const resolved = resolveComponentSources(server, names, root);
-          const finalized = serializeTaskArtifact(task, resolved, sessionToken);
-          if (!finalized.ok) {
-            writeJsonResponse(response, 400, {
-              error: "artifact_too_large",
-            });
-            return;
-          }
-          // Stamp the initial revision bookkeeping (schema v4): the source
-          // revision is the pre-edit baseline; the browser revision is the
-          // latest bootstrap counter; state starts as pending.
-          const stampedTask = JSON.parse(finalized.serialized) as PortalStudioTask;
-          stampedTask.revision = buildRevisionInfo(
-            computeTaskSourceRevision(stampedTask),
-            lastIssuedBrowserRevision,
-            false,
-            "pending",
-            Date.now()
-          );
-          // Goal 05: the server-owned monotonic taskRevision is stamped on
-          // every successful task write (distinct from task.revision).
-          stampTaskRevision(stampedTask, studioRoot);
-          const stamped = JSON.stringify(stampedTask, null, 2);
-          if (Buffer.byteLength(stamped, "utf8") > MAX_ARTIFACT_BYTES) {
-            writeJsonResponse(response, 400, { error: "artifact_too_large" });
-            return;
-          }
-
-          // Replace lifecycle, transaction-safe: only READ the superseded
-          // task's screenshot reference before the write; delete it only
-          // AFTER the new task is durably written, and only when the new
-          // task does not reuse the same screenshot path (a same-path
-          // screenshot was already overwritten by its own POST and must be
-          // kept).
+          // Replace lifecycle: READ the superseded screenshot reference
+          // BEFORE the write (best-effort cleanup of the replaced task's
+          // PNG, never a data-loss path).
           const supersededScreenshot = readReferencedScreenshot(
             studioRoot,
             resolveActiveTaskPath(studioRoot)
           );
-          atomicWriteTaskFile(studioRoot, "active-task.json", stamped);
+          // Goal 04 B / §13: the whole-task save runs at the ONE
+          // authoritative serialized write boundary — the locked
+          // authoritative read, the expected-revision validation (a stale
+          // browser POST returns 409 and NEVER writes stale whole-task
+          // JSON), the resolve+finalize merge, the revision/updatedAt
+          // stamp and the atomic persist are ONE critical section.
+          let resolved: SourceCandidate[] = [];
+          const written = writeActiveTaskSerialized(studioRoot, {
+            expectedTaskRevision: expectedCreateRevision,
+            apply: (authoritative) => {
+              void authoritative;
+              const names = task.annotations.flatMap((annotation) =>
+                annotation.elements.flatMap((element) =>
+                  element.componentCandidates
+                    .map((candidate) => candidate.name)
+                    .filter(
+                      (name): name is string => typeof name === "string"
+                    )
+                )
+              );
+              resolved = resolveComponentSources(server, names, root);
+              const finalized = serializeTaskArtifact(
+                task,
+                resolved,
+                sessionToken
+              );
+              if (!finalized.ok) {
+                return { ok: false, error: "artifact_too_large" };
+              }
+              // Stamp the initial revision bookkeeping (schema v4): the
+              // source revision is the pre-edit baseline; the browser
+              // revision is the latest bootstrap counter; state starts as
+              // pending.
+              const stampedTask = JSON.parse(
+                finalized.serialized
+              ) as PortalStudioTask;
+              stampedTask.revision = buildRevisionInfo(
+                computeTaskSourceRevision(stampedTask),
+                lastIssuedBrowserRevision,
+                false,
+                "pending",
+                Date.now()
+              );
+              return { ok: true, task: stampedTask };
+            },
+          });
+          if (!written.ok) {
+            if (written.error === "revision_conflict") {
+              writeJsonResponse(response, 409, {
+                ok: false,
+                error: "revision_conflict",
+                taskRevision: written.taskRevision,
+                task: written.task,
+              });
+              return;
+            }
+            if (written.error === "lock_timeout") {
+              writeJsonResponse(response, 503, { error: "write_busy" });
+              return;
+            }
+            writeJsonResponse(response, 400, { error: written.error });
+            return;
+          }
           if (
             supersededScreenshot &&
             supersededScreenshot !== task.screenshot?.file
@@ -1018,7 +1037,7 @@ export function portalStudioPlugin(
             sourceCandidates: resolved,
             // P2-3 review: the create response carries the stamped revision
             // so the client keeps its baseline in sync.
-            taskRevision: readTaskRevision(studioRoot),
+            taskRevision: written.revision,
           });
         }
       );

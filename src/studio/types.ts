@@ -201,7 +201,11 @@ export type Annotation = {
 export type PortalStudioTask = {
   schemaVersion: typeof TASK_SCHEMA_VERSION;
   taskId: string;
+  /** Immutable creation time — preserved across adds (Goal 04 C). */
   createdAt: string;
+  /** Last successful mutation time — stamped on every task write
+   *  (server, CLI and browser share the single stamp path). */
+  updatedAt?: string;
   url: string;
   title: string;
   annotations: Annotation[];

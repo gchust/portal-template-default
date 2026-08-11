@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   atomicWriteScreenshot,
@@ -39,6 +39,8 @@ import {
   sanitizeTask,
   verifySessionToken,
 } from "@/studio/endpoint";
+import { applyMutationOperations } from "@/studio/mutation";
+import { normalizeTask } from "@/studio/task-model";
 import {
   TASK_SCHEMA_VERSION,
   TASK_SCHEMA_VERSION_V1,
@@ -1455,6 +1457,408 @@ describe("Goal 05 — server-owned monotonic taskRevision", () => {
     const task = readActiveTask(root);
     expect(task?.taskRevision).toBe(2);
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("G04-03: updatedAt is MONOTONIC — two writes under the SAME fixed clock persist strictly increasing timestamps (no sleep)", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      const first = writeActiveTaskWithRevision(root, sampleTask());
+      expect(first.ok).toBe(true);
+      const task1 = readActiveTask(root);
+      expect(task1?.updatedAt).toBe("2026-01-01T00:00:00.000Z");
+      // The clock does NOT advance between the two writes — the stamp
+      // must still strictly increase (previous + 1ms floor).
+      const second = writeActiveTaskWithRevision(root, {
+        ...task1!,
+        annotations: task1!.annotations,
+      });
+      expect(second.ok).toBe(true);
+      const task2 = readActiveTask(root);
+      expect(task2?.updatedAt).toBe("2026-01-01T00:00:00.001Z");
+      expect(task2!.updatedAt! > task1!.updatedAt!).toBe(true);
+      // A third write under the SAME clock keeps increasing.
+      const third = writeActiveTaskWithRevision(root, {
+        ...task2!,
+        annotations: task2!.annotations,
+      });
+      expect(third.ok).toBe(true);
+      expect(readActiveTask(root)?.updatedAt).toBe(
+        "2026-01-01T00:00:00.002Z"
+      );
+      // createdAt is untouched by writes (immutable identity).
+      expect(readActiveTask(root)?.createdAt).toBe(task1?.createdAt);
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: the REAL browser whole-task save chain — fresh POST literals without updatedAt, twice in the SAME millisecond, strictly increase", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-02T00:00:00.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      // The browser's saveTask builds its POST as a FRESH object literal
+      // that never contains updatedAt (matching src/studio/toolbar.tsx).
+      const buildPost = () => {
+        const base = sampleTask();
+        return {
+          schemaVersion: base.schemaVersion,
+          taskId: base.taskId,
+          createdAt: base.createdAt,
+          url: base.url,
+          title: base.title,
+          annotations: base.annotations,
+          businessContext: base.businessContext,
+          redaction: base.redaction,
+        };
+      };
+      // The EXACT vite save-handler chain, run twice in the same
+      // millisecond: sanitizeTask(post) → stamp seeded with the
+      // SUPERSEDED task's updatedAt from disk → persist.
+      const saveOnce = (): string => {
+        const sanitized = sanitizeTask(buildPost(), { studioRoot: root });
+        expect(sanitized).not.toBeNull();
+        // stampTaskRevision derives the floor INTERNALLY from the
+        // authoritative persisted active task (plus the incoming task's
+        // own updatedAt when present — the fresh POST has none).
+        const revisionBefore = readTaskRevision(root);
+        const stamped = stampTaskRevision(sanitized!, root);
+        expect(stamped).toBe(revisionBefore + 1);
+        // The real handler persists via atomicWriteTaskFile (the stamp
+        // above is the ONLY stamp of this save).
+        atomicWriteTaskFile(
+          root,
+          "active-task.json",
+          JSON.stringify(sanitized!)
+        );
+        return readActiveTask(root)!.updatedAt!;
+      };
+      // INITIAL browser save: fresh creation — no persisted task exists
+      // (readActiveTask → null), the POST omits updatedAt → the stamp is
+      // the current time and the disk task carries it + revision 1.
+      expect(saveOnce()).toBe("2026-01-02T00:00:00.000Z");
+      expect(readActiveTask(root)?.taskRevision).toBe(1);
+      expect(readActiveTask(root)?.updatedAt).toBe(
+        "2026-01-02T00:00:00.000Z"
+      );
+      // Second save in the SAME millisecond: the fresh POST still has no
+      // updatedAt — the superseded floor makes the stamp strictly
+      // increase instead of persisting an identical value.
+      expect(saveOnce()).toBe("2026-01-02T00:00:00.001Z");
+      expect(readActiveTask(root)?.createdAt).toBe(sampleTask().createdAt);
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: sanitizeTask PRESERVES updatedAt (the mutate path's rebuild keeps the monotonic floor)", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-03T00:00:00.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      const first = writeActiveTaskWithRevision(root, sampleTask());
+      expect(first.ok).toBe(true);
+      // The FULL typed browser mutation chain, exactly as the vite mutate
+      // handler runs it: read the disk task → normalize → apply a typed op
+      // → sanitizeTask rebuild → write. The chain is executed TWICE under
+      // the same frozen clock; updatedAt must survive every rebuild and
+      // strictly increase on every write.
+      const mutateOnce = () => {
+        const current = readActiveTask(root)!;
+        const normalized = normalizeTask(current)!;
+        const applied = applyMutationOperations(normalized, [
+          { op: "setHidden", annotationId: normalized.annotations[0].annotationId, hidden: true },
+        ]);
+        expect(applied.ok).toBe(true);
+        const sanitized = sanitizeTask(applied.task, { studioRoot: root });
+        expect(sanitized).not.toBeNull();
+        const written = writeActiveTaskWithRevision(root, sanitized!);
+        expect(written.ok).toBe(true);
+        return readActiveTask(root)!.updatedAt!;
+      };
+      // The setup write stamped 00.000Z; the FIRST mutation in the same
+      // millisecond floors to 00.001Z…
+      const firstStamp = mutateOnce();
+      expect(firstStamp).toBe("2026-01-03T00:00:00.001Z");
+      // …and the SECOND same-millisecond mutation strictly increases again.
+      const secondStamp = mutateOnce();
+      expect(secondStamp).toBe("2026-01-03T00:00:00.002Z");
+      expect(secondStamp > firstStamp).toBe(true);
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: the floor is the GREATEST valid timestamp of incoming + persisted (max rule)", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-04T00:00:00.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      // The persisted active task carries a NEWER updatedAt than the
+      // incoming task — the greatest wins, and the clock (00.000Z) is
+      // below the floor: stamp = max(now, floor + 1ms) = floor + 1ms.
+      atomicWriteTaskFile(
+        root,
+        "active-task.json",
+        JSON.stringify({ ...sampleTask(), updatedAt: "2026-01-04T00:00:05.000Z" })
+      );
+      const incomingOlder = {
+        ...sampleTask(),
+        updatedAt: "2026-01-04T00:00:03.000Z",
+      };
+      stampTaskRevision(incomingOlder, root);
+      expect(incomingOlder.updatedAt).toBe("2026-01-04T00:00:05.001Z");
+      // The INCOMING task carries the newer value → the greatest still
+      // wins (strictly above the persisted floor).
+      const incomingNewer = {
+        ...sampleTask(),
+        updatedAt: "2026-01-04T00:00:07.000Z",
+      };
+      stampTaskRevision(incomingNewer, root);
+      expect(incomingNewer.updatedAt).toBe("2026-01-04T00:00:07.001Z");
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: legacy tasks WITHOUT updatedAt (incoming and persisted) get the current time and then floor strictly", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-05T00:00:00.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      // A legacy v4 artifact on disk — no updatedAt anywhere. The server
+      // normalizes on read (exactly like the mutate handler), then the
+      // first mutation stamps the CURRENT time…
+      const legacyV4 = {
+        schemaVersion: TASK_SCHEMA_VERSION_V4,
+        taskId: "legacy-v4-stamp",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        url: "http://127.0.0.1:4173/users",
+        title: "Users",
+        instruction: "Legacy note",
+        elements: [],
+      };
+      atomicWriteTaskFile(root, "active-task.json", JSON.stringify(legacyV4));
+      const normalized = normalizeTask(readActiveTask(root)!)!;
+      expect(normalized.updatedAt).toBeUndefined();
+      const first = writeActiveTaskWithRevision(root, normalized);
+      expect(first.ok).toBe(true);
+      expect(readActiveTask(root)?.updatedAt).toBe(
+        "2026-01-05T00:00:00.000Z"
+      );
+      // …and a SECOND same-millisecond mutation floors strictly above the
+      // freshly stamped value.
+      const second = writeActiveTaskWithRevision(root, {
+        ...readActiveTask(root)!,
+      });
+      expect(second.ok).toBe(true);
+      expect(readActiveTask(root)?.updatedAt).toBe(
+        "2026-01-05T00:00:00.001Z"
+      );
+      // createdAt of the legacy task survives (identity).
+      expect(readActiveTask(root)?.createdAt).toBe(legacyV4.createdAt);
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: sanitizeTask → writeActiveTaskWithRevision — the SECOND incoming task omits updatedAt, SAME fixed clock stays strictly increasing", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-09T00:00:00.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      // Every incoming task is a FRESH literal that deliberately omits
+      // updatedAt (browser-style POST), run through the EXACT
+      // sanitizeTask → writeActiveTaskWithRevision pair.
+      const saveViaWrite = (): string => {
+        const base = sampleTask();
+        const sanitized = sanitizeTask(
+          {
+            schemaVersion: base.schemaVersion,
+            taskId: base.taskId,
+            createdAt: base.createdAt,
+            url: base.url,
+            title: base.title,
+            annotations: base.annotations,
+            businessContext: base.businessContext,
+            redaction: base.redaction,
+          },
+          { studioRoot: root }
+        );
+        expect(sanitized).not.toBeNull();
+        const written = writeActiveTaskWithRevision(root, sanitized!);
+        expect(written.ok).toBe(true);
+        return readActiveTask(root)!.updatedAt!;
+      };
+      expect(saveViaWrite()).toBe("2026-01-09T00:00:00.000Z");
+      expect(saveViaWrite()).toBe("2026-01-09T00:00:00.001Z");
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: sanitizeTask → writeActiveTaskWithRevision with a MOVED-BACKWARD clock still strictly increases", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-10T00:00:05.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      const saveViaWrite = (): string => {
+        const base = sampleTask();
+        const sanitized = sanitizeTask(
+          {
+            schemaVersion: base.schemaVersion,
+            taskId: base.taskId,
+            createdAt: base.createdAt,
+            url: base.url,
+            title: base.title,
+            annotations: base.annotations,
+            businessContext: base.businessContext,
+            redaction: base.redaction,
+          },
+          { studioRoot: root }
+        );
+        expect(sanitized).not.toBeNull();
+        const written = writeActiveTaskWithRevision(root, sanitized!);
+        expect(written.ok).toBe(true);
+        return readActiveTask(root)!.updatedAt!;
+      };
+      expect(saveViaWrite()).toBe("2026-01-10T00:00:05.000Z");
+      // The clock moves BACKWARD — the stamp must not regress.
+      vi.setSystemTime(new Date("2026-01-10T00:00:04.000Z"));
+      expect(saveViaWrite()).toBe("2026-01-10T00:00:05.001Z");
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: the stamp is MODULE-STATE-FREE — no hidden state leaks across roots", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-08T00:00:00.000Z"));
+      const rootA = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(rootA, "tasks"), { recursive: true });
+      const rootB = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(rootB, "tasks"), { recursive: true });
+      const taskA = { ...sampleTask(), taskId: "root-a" };
+      stampTaskRevision(taskA, rootA);
+      expect(taskA.updatedAt).toBe("2026-01-08T00:00:00.000Z");
+      // A COMPLETELY SEPARATE root with an EARLIER clock: its first stamp
+      // must be its OWN current time — if any module-level state existed,
+      // root A's value would leak into this stamp.
+      vi.setSystemTime(new Date("2020-01-01T00:00:00.000Z"));
+      const taskB = { ...sampleTask(), taskId: "root-b" };
+      stampTaskRevision(taskB, rootB);
+      expect(taskB.updatedAt).toBe("2020-01-01T00:00:00.000Z");
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: malformed timestamps are IGNORED (fall back to the current clock, never throw)", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-06T00:00:00.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      // Both sources carry malformed values — neither may poison the
+      // stamp or throw.
+      atomicWriteTaskFile(
+        root,
+        "active-task.json",
+        JSON.stringify({ ...sampleTask(), updatedAt: "garbage" })
+      );
+      const incoming = { ...sampleTask(), updatedAt: "not-a-timestamp" };
+      expect(() => stampTaskRevision(incoming, root)).not.toThrow();
+      expect(incoming.updatedAt).toBe("2026-01-06T00:00:00.000Z");
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: Date range OVERFLOW is clamped so toISOString can never throw", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-07T00:00:00.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      // The persisted task sits at the ECMAScript Date maximum (the
+      // expanded-year form parses to 8.64e15 ms) — the +1 ms floor would
+      // overflow the representable range and toISOString would throw
+      // ("Invalid time value") without the clamp.
+      const maxIso = "+275760-09-13T00:00:00.000Z";
+      atomicWriteTaskFile(
+        root,
+        "active-task.json",
+        JSON.stringify({ ...sampleTask(), updatedAt: maxIso })
+      );
+      const incoming = { ...sampleTask(), updatedAt: maxIso };
+      expect(() => stampTaskRevision(incoming, root)).not.toThrow();
+      // Clamped to the max representable instant (no throw, no NaN).
+      expect(incoming.updatedAt).toBe(maxIso);
+      // A second stamp at the ceiling saturates safely (monotonicity is
+      // bounded by the ISO-8601 Date format) — never throws.
+      expect(() => stampTaskRevision(incoming, root)).not.toThrow();
+      expect(incoming.updatedAt).toBe(maxIso);
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("G04-03: sanitizeTask REJECTS an invalid updatedAt (server-authoritative validation)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+    mkdirSync(path.join(root, "tasks"), { recursive: true });
+    const withBadUpdatedAt = {
+      ...sampleTask(),
+      updatedAt: "not-a-timestamp",
+    };
+    expect(sanitizeTask(withBadUpdatedAt, { studioRoot: root })).toBeNull();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("G04-03: a CLOCK-MOVED-BACKWARD write still strictly increases updatedAt", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
+      const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
+      mkdirSync(path.join(root, "tasks"), { recursive: true });
+      const first = writeActiveTaskWithRevision(root, sampleTask());
+      expect(first.ok).toBe(true);
+      expect(readActiveTask(root)?.updatedAt).toBe(
+        "2026-01-01T00:00:05.000Z"
+      );
+      // The clock moves BACKWARD — the stamp must not regress.
+      vi.setSystemTime(new Date("2026-01-01T00:00:04.000Z"));
+      const second = writeActiveTaskWithRevision(root, {
+        ...readActiveTask(root)!,
+      });
+      expect(second.ok).toBe(true);
+      expect(readActiveTask(root)?.updatedAt).toBe(
+        "2026-01-01T00:00:05.001Z"
+      );
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("updateActiveTaskEvidence bumps the revision on successful evidence mutations", () => {

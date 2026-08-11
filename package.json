@@ -80,6 +80,7 @@
     "sonner": "^2.0.3",
     "tailwind-merge": "^3.2.0",
     "tailwindcss": "^4.1.4",
+    "tsx": "^4.23.12",
     "tw-animate-css": "^1.2.5",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.30.1",
@@ -111,9 +112,9 @@
     "start": "refine start",
     "refine": "refine",
     "sdk:check": "pnpm exec portal-sdk check",
-    "studio:list": "node ./scripts/portal-studio-agent.mjs list",
-    "studio:complete": "node ./scripts/portal-studio-agent.mjs complete",
-    "studio:reopen": "node ./scripts/portal-studio-agent.mjs reopen"
+    "studio:list": "tsx ./scripts/portal-studio-agent.mjs list",
+    "studio:complete": "tsx ./scripts/portal-studio-agent.mjs complete",
+    "studio:reopen": "tsx ./scripts/portal-studio-agent.mjs reopen"
   },
   "browserslist": {
     "production": [

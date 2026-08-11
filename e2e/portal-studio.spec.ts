@@ -3538,3 +3538,125 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
   await expect(root.locator(".ps-composer")).toHaveCount(0);
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 });
+
+// =====================================================================
+// Goal 04 — Agent CLI and Task Reliability (G04-01..G04-10)
+// =====================================================================
+
+test("G04: timestamps (createdAt immutable / updatedAt changes), Copy completion command, package-script CLI completion", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor();
+  const root = page.locator("#portal-studio-root");
+  await openStudio(page);
+
+  // G04-03: two browser adds — taskId stable, createdAt IMMUTABLE,
+  // updatedAt changes on the second mutation.
+  await startPicking(page);
+  await page.locator("tbody tr").first().hover();
+  await page.locator("tbody tr").first().click();
+  await page.locator("#portal-studio-root textarea").fill("G04 timestamp one");
+  await page.keyboard.press("Control+Enter");
+  await expect(
+    root.locator(".ps-save-toast", { hasText: "Annotation saved" })
+  ).toBeVisible();
+  const afterFirst = readActiveTask();
+  expect(typeof afterFirst.createdAt).toBe("string");
+  expect(typeof afterFirst.updatedAt).toBe("string");
+  const firstUpdatedAt = afterFirst.updatedAt!;
+  await page.waitForTimeout(1200);
+  await startPicking(page);
+  await page.locator("tbody tr").first().locator("td").nth(1).hover();
+  await page.locator("tbody tr").first().locator("td").nth(1).click();
+  await page.locator("#portal-studio-root textarea").fill("G04 timestamp two");
+  await page.keyboard.press("Control+Enter");
+  await expectOpenCount(root, "2");
+  const afterSecond = readActiveTask();
+  expect(afterSecond.taskId).toBe(afterFirst.taskId);
+  expect(afterSecond.createdAt).toBe(afterFirst.createdAt);
+  expect(afterSecond.updatedAt).not.toBe(firstUpdatedAt);
+  expect(afterSecond.updatedAt! > firstUpdatedAt).toBe(true);
+
+  // G04-03: Copy instructions include the REAL working completion command.
+  await root.getByRole("button", { name: "Copy annotations" }).click();
+  let copied = "";
+  await expect
+    .poll(
+      async () => {
+        const fb = root.locator(".ps-copy-fallback textarea");
+        if (await fb.isVisible().catch(() => false)) {
+          copied = await fb.inputValue();
+        } else {
+          copied = await page.evaluate(() =>
+            navigator.clipboard.readText().catch(() => "")
+          );
+        }
+        return copied;
+      },
+      { timeout: 15000 }
+    )
+    .toContain("pnpm studio:complete");
+  const annotationId = readActiveTask().annotations[0].annotationId;
+  expect(copied).toContain(
+    `pnpm studio:complete -- ${annotationId} --verified --summary`
+  );
+  await page.keyboard.press("Escape");
+  await expect(root.locator(".ps-copy-fallback")).toHaveCount(0);
+
+  // G04-01/03: run the REAL package script to complete the first
+  // annotation; the artifact reflects it with explicit evidence and a
+  // bumped updatedAt.
+  const updatedBeforeCli = readActiveTask().updatedAt!;
+  const cliEnv = { ...process.env, PORTAL_STUDIO_DIR: studioDir };
+  const completed = execFileSync(
+    "pnpm",
+    [
+      "run",
+      "studio:complete",
+      "--",
+      annotationId,
+      "--verified",
+      "--summary",
+      "verified in the browser flow",
+    ],
+    { encoding: "utf8", env: cliEnv }
+  );
+  expect(completed).toContain("completed");
+  await expect
+    .poll(() => readActiveTask().annotations[0]?.status, { timeout: 3000 })
+    .toBe("completed");
+  const artifact = readActiveTask();
+  expect(artifact.annotations[0].completedEvidence).toMatchObject({
+    verified: true,
+    summary: "verified in the browser flow",
+    source: "cli",
+  });
+  expect(artifact.createdAt).toBe(afterFirst.createdAt);
+  expect(artifact.updatedAt).not.toBe(updatedBeforeCli);
+  // The browser's bounded polling reflects the CLI completion (Open view
+  // empties within the sync target).
+  await openList(page);
+  await expect(root.locator(".ps-annotation-item")).toHaveCount(1, {
+    timeout: 2000,
+  });
+  await barCloseForG04(page);
+});
+
+/** Close the list panel deterministically (helper for the G04 flow). */
+const barCloseForG04 = async (page: import("@playwright/test").Page) => {
+  const root = page.locator("#portal-studio-root");
+  await expect
+    .poll(
+      async () => {
+        if ((await root.locator(".ps-list-panel").count()) > 0) {
+          await page.keyboard.press("Escape");
+        }
+        return (await root.locator(".ps-list-panel").count()) === 0;
+      },
+      { timeout: 10000 }
+    )
+    .toBe(true);
+};

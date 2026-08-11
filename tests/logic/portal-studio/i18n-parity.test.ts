@@ -42,6 +42,7 @@ describe("i18n key-set parity (en-US vs zh-CN)", () => {
       "studio.unresolved",
       "studio.captureFailed",
       "studio.instruction",
+      "studio.sessionStale",
       "studio.composerTitle",
       "studio.composerPlaceholder",
       "studio.saving",

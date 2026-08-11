@@ -81,6 +81,15 @@ const formatElementLines = (elements: ElementCapture[]): string[] => {
 
 const formatAnnotation = (annotation: Annotation): string[] => {
   const lines: string[] = [];
+  // Goal 04 D: Copy/list output uses EACH annotation's own page context.
+  if (annotation.pageContext) {
+    lines.push(
+      `- page: ${annotation.pageContext.routeKey || annotation.pageContext.url}` +
+        (annotation.pageContext.title
+          ? ` (${annotation.pageContext.title})`
+          : "")
+    );
+  }
   if (annotation.region) {
     lines.push(
       `- region: ${annotation.region.x},${annotation.region.y} ${annotation.region.width}x${annotation.region.height}`

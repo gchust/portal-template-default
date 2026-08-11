@@ -15,12 +15,17 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import path from "node:path";
 
@@ -601,6 +606,12 @@ export function updateActiveTaskEvidence(
   ok: boolean;
   error?: "no_active_task" | "artifact_too_large" | "write_failed";
 } {
+  // Goal 04 B / §13: the evidence merge runs inside the SAME
+  // cross-process write lock as every other authoritative writer (the
+  // locked read → merge → revision/updatedAt stamp → atomic persist is
+  // one critical section), so a concurrent browser save or CLI
+  // completion can never be overwritten by a stale evidence write.
+  return withActiveTaskLock(studioRoot, () => {
   const taskPath = resolveActiveTaskPath(studioRoot);
   if (!existsSync(taskPath)) return { ok: false, error: "no_active_task" };
   let task: PortalStudioTask;
@@ -655,6 +666,7 @@ export function updateActiveTaskEvidence(
     removeScreenshotFile(studioRoot, supersededScreenshot);
   }
   return { ok: true };
+  });
 }
 
 // Revision tracking (contract §10, schema v4, Decision Log D-019).
@@ -791,6 +803,14 @@ export function sanitizeTask(
   if (completedAt !== undefined && Number.isNaN(Date.parse(completedAt))) {
     return null;
   }
+  // Goal 04 C: updatedAt is part of the server-authoritative task — the
+  // rebuild must PRESERVE it so the monotonic stamp keeps flooring
+  // against the previous value on EVERY subsequent mutation (e.g. two
+  // same-millisecond mutate writes).
+  const updatedAt = readString(input.updatedAt, 64);
+  if (updatedAt !== undefined && Number.isNaN(Date.parse(updatedAt))) {
+    return null;
+  }
   const screenshot = isV1
     ? undefined
     : options.studioRoot
@@ -876,6 +896,7 @@ export function sanitizeTask(
     ...(diagnostics.length ? { diagnostics } : {}),
     ...(heartbeat ? { heartbeat } : {}),
     ...(completedAt ? { completedAt } : {}),
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
   };
 
   const serialized = JSON.stringify(task);
@@ -1083,15 +1104,174 @@ export function readTaskRevision(studioRoot: string): number {
     : 0;
 }
 
+// ---------------------------------------------------------------------------
+// Goal 04 B / shared contract §13 — cross-process serialized task writes.
+// The active task has ONE authoritative writer at a time: the lock is
+// acquired ATOMICALLY (O_EXCL) before the authoritative read, so the
+// critical section spans read → expected-revision validation → typed
+// apply/merge → revision+updatedAt stamping → atomic persistence. Two
+// concurrent writers (CLI + dev server) can no longer stamp equal
+// revisions or last-writer-wins; a STALE writer (expected revision
+// mismatch against the locked read) fails with a conflict and never
+// writes stale whole-task JSON.
+// ---------------------------------------------------------------------------
+
+const LOCK_DIRECTORY = "locks";
+const LOCK_FILE_NAME = "active-task.lock";
+const LOCK_RETRY_MS = 8;
+const LOCK_DEFAULT_TIMEOUT_MS = 3000;
+const LOCK_STALE_MS = 15000;
+
+/** Raised when the write lock cannot be acquired within the timeout. */
+export class TaskWriteLockError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TaskWriteLockError";
+  }
+}
+
+/** Blocking sleep without yielding the event loop (sync writers). */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Run `critical` while holding the cross-process active-task write lock.
+ * Acquisition is an atomic O_EXCL create carrying a unique token; waits
+ * (bounded) when another writer holds it, breaks locks older than
+ * `staleMs` (crash recovery), and only the token holder releases.
+ */
+export function withActiveTaskLock<T>(
+  studioRoot: string,
+  critical: () => T,
+  options: { timeoutMs?: number; staleMs?: number } = {}
+): T {
+  const lockDirectory = path.join(studioRoot, LOCK_DIRECTORY);
+  mkdirSync(lockDirectory, { recursive: true, mode: 0o700 });
+  const lockPath = path.join(lockDirectory, LOCK_FILE_NAME);
+  const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
+  const timeoutMs = options.timeoutMs ?? LOCK_DEFAULT_TIMEOUT_MS;
+  const staleMs = options.staleMs ?? LOCK_STALE_MS;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const descriptor = openSync(lockPath, "wx", 0o600);
+      writeSync(descriptor, token);
+      closeSync(descriptor);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // Crash recovery: a lock older than the staleness threshold is
+      // broken (the previous holder died mid-write).
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > staleMs) {
+          unlinkSync(lockPath);
+          continue;
+        }
+      } catch {
+        // The lock vanished between stat and unlink — retry.
+      }
+      if (Date.now() >= deadline) {
+        throw new TaskWriteLockError(
+          `timed out waiting for the active-task write lock at ${lockPath}`
+        );
+      }
+      sleepSync(LOCK_RETRY_MS);
+    }
+  }
+  try {
+    return critical();
+  } finally {
+    try {
+      if (readFileSync(lockPath, "utf8") === token) {
+        unlinkSync(lockPath);
+      }
+    } catch {
+      // Lock already released/removed — nothing to do.
+    }
+  }
+}
+
+export type SerializedWriteResult =
+  | { ok: true; revision: number; noop?: boolean }
+  | {
+      ok: false;
+      error: string;
+      taskRevision?: number;
+      task?: PortalStudioTask | null;
+    };
+
+/**
+ * The ONE authoritative task write boundary (Goal 04 B / §13): under the
+ * cross-process lock it reads the authoritative active task, validates the
+ * expected revision (a stale writer gets a conflict and NEVER writes),
+ * runs the typed apply/merge against the locked read, stamps the next
+ * taskRevision + monotonic updatedAt INSIDE the lock (so equal revisions
+ * are impossible), and persists atomically.
+ */
+export function writeActiveTaskSerialized(
+  studioRoot: string,
+  input: {
+    expectedTaskRevision?: number;
+    apply: (
+      authoritative: PortalStudioTask | null
+    ) => { ok: boolean; error?: string; task?: PortalStudioTask };
+  },
+  options: { timeoutMs?: number } = {}
+): SerializedWriteResult {
+  try {
+    return withActiveTaskLock(studioRoot, () => {
+      const current = readActiveTask(studioRoot);
+      const currentRevision = readTaskRevision(studioRoot);
+      if (
+        input.expectedTaskRevision !== undefined &&
+        input.expectedTaskRevision !== currentRevision
+      ) {
+        return {
+          ok: false,
+          error: "revision_conflict",
+          taskRevision: currentRevision,
+          task: current,
+        };
+      }
+      const applied = input.apply(current);
+      if (!applied.ok) {
+        return { ok: false, error: applied.error ?? "invalid_task" };
+      }
+      if (!applied.task) {
+        // Authoritative no-op (e.g. CLI "already completed"): no write.
+        return { ok: true, revision: currentRevision, noop: true };
+      }
+      const revision = stampTaskRevision(applied.task, studioRoot);
+      try {
+        atomicWriteTaskFile(
+          studioRoot,
+          "active-task.json",
+          JSON.stringify(applied.task)
+        );
+      } catch {
+        return { ok: false, error: "write_failed" };
+      }
+      return { ok: true, revision };
+    }, options);
+  } catch (error) {
+    if (error instanceof TaskWriteLockError) {
+      return { ok: false, error: "lock_timeout" };
+    }
+    throw error;
+  }
+}
+
 /**
  * Stamp the next monotonic taskRevision onto a task object in place and
  * return the stamped revision. Pure bookkeeping — does not write.
  *
- * NOTE (review): the counter is file-derived (read current + 1), so the
- * stored sequence never decreases even with stale task objects, but two
- * CONCURRENT writers (CLI + dev server) can stamp equal revisions —
- * last-writer-wins on the whole artifact. Goal 06's fully-atomic write
- * path is the planned hardening for that window.
+ * The counter is file-derived (read current + 1), so the stored sequence
+ * never decreases even with stale task objects. Callers at the
+ * AUTHORITATIVE write boundary MUST invoke this inside
+ * writeActiveTaskSerialized / withActiveTaskLock — the locked read makes
+ * the read+1-+stamp-+persist span atomic, so concurrent writers can no
+ * longer stamp equal revisions or last-writer-wins.
  */
 export function stampTaskRevision(
   task: PortalStudioTask,
@@ -1099,8 +1279,43 @@ export function stampTaskRevision(
 ): number {
   const next = readTaskRevision(studioRoot) + 1;
   task.taskRevision = next;
+  // Goal 04 C: updatedAt changes on EVERY successful mutation — stamped
+  // in the single shared write path (server, CLI, evidence merges). The
+  // monotonic floor is derived from BOTH sources: the incoming task's own
+  // updatedAt (when present) and the AUTHORITATIVE persisted active task
+  // on disk — the GREATEST valid parsed timestamp wins. The stamp is then
+  // max(current clock, floor + 1 ms), so two successful writes that
+  // observe the same (or an earlier, e.g. clock-adjusted) millisecond
+  // still persist strictly increasing timestamps. Tasks (and persisted
+  // tasks) without updatedAt (legacy, or a fresh creation) fall back to
+  // the current time.
+  const floorMs = [task.updatedAt, readActiveTask(studioRoot)?.updatedAt]
+    .map((candidate) => (candidate ? Date.parse(candidate) : Number.NaN))
+    // Malformed or out-of-range timestamps parse to NaN — ignore them;
+    // values beyond the ECMAScript Date range are not representable.
+    .filter(
+      (parsed) =>
+        Number.isFinite(parsed) && Math.abs(parsed) <= MAX_DATE_MS
+    )
+    .reduce(
+      (greatest, parsed) => Math.max(greatest, parsed),
+      Number.NEGATIVE_INFINITY
+    );
+  const now = Date.now();
+  // Guard the +1 ms floor against Date range overflow: the stamp is
+  // clamped to the max representable instant, so toISOString can never
+  // throw. At the representational ceiling the value saturates (strict
+  // monotonicity is bounded by the ISO-8601 Date format).
+  const stampMs = Number.isFinite(floorMs)
+    ? Math.min(Math.max(now, floorMs + 1), MAX_DATE_MS)
+    : Math.min(now, MAX_DATE_MS);
+  task.updatedAt = new Date(stampMs).toISOString();
   return next;
 }
+
+/** ECMAScript Date range bound: ±8,640,000,000,000,000 ms (years ±275760);
+ *  beyond it `new Date(...).toISOString()` throws "Invalid time value". */
+const MAX_DATE_MS = 8_640_000_000_000_000;
 
 /**
  * Atomically write the active task with a freshly incremented

@@ -173,6 +173,42 @@ describe("formatTaskMarkdown — Goal 04 includeCompleted option", () => {
     expect(openOnly).not.toContain("status: completed");
   });
 
+  it("G04-04: Copy output uses EACH annotation's OWN page context (per-annotation page line)", () => {
+    const withPages = {
+      ...v5Fixture,
+      annotations: [
+        {
+          ...v5Fixture.annotations[0],
+          pageContext: {
+            url: "http://127.0.0.1:4173/users",
+            routeKey: "/users",
+            title: "Users",
+          },
+        },
+        {
+          ...v5Fixture.annotations[1],
+          pageContext: {
+            url: "http://127.0.0.1:4173/dev/ai-chat",
+            routeKey: "/dev/ai-chat",
+            title: "AI Chat",
+          },
+        },
+      ],
+    };
+    const markdown = formatTaskMarkdown(withPages);
+    expect(markdown).toContain("- page: /users (Users)");
+    expect(markdown).toContain("- page: /dev/ai-chat (AI Chat)");
+    // Each page line sits under ITS OWN annotation heading.
+    const ann1 = markdown.slice(
+      markdown.indexOf("### Annotation 1"),
+      markdown.indexOf("### Annotation 2")
+    );
+    expect(ann1).toContain("- page: /users (Users)");
+    expect(ann1).not.toContain("/dev/ai-chat");
+    const ann2 = markdown.slice(markdown.indexOf("### Annotation 2"));
+    expect(ann2).toContain("- page: /dev/ai-chat (AI Chat)");
+  });
+
   it("G03-01: the OPEN-only copy keeps FULL-ORDER numbers (1 open / 2 completed / 3 open → Annotation 1 and Annotation 3)", () => {
     const mixed = {
       ...v5Fixture,

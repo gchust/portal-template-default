@@ -25,7 +25,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { ANNOTATION_ID_PATTERN, MAX_COMPLETION_SUMMARY_LENGTH, normalizeTask } from "../src/studio/task-model.ts";
-import { readTaskRevision, writeActiveTaskWithRevision } from "../src/studio/endpoint.ts";
+import {
+  readTaskRevision,
+  writeActiveTaskSerialized,
+} from "../src/studio/endpoint.ts";
 import { applyMutationOperations } from "../src/studio/mutation.ts";
 
 const TASK_FILENAME = "active-task.json";
@@ -148,12 +151,6 @@ function main() {
     return;
   }
 
-  const task = readTask();
-  if (!task) {
-    fail(`no task found at ${path.join(studioRoot(), "tasks", TASK_FILENAME)}`, 1);
-    return;
-  }
-
   if (command === "complete") {
     const parsed = parseCompleteArgs(args);
     if (parsed.error) {
@@ -181,47 +178,68 @@ function main() {
       fail(`--summary must be at most ${MAX_COMPLETION_SUMMARY_LENGTH} characters (got ${summary.length})`, 2);
       return;
     }
-    const annotation = findAnnotation(task, annotationId);
-    if (!annotation) {
-      fail(`annotation "${annotationId}" not found in the active task`, 1);
-      return;
-    }
-    if (annotation.status === "completed") {
-      // No-op: already completed — do not bump the revision or re-stamp.
-      process.stdout.write(`annotation ${annotationId} is already completed (no change).\n`);
-      return;
-    }
-    // Same typed mutation semantics as the browser/server: build a
-    // MutationRequest and apply it through the shared pure contract.
-    const request = {
-      taskId: task.taskId,
-      expectedTaskRevision: readTaskRevision(studioRoot()),
-      operations: [
-        {
-          op: "complete",
-          annotationId,
-          evidence: { verified: true, summary, source: "cli" },
-        },
-      ],
-    };
-    const applied = applyMutationOperations(task, request.operations);
-    if (!applied.ok) {
-      fail(`apply failed: ${applied.error}`, 1);
-      return;
-    }
-    // P2-1 review: compare-and-swap — re-read the artifact's revision
-    // immediately before writing; if another writer (the dev server or a
-    // browser client) moved it, FAIL instead of silently overwriting.
-    if (readTaskRevision(studioRoot()) !== request.expectedTaskRevision) {
+    const expectedTaskRevision = readTaskRevision(studioRoot());
+    // Goal 04 B / shared contract §13: the ONE authoritative write
+    // boundary. The cross-process lock makes the locked read, the
+    // expected-revision validation, the typed apply, the
+    // revision/updatedAt stamp and the atomic persist ONE critical
+    // section — a stale writer (revision moved since this command read
+    // it) fails explicitly and NEVER writes.
+    const result = writeActiveTaskSerialized(studioRoot(), {
+      expectedTaskRevision,
+      apply: (authoritative) => {
+        if (!authoritative) return { ok: false, error: "no_active_task" };
+        // Legacy v1-v4 artifacts normalize on read (like the browser).
+        const normalized = normalizeTask(authoritative);
+        if (!normalized) return { ok: false, error: "invalid_task" };
+        const annotation = findAnnotation(normalized, annotationId);
+        if (!annotation) {
+          return { ok: false, error: "annotation_not_found" };
+        }
+        if (annotation.status === "completed") {
+          // Authoritative no-op: already completed — no write.
+          return { ok: true };
+        }
+        return applyMutationOperations(normalized, [
+          {
+            op: "complete",
+            annotationId,
+            evidence: { verified: true, summary, source: "cli" },
+          },
+        ]);
+      },
+    });
+    if (!result.ok) {
+      if (result.error === "revision_conflict") {
+        fail(
+          `revision conflict: the task changed on disk since this command read it (expected ${expectedTaskRevision}). Re-run the command against the current state.`,
+          1
+        );
+        return;
+      }
+      if (result.error === "no_active_task") {
+        fail(`no task found at ${path.join(studioRoot(), "tasks", TASK_FILENAME)}`, 1);
+        return;
+      }
+      if (result.error === "lock_timeout") {
+        fail(
+          "write lock timed out — another writer (the dev server or a browser) is busy; re-run the command.",
+          1
+        );
+        return;
+      }
       fail(
-        `revision conflict: the task changed on disk since this command read it (expected ${request.expectedTaskRevision}). Re-run the command against the current state.`,
+        result.error === "annotation_not_found"
+          ? `annotation "${annotationId}" not found in the active task`
+          : `apply failed: ${result.error}`,
         1
       );
       return;
     }
-    const result = writeActiveTaskWithRevision(studioRoot(), applied.task);
-    if (!result.ok) {
-      fail(`write failed: ${result.error}`, 1);
+    if (result.noop) {
+      process.stdout.write(
+        `annotation ${annotationId} is already completed (no change).\n`
+      );
       return;
     }
     process.stdout.write(
@@ -241,41 +259,64 @@ function main() {
     fail(`invalid annotation id: ${annotationId}`, 1);
     return;
   }
-  const annotation = findAnnotation(task, annotationId);
-  if (!annotation) {
-    fail(`annotation "${annotationId}" not found in the active task`, 1);
-    return;
-  }
-  if (annotation.status !== "completed") {
-    // No-op: already open — do not bump the revision or rewrite.
-    process.stdout.write(`annotation ${annotationId} is already open (no change).\n`);
-    return;
-  }
-  // Same typed mutation semantics as the browser/server.
-  const request = {
-    taskId: task.taskId,
-    expectedTaskRevision: readTaskRevision(studioRoot()),
-    operations: [{ op: "reopen", annotationId }],
-  };
-  const applied = applyMutationOperations(task, request.operations);
-  if (!applied.ok) {
-    fail(`apply failed: ${applied.error}`, 1);
-    return;
-  }
-  // P2-1 review: compare-and-swap before writing (see complete).
-  if (readTaskRevision(studioRoot()) !== request.expectedTaskRevision) {
+  const expectedTaskRevision = readTaskRevision(studioRoot());
+  // Goal 04 B / §13: the authoritative serialized write boundary (see
+  // complete — identical critical-section semantics).
+  const result = writeActiveTaskSerialized(studioRoot(), {
+    expectedTaskRevision,
+    apply: (authoritative) => {
+      if (!authoritative) return { ok: false, error: "no_active_task" };
+      const normalized = normalizeTask(authoritative);
+      if (!normalized) return { ok: false, error: "invalid_task" };
+      const annotation = findAnnotation(normalized, annotationId);
+      if (!annotation) {
+        return { ok: false, error: "annotation_not_found" };
+      }
+      if (annotation.status !== "completed") {
+        // Authoritative no-op: already open — no write.
+        return { ok: true };
+      }
+      return applyMutationOperations(normalized, [
+        { op: "reopen", annotationId },
+      ]);
+    },
+  });
+  if (!result.ok) {
+    if (result.error === "revision_conflict") {
+      fail(
+        `revision conflict: the task changed on disk since this command read it (expected ${expectedTaskRevision}). Re-run the command against the current state.`,
+        1
+      );
+      return;
+    }
+    if (result.error === "no_active_task") {
+      fail(`no task found at ${path.join(studioRoot(), "tasks", TASK_FILENAME)}`, 1);
+      return;
+    }
+    if (result.error === "lock_timeout") {
+      fail(
+        "write lock timed out — another writer (the dev server or a browser) is busy; re-run the command.",
+        1
+      );
+      return;
+    }
     fail(
-      `revision conflict: the task changed on disk since this command read it (expected ${request.expectedTaskRevision}). Re-run the command against the current state.`,
+      result.error === "annotation_not_found"
+        ? `annotation "${annotationId}" not found in the active task`
+        : `apply failed: ${result.error}`,
       1
     );
     return;
   }
-  const result = writeActiveTaskWithRevision(studioRoot(), applied.task);
-  if (!result.ok) {
-    fail(`write failed: ${result.error}`, 1);
+  if (result.noop) {
+    process.stdout.write(
+      `annotation ${annotationId} is already open (no change).\n`
+    );
     return;
   }
-  process.stdout.write(`reopened ${annotationId} (taskRevision ${result.revision}).\n`);
+  process.stdout.write(
+    `reopened ${annotationId} (taskRevision ${result.revision}).\n`
+  );
 }
 
 main();
