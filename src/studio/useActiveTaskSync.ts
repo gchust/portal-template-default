@@ -13,11 +13,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { normalizeTask } from "./task-model.ts";
+import { normalizeTask, describeUnsupportedSchema } from "./task-model.ts";
 import type {
   Annotation,
   PortalStudioTask,
-  PortalStudioTaskV4,
+  UnsupportedSchemaResult,
 } from "./types.ts";
 
 export type ActiveTaskSyncConfig = {
@@ -34,9 +34,15 @@ export function useActiveTaskSync(
   annotations: Annotation[];
   setAnnotations: React.Dispatch<React.SetStateAction<Annotation[]>>;
   lastTaskRevisionRef: React.MutableRefObject<number | null>;
+  /** Shared typed old-schema rejection (v1-v5 artifact on disk). */
+  unsupported: UnsupportedSchemaResult | null;
+  setUnsupported: React.Dispatch<
+    React.SetStateAction<UnsupportedSchemaResult | null>
+  >;
   refreshTask: () => Promise<void>;
 } {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [unsupported, setUnsupported] = useState<UnsupportedSchemaResult | null>(null);
   const taskRef = useRef<PortalStudioTask | null>(null);
   const lastTaskRevisionRef = useRef<number | null>(null);
 
@@ -54,21 +60,35 @@ export function useActiveTaskSync(
       .then(
         (
           payload: {
-            task?: PortalStudioTask | PortalStudioTaskV4 | null;
+            task?: PortalStudioTask | null;
+            /** Typed old-schema rejection (schema v1-v5). */
+            unsupported?: UnsupportedSchemaResult | null;
           } | null
         ) => {
           if (!payload?.task) {
-            // Goal 06: the active task no longer exists (explicit clear or
-            // an agent-side DELETE) — drop the stale local snapshot so the
+            // The active task no longer exists (explicit clear or an
+            // agent-side DELETE) — drop the stale local snapshot so the
             // NEXT save creates a FRESH taskId instead of resurrecting the
-            // cleared task with its old annotations.
+            // cleared task with its old annotations. An old-schema artifact
+            // surfaces the shared unsupported_schema state instead.
+            const unsupported =
+              payload?.unsupported ?? describeUnsupportedSchema(payload?.task);
             taskRef.current = null;
             setAnnotations([]);
             lastTaskRevisionRef.current = null;
+            if (unsupported) {
+              setUnsupported(unsupported);
+            } else {
+              setUnsupported(null);
+            }
             return;
           }
           const normalized = normalizeTask(payload.task);
-          if (!normalized) return;
+          if (!normalized) {
+            setUnsupported(describeUnsupportedSchema(payload.task));
+            return;
+          }
+          setUnsupported(null);
           taskRef.current = normalized;
           setAnnotations(normalized.annotations);
           // Goal 05 (review P1): the revision baseline is ALWAYS the last
@@ -159,6 +179,8 @@ export function useActiveTaskSync(
     annotations,
     setAnnotations,
     lastTaskRevisionRef,
+    unsupported,
+    setUnsupported,
     refreshTask,
   };
 }

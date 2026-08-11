@@ -1,202 +1,109 @@
-/**
- * Goal 02 — task-model: v4→v5 normalize-on-read (D-033 #17), display
- * numbers as live order index (D-034 #4), element counting/flattening.
- */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
-  annotationDisplayNumber,
-  normalizeElementCaptureV5,
+  describeUnsupportedSchema,
   normalizeTask,
-  normalizeV4ToV5,
 } from "@/studio/task-model";
-import type { PortalStudioTask, PortalStudioTaskV4 } from "@/studio/types";
+import type { PortalStudioTask } from "@/studio/types";
 
-const v4Task = (overrides: Partial<PortalStudioTaskV4> = {}): PortalStudioTaskV4 => ({
-  schemaVersion: 4,
-  taskId: "v4-task-1",
-  createdAt: "2026-08-08T00:00:00.000Z",
-  url: "http://127.0.0.1:4173/users",
+const v6Task = (overrides: Record<string, unknown> = {}): PortalStudioTask => ({
+  schemaVersion: 6,
+  taskId: "task-1",
+  createdAt: "2026-08-11T00:00:00.000Z",
+  url: "http://localhost/users",
   title: "Users",
-  instruction: "Make the header bolder",
+  annotations: [],
+  businessContext: [],
+  redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+  ...overrides,
+});
+
+const v6Annotation = {
+  annotationId: "ann-1",
+  kind: "element" as const,
+  comment: "Increase padding",
+  createdAt: "2026-08-11T00:00:00.000Z",
+  status: "open" as const,
   elements: [
     {
-      tagName: "h1",
-      selectorCandidates: [{ kind: "path", selector: "main > h1" }],
-      componentCandidates: [],
-      sourceCandidates: [],
-      snapshot: { text: "Users", attributes: {}, childCount: 0 },
-    },
-  ],
-  region: { x: 10, y: 20, width: 100, height: 40 },
-  businessContext: [],
-  redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
-  ...overrides,
-});
-
-const v5Task = (overrides: Partial<PortalStudioTask> = {}): PortalStudioTask => ({
-  schemaVersion: 5,
-  taskId: "v5-task-1",
-  createdAt: "2026-08-08T00:00:00.000Z",
-  url: "http://127.0.0.1:4173/users",
-  title: "Users",
-  annotations: [
-    {
-      annotationId: "ann-1",
-      kind: "element",
-      comment: "Bold the header",
-      createdAt: "2026-08-08T00:00:00.000Z",
-      status: "open",
-      elements: [
+      tagName: "button",
+      selector: "#save",
+      bounds: { x: 10, y: 20, width: 100, height: 44 },
+      componentName: "SaveButton",
+      source: {
+        filePath: "src/save.tsx",
+        lineNumber: 12,
+        columnNumber: 4,
+        componentName: "SaveButton",
+      },
+      sourceStack: [
         {
-          tagName: "h1",
-          selectorCandidates: [{ kind: "path", selector: "main > h1" }],
-          componentCandidates: [],
-          sourceCandidates: [],
-          snapshot: { text: "Users", attributes: {}, childCount: 0 },
+          filePath: "src/save.tsx",
+          lineNumber: 12,
+          columnNumber: 4,
+          componentName: "SaveButton",
         },
       ],
+      htmlPreview: "<button id=\"save\">Save</button>",
+      styleText: "",
+      fingerprint: {
+        tagName: "button",
+        role: "",
+        accessibleName: "",
+        text: "Save",
+        identityAttributes: { id: "save" },
+        childCount: 0,
+        parent: { tagName: "section", role: "" },
+      },
     },
   ],
-  businessContext: [],
-  redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
-  ...overrides,
-});
+  pageContext: {
+    url: "http://localhost/users",
+    routeKey: "/users",
+    title: "Users",
+    viewport: { width: 1440, height: 900 },
+    scroll: { x: 0, y: 0 },
+    businessContext: [],
+  },
+};
 
-describe("normalizeV4ToV5", () => {
-  it("maps instruction → comment, elements → captures, region → rect, losslessly", () => {
-    const task = normalizeV4ToV5(v4Task());
-    expect(task.schemaVersion).toBe(5);
-    expect(task.taskId).toBe("v4-task-1");
-    expect(task.annotations).toHaveLength(1);
-    const annotation = task.annotations[0];
-    expect(annotation.comment).toBe("Make the header bolder");
-    expect(annotation.kind).toBe("element");
-    expect(annotation.elements[0].snapshot.text).toBe("Users");
-    expect(annotation.region).toEqual({ x: 10, y: 20, width: 100, height: 40 });
-    expect(annotation.status).toBe("open");
-    // Bookkeeping carried through untouched.
-    expect(task.url).toBe("http://127.0.0.1:4173/users");
-    expect(task.redaction).toEqual({
-      droppedKeys: [],
-      redactedValues: 0,
-      truncatedValues: 0,
-    });
+describe("normalizeTask (v6 only)", () => {
+  it("returns v6 tasks as-is after a shape check", () => {
+    const task = v6Task({ annotations: [v6Annotation] });
+    expect(normalizeTask(task)).toEqual(task);
   });
 
-  it("uses kind=region for a v4 payload with no elements", () => {
-    const task = normalizeV4ToV5(v4Task({ elements: [] }));
-    expect(task.annotations[0].kind).toBe("region");
-    expect(task.annotations[0].elements).toEqual([]);
-  });
-
-  it("upgrades pre-v5 element records (id/tag/text era) without data loss", () => {
-    const task = normalizeV4ToV5(
-      v4Task({
-        elements: [
-          {
-            id: "row-a",
-            tag: "tr",
-            text: "Alice",
-            attributes: {},
-            snapshot: { text: "Alice", attributes: {} },
-            sourceCandidates: [{ file: "src/pages/users.tsx", line: 12 }],
-          } as unknown as PortalStudioTaskV4["elements"][number],
-        ],
-      })
-    );
-    const element = task.annotations[0].elements[0];
-    expect(element.tagName).toBe("tr");
-    expect(element.selectorCandidates).toEqual([
-      { kind: "id", selector: "#row-a" },
-    ]);
-    expect(element.componentCandidates).toEqual([]);
-    expect(element.sourceCandidates).toEqual([
-      { file: "src/pages/users.tsx", line: 12 },
-    ]);
-    expect(element.snapshot.text).toBe("Alice");
-  });
-
-  it("preserves legacy attributes and CSS-escapes the id selector (P2 review)", () => {
-    const escapeSpy = vi.fn((value: string) => value.replace(/[^a-zA-Z0-9]/g, "\\$&"));
-    vi.stubGlobal("CSS", { escape: escapeSpy });
-    const task = normalizeV4ToV5(
-      v4Task({
-        elements: [
-          {
-            id: "row.a:1",
-            tag: "tr",
-            text: "Alice",
-            attributes: { "data-ai-page-element": "user-row" },
-            sourceCandidates: [],
-          } as unknown as PortalStudioTaskV4["elements"][number],
-        ],
-      })
-    );
-    const element = task.annotations[0].elements[0];
-    // The id-derived candidate is CSS-escaped (D-044 pattern) so dots and
-    // colons cannot misresolve or throw.
-    expect(element.selectorCandidates).toEqual([
-      { kind: "id", selector: "#row\\.a\\:1" },
-    ]);
-    expect(escapeSpy).toHaveBeenCalledWith("row.a:1");
-    // The legacy top-level attributes survive into the fallback snapshot.
-    expect(element.snapshot).toEqual({
-      text: "Alice",
-      attributes: { "data-ai-page-element": "user-row" },
-      childCount: 0,
-    });
-    vi.unstubAllGlobals();
-  });
-
-  it("normalizeElementCaptureV5 passes v5 records through and maps missing arrays", () => {
-    const v5shape = v4Task().elements[0];
-    expect(normalizeElementCaptureV5(v5shape)).toEqual(v5shape);
-    const bare = normalizeElementCaptureV5({ tagName: "td" });
-    expect(bare).toEqual({
-      tagName: "td",
-      selectorCandidates: [],
-      componentCandidates: [],
-      sourceCandidates: [],
-      snapshot: { text: "", attributes: {}, childCount: 0 },
-    });
-    expect(normalizeElementCaptureV5(null)).toBeNull();
-    expect(normalizeElementCaptureV5("x")).toBeNull();
-  });
-});
-
-describe("normalizeTask", () => {
-  it("returns v5 payloads as-is after a shape check", () => {
-    const task = v5Task();
-    expect(normalizeTask(task)).toBe(task);
-    expect(normalizeTask({ ...task, annotations: "nope" })).toBeNull();
-  });
-
-  it("normalizes v4 payloads to v5", () => {
-    const normalized = normalizeTask(v4Task());
-    expect(normalized?.schemaVersion).toBe(5);
-    expect(normalized?.annotations[0].comment).toBe("Make the header bolder");
-  });
-
-  it("rejects unknown versions and malformed payloads", () => {
-    expect(normalizeTask({ schemaVersion: 3 })).toBeNull();
-    expect(normalizeTask({ schemaVersion: 99 })).toBeNull();
+  it("rejects non-v6 schema versions", () => {
+    expect(normalizeTask({ schemaVersion: 5, annotations: [] })).toBeNull();
+    expect(normalizeTask({ schemaVersion: 4, annotations: [] })).toBeNull();
+    expect(normalizeTask({ schemaVersion: 1, element: {} })).toBeNull();
+    expect(normalizeTask({})).toBeNull();
     expect(normalizeTask(null)).toBeNull();
-    expect(normalizeTask("task")).toBeNull();
-    expect(normalizeTask({ schemaVersion: 4, instruction: "x" })).toBeNull();
+  });
+
+  it("rejects v6 payloads without an annotations array", () => {
+    expect(normalizeTask({ schemaVersion: 6 })).toBeNull();
   });
 });
 
-describe("annotationDisplayNumber", () => {
-  it("returns the live 1-based order index, never stored", () => {
-    const annotations = [
-      { ...v5Task().annotations[0], annotationId: "a" },
-      { ...v5Task().annotations[0], annotationId: "b" },
-      { ...v5Task().annotations[0], annotationId: "c" },
-    ];
-    expect(annotationDisplayNumber(annotations, "a")).toBe(1);
-    expect(annotationDisplayNumber(annotations, "c")).toBe(3);
-    expect(annotationDisplayNumber(annotations, "missing")).toBeUndefined();
-    expect(annotationDisplayNumber([], "a")).toBeUndefined();
+describe("describeUnsupportedSchema (shared typed old-schema result)", () => {
+  it("returns the typed result for every removed schema version", () => {
+    for (const version of [1, 2, 3, 4, 5]) {
+      const result = describeUnsupportedSchema({ schemaVersion: version });
+      expect(result).toMatchObject({
+        status: "unsupported_schema",
+        schemaVersion: version,
+        expectedSchemaVersion: 6,
+      });
+      expect(result?.clearInstruction).toContain("v6");
+      expect(result?.clearPath).toBe("tasks/active-task.json");
+    }
+  });
+
+  it("returns null for v6 tasks and non-task inputs", () => {
+    expect(describeUnsupportedSchema(v6Task())).toBeNull();
+    expect(describeUnsupportedSchema({})).toBeNull();
+    expect(describeUnsupportedSchema(null)).toBeNull();
+    expect(describeUnsupportedSchema("task")).toBeNull();
   });
 });

@@ -32,26 +32,28 @@ import path from "node:path";
 import {
   TASK_FILENAME,
   TASK_SCHEMA_VERSION,
-  TASK_SCHEMA_VERSION_V1,
-  TASK_SCHEMA_VERSION_V2,
-  TASK_SCHEMA_VERSION_V4,
   type Annotation,
   type BusinessContextItem,
   type DiagnosticEntry,
   type DiagnosticSource,
   type ElementCapture,
+  type ElementFingerprint,
   type HeartbeatReport,
   type HeartbeatState,
   type PortalStudioTask,
-  type PortalStudioTaskV1,
   type RedactionManifest,
   type Region,
   type RevisionInfo,
   type RevisionState,
   type ScreenshotRef,
-  type SelectorCandidateKind,
+  type SourceFrame,
+  type UnsupportedSchemaResult,
 } from "./types.ts";
-import { MAX_ANNOTATIONS, MAX_COMPLETION_SUMMARY_LENGTH } from "./task-model.ts";
+import {
+  describeUnsupportedSchema,
+  MAX_ANNOTATIONS,
+  MAX_COMPLETION_SUMMARY_LENGTH,
+} from "./task-model.ts";
 
 export const SESSION_TOKEN_BYTES = 32;
 export const MAX_TASK_BODY_BYTES = 256 * 1024;
@@ -94,28 +96,19 @@ const SCREENSHOT_FILE_PATTERN = /^screenshots\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.png$/
 const MAX_URL_LENGTH = 2000;
 const MAX_TITLE_LENGTH = 500;
 const MAX_INSTRUCTION_LENGTH = 2000;
-const MAX_CANDIDATES = 50;
-const MAX_SELECTORS = 10;
-const MAX_ATTRIBUTES = 20;
-const MAX_TEXT_LENGTH = 500;
-const MAX_CHILD_COUNT = 1_000_000;
 const MAX_ELEMENTS = 50;
 const MAX_BUSINESS_CONTEXT_ITEMS = 20;
-const MAX_STYLE_PROPERTIES = 30;
-const MAX_STYLE_VALUE_LENGTH = 200;
-const MAX_OUTLINE_LENGTH = 200;
-const MAX_REGION_COORDINATE = 1_000_000;
-
-const SELECTOR_KINDS = new Set<string>(["id", "attribute", "path"]);
-const COMPONENT_KINDS = new Set<string>(["fiber", "dom"]);
-
-const isSelectorKind = (value: string): value is SelectorCandidateKind =>
-  SELECTOR_KINDS.has(value);
-
-const isComponentKind = (
-  value: string | undefined
-): value is "fiber" | "dom" =>
-  typeof value === "string" && COMPONENT_KINDS.has(value);
+const MAX_REGION_COORDINATE = 10_000_000;
+const MAX_SELECTOR_LENGTH = 4096;
+const MAX_STACK_FRAMES = 12;
+const MAX_HTML_PREVIEW_LENGTH = 4000;
+const MAX_STYLE_TEXT_LENGTH = 6000;
+const MAX_ACCESSIBLE_NAME_LENGTH = 500;
+const MAX_TEXT_LENGTH = 1000;
+const MAX_IDENTITY_ATTRIBUTES = 30;
+const MAX_IDENTITY_VALUE_LENGTH = 500;
+const MAX_COMPONENT_NAME_LENGTH = 200;
+const MAX_ROLE_LENGTH = 200;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
@@ -297,21 +290,96 @@ export function resolveTaskFilePath(
   return resolved;
 }
 
-const sanitizeComponentCandidates = (input: unknown) => {
-  if (!Array.isArray(input)) return [];
-  return input.slice(0, MAX_CANDIDATES).flatMap((entry) => {
-    if (!isRecord(entry)) return [];
-    const name = readString(entry.name, 200) ?? null;
-    const key = readString(entry.key, 200) ?? null;
-    const kind = readString(entry.kind, 16);
-    return [
-      {
-        name,
-        key,
-        ...(isComponentKind(kind) ? { kind } : {}),
-      },
-    ];
-  });
+const sanitizeSourceFrame = (
+  input: unknown
+): SourceFrame | null => {
+  if (!isRecord(input)) return null;
+  const filePath = readString(input.filePath, 512);
+  // v6 source paths are workspace-relative POSIX only (shared contract §9):
+  // absolute, drive-letter, backslash and traversal shapes are rejected.
+  if (
+    !filePath ||
+    filePath.includes("node_modules") ||
+    filePath.includes("..") ||
+    filePath.startsWith("/") ||
+    /^[a-zA-Z]:\//.test(filePath) ||
+    filePath.includes("\\")
+  ) {
+    return null;
+  }
+  const lineNumber = readBoundedNumber(input.lineNumber, 10_000_000);
+  const columnNumber = readBoundedNumber(input.columnNumber, 10_000_000);
+  if (
+    lineNumber === undefined ||
+    lineNumber < 1 ||
+    columnNumber === undefined ||
+    columnNumber < 0
+  ) {
+    return null;
+  }
+  const componentName = readString(input.componentName, MAX_COMPONENT_NAME_LENGTH);
+  return {
+    filePath,
+    lineNumber,
+    columnNumber,
+    componentName: componentName ?? null,
+  };
+};
+
+const sanitizeFingerprint = (
+  input: unknown,
+  recorder: ServerRecorder
+): ElementFingerprint | null => {
+  if (!isRecord(input)) return null;
+  const tagName = readString(input.tagName, 64);
+  if (!tagName) return null;
+  const role = serverRedactText(
+    readString(input.role, MAX_ROLE_LENGTH) ?? "",
+    MAX_ROLE_LENGTH,
+    recorder
+  );
+  const accessibleName = serverRedactText(
+    readString(input.accessibleName, MAX_ACCESSIBLE_NAME_LENGTH) ?? "",
+    MAX_ACCESSIBLE_NAME_LENGTH,
+    recorder
+  );
+  const text = serverRedactText(
+    readString(input.text, MAX_TEXT_LENGTH) ?? "",
+    MAX_TEXT_LENGTH,
+    recorder
+  );
+  const rawIdentity = isRecord(input.identityAttributes)
+    ? input.identityAttributes
+    : {};
+  const identityAttributes: Record<string, string> = {};
+  for (const [key, value] of Object.entries(rawIdentity)) {
+    if (Object.keys(identityAttributes).length >= MAX_IDENTITY_ATTRIBUTES) break;
+    if (key !== "id" && key !== "data-ai-page-element" && !key.startsWith("data-nb-")) {
+      recorder.droppedKeys.add(key);
+      continue;
+    }
+    if (/(?:^|[-_.])(?:token|secret|password|authorization|cookie|api[-_.]?key)(?:$|[-_.])/i.test(key)) {
+      recorder.droppedKeys.add(key);
+      continue;
+    }
+    if (typeof value !== "string") continue;
+    identityAttributes[key] = serverRedactText(
+      value.slice(0, MAX_IDENTITY_VALUE_LENGTH),
+      MAX_IDENTITY_VALUE_LENGTH,
+      recorder
+    );
+  }
+  const childCount = readBoundedNumber(input.childCount, MAX_REGION_COORDINATE) ?? 0;
+  const rawParent = isRecord(input.parent) ? input.parent : undefined;
+  const parent = {
+    tagName: readString(rawParent?.tagName, 64) ?? "",
+    role: serverRedactText(
+      readString(rawParent?.role, MAX_ROLE_LENGTH) ?? "",
+      MAX_ROLE_LENGTH,
+      recorder
+    ),
+  };
+  return { tagName, role, accessibleName, text, identityAttributes, childCount, parent };
 };
 
 const sanitizeElementCapture = (
@@ -321,76 +389,62 @@ const sanitizeElementCapture = (
   if (!isRecord(input)) return null;
   const tagName = readString(input.tagName, 64);
   if (!tagName) return null;
-
-  const selectorCandidates = Array.isArray(input.selectorCandidates)
-    ? input.selectorCandidates
-        .slice(0, MAX_SELECTORS)
-        .flatMap((candidate) => {
-          if (!isRecord(candidate)) return [];
-          const selector = readString(candidate.selector, 200);
-          const kind = readString(candidate.kind, 32);
-          if (!selector || !kind || !isSelectorKind(kind)) return [];
-          return [{ kind, selector }];
-        })
-    : [];
-
-  const componentCandidates = sanitizeComponentCandidates(
-    input.componentCandidates
-  );
-
-  const snapshot = isRecord(input.snapshot) ? input.snapshot : null;
-  const snapshotText = snapshot
-    ? (readString(snapshot.text, MAX_TEXT_LENGTH) ?? "")
-    : "";
-  const rawAttributes =
-    snapshot && isRecord(snapshot.attributes) ? snapshot.attributes : {};
-  const attributes = Object.fromEntries(
-    Object.entries(rawAttributes)
-      .slice(0, MAX_ATTRIBUTES)
-      .map(([key, value]) => [key, typeof value === "string" ? value : ""])
-  );
-  const childCount =
-    typeof snapshot?.childCount === "number" &&
-    Number.isFinite(snapshot.childCount) &&
-    snapshot.childCount >= 0
-      ? Math.min(snapshot.childCount, MAX_CHILD_COUNT)
-      : 0;
-
-  const rawStyle =
-    snapshot && isRecord(snapshot.computedStyle) ? snapshot.computedStyle : {};
-  const computedStyle: Record<string, string> = {};
-  for (const [key, value] of Object.entries(rawStyle)) {
-    if (Object.keys(computedStyle).length >= MAX_STYLE_PROPERTIES) break;
-    if (typeof value !== "string") continue;
-    computedStyle[key] = serverRedactText(
-      value.slice(0, MAX_STYLE_VALUE_LENGTH),
-      MAX_STYLE_VALUE_LENGTH,
-      recorder
-    );
+  // v6: exactly ONE React Grab selector; no candidate arrays. Over-limit
+  // selectors are rejected BEFORE truncation (the v6 limit is normative).
+  const rawSelector = input.selector;
+  if (
+    typeof rawSelector !== "string" ||
+    rawSelector.length === 0 ||
+    rawSelector.length > MAX_SELECTOR_LENGTH
+  ) {
+    return null;
   }
+  const selector = readString(rawSelector, MAX_SELECTOR_LENGTH);
+  if (!selector) return null;
 
-  const domOutline = snapshot
-    ? serverRedactText(
-        readString(snapshot.domOutline, MAX_OUTLINE_LENGTH) ?? "",
-        MAX_OUTLINE_LENGTH,
-        recorder
-      )
-    : "";
-
+  const rawBounds = isRecord(input.bounds) ? input.bounds : undefined;
+  const bounds = {
+    x: readBoundedNumber(rawBounds?.x, MAX_REGION_COORDINATE) ?? 0,
+    y: readBoundedNumber(rawBounds?.y, MAX_REGION_COORDINATE) ?? 0,
+    width: readBoundedNumber(rawBounds?.width, MAX_REGION_COORDINATE) ?? 0,
+    height: readBoundedNumber(rawBounds?.height, MAX_REGION_COORDINATE) ?? 0,
+  };
+  const componentName = readString(
+    input.componentName,
+    MAX_COMPONENT_NAME_LENGTH
+  );
+  const source = isRecord(input.source)
+    ? sanitizeSourceFrame(input.source)
+    : null;
+  const sourceStack: SourceFrame[] = [];
+  if (Array.isArray(input.sourceStack)) {
+    for (const frame of input.sourceStack.slice(0, MAX_STACK_FRAMES)) {
+      const sanitized = sanitizeSourceFrame(frame);
+      if (sanitized) sourceStack.push(sanitized);
+    }
+  }
+  const htmlPreview = serverRedactText(
+    readString(input.htmlPreview, MAX_HTML_PREVIEW_LENGTH) ?? "",
+    MAX_HTML_PREVIEW_LENGTH,
+    recorder
+  );
+  const styleText = serverRedactText(
+    readString(input.styleText, MAX_STYLE_TEXT_LENGTH) ?? "",
+    MAX_STYLE_TEXT_LENGTH,
+    recorder
+  );
+  const fingerprint = sanitizeFingerprint(input.fingerprint, recorder);
+  if (!fingerprint) return null;
   return {
     tagName,
-    selectorCandidates,
-    componentCandidates,
-    // Source candidates are server-resolved (module graph) and merged by the
-    // plugin before the write; client-supplied ones are dropped.
-    sourceCandidates: [],
-    snapshot: {
-      text: String(sanitizeServerValue(snapshotText, 0, recorder)),
-      attributes: sanitizeServerAttributes(attributes, recorder),
-      childCount,
-      ...(domOutline ? { domOutline } : {}),
-      ...(Object.keys(computedStyle).length ? { computedStyle } : {}),
-    },
+    selector,
+    bounds,
+    componentName: componentName ?? null,
+    source,
+    sourceStack,
+    htmlPreview,
+    styleText,
+    fingerprint,
   };
 };
 
@@ -410,6 +464,8 @@ const sanitizeBusinessContext = (input: unknown): BusinessContextItem[] => {
 
 const sanitizeRegion = (input: unknown): Region | undefined => {
   if (!isRecord(input)) return undefined;
+  // v6: regions are document-relative (shared contract §5).
+  if (input.coordinateSpace !== "document") return undefined;
   const x = readBoundedNumber(input.x, MAX_REGION_COORDINATE);
   const y = readBoundedNumber(input.y, MAX_REGION_COORDINATE);
   const width = readBoundedNumber(input.width, MAX_REGION_COORDINATE);
@@ -417,7 +473,7 @@ const sanitizeRegion = (input: unknown): Region | undefined => {
   if (x === undefined || y === undefined || width === undefined || height === undefined) {
     return undefined;
   }
-  return { x, y, width, height };
+  return { coordinateSpace: "document", x, y, width, height };
 };
 
 const sanitizeScreenshotRef = (
@@ -772,12 +828,10 @@ export function sanitizeTask(
   options: { studioRoot?: string } = {}
 ): PortalStudioTask | null {
   if (!isRecord(input)) return null;
-  const isV1 = input.schemaVersion === TASK_SCHEMA_VERSION_V1;
-  const isV2 = input.schemaVersion === TASK_SCHEMA_VERSION_V2;
-  const isV3 = input.schemaVersion === 3;
-  const isV4 = input.schemaVersion === TASK_SCHEMA_VERSION_V4;
-  const isV5 = input.schemaVersion === TASK_SCHEMA_VERSION;
-  if (!isV1 && !isV2 && !isV3 && !isV4 && !isV5) return null;
+  // v6 only: schema v1-v5 artifacts get the shared typed unsupported_schema
+  // result (see describeUnsupportedSchema) — never normalized, never
+  // migrated.
+  if (input.schemaVersion !== TASK_SCHEMA_VERSION) return null;
 
   const recorder = createServerRecorder();
   const taskId = readString(input.taskId, 64);
@@ -811,76 +865,26 @@ export function sanitizeTask(
   if (updatedAt !== undefined && Number.isNaN(Date.parse(updatedAt))) {
     return null;
   }
-  const screenshot = isV1
-    ? undefined
-    : options.studioRoot
-      ? sanitizeScreenshotRef(input.screenshot, options.studioRoot)
-      : undefined;
+  const screenshot = options.studioRoot
+    ? sanitizeScreenshotRef(input.screenshot, options.studioRoot)
+    : undefined;
   // Mutation re-POSTs carry the last-known heartbeat; preserve it so the
   // artifact's liveness state survives edit/delete/hide rewrites (F-2).
-  const heartbeat = isV1 ? undefined : sanitizeHeartbeatReport(input.heartbeat);
-  let diagnostics: DiagnosticEntry[] = [];
-  if (!isV1 && !isV2) {
-    // Diagnostics present but invalid/over-budget must reject the task, not
-    // silently degrade to an empty array.
-    const sanitized = sanitizeDiagnostics(input.diagnostics, recorder);
-    if (sanitized === null) return null;
-    diagnostics = sanitized;
-  }
+  const heartbeat = sanitizeHeartbeatReport(input.heartbeat);
+  const diagnostics = sanitizeDiagnostics(input.diagnostics, recorder);
+  if (diagnostics === null) return null;
 
-  let annotations: Annotation[];
-  if (isV5) {
-    // An EMPTY annotations array is a VALID v5 task (the clear-all action
-    // produces one, D-033 #10/#11; the old single-selection model required
-    // at least one element, but annotations are optional in v5).
-    if (!Array.isArray(input.annotations)) {
-      return null;
-    }
-    if (input.annotations.length > MAX_ANNOTATIONS) return null;
-    annotations = [];
-    for (const rawAnnotation of input.annotations.slice(0, MAX_ANNOTATIONS)) {
-      const annotation = sanitizeAnnotation(rawAnnotation, recorder);
-      if (!annotation) return null;
-      annotations.push(annotation);
-    }
-    // Per-annotation element cap (MAX_ELEMENTS) bounds each capture; the
-    // total is bounded by the 256 KB artifact cap below (per-annotation
-    // caps cannot be summed across accumulated annotations).
-  } else {
-    // v1–v4 → a single v5 annotation (normalize-on-read, D-033 #17).
-    const instruction = serverRedactText(
-      readString(input.instruction, MAX_INSTRUCTION_LENGTH) ?? "",
-      MAX_INSTRUCTION_LENGTH,
-      recorder
-    );
-    let elementsInput: unknown;
-    if (isV1) {
-      const v1 = input as unknown as PortalStudioTaskV1;
-      elementsInput = [v1.element];
-    } else {
-      elementsInput = input.elements;
-    }
-    if (!Array.isArray(elementsInput) || elementsInput.length < 1) {
-      return null;
-    }
-    const elements: ElementCapture[] = [];
-    for (const rawElement of elementsInput.slice(0, MAX_ELEMENTS)) {
-      const element = sanitizeElementCapture(rawElement, recorder);
-      if (!element) return null;
-      elements.push(element);
-    }
-    const region = isV1 ? undefined : sanitizeRegion(input.region);
-    annotations = [
-      {
-        annotationId: `${taskId}-v4`,
-        kind: elements.length > 0 ? "element" : "region",
-        comment: instruction,
-        createdAt,
-        status: "open",
-        elements,
-        ...(region ? { region } : {}),
-      },
-    ];
+  // An EMPTY annotations array is a VALID v6 task (the clear-all action
+  // produces one).
+  if (!Array.isArray(input.annotations)) {
+    return null;
+  }
+  if (input.annotations.length > MAX_ANNOTATIONS) return null;
+  const annotations: Annotation[] = [];
+  for (const rawAnnotation of input.annotations.slice(0, MAX_ANNOTATIONS)) {
+    const annotation = sanitizeAnnotation(rawAnnotation, recorder);
+    if (!annotation) return null;
+    annotations.push(annotation);
   }
 
   const task: PortalStudioTask = {
@@ -972,51 +976,48 @@ function sanitizeAnnotation(
   }
   const region = sanitizeRegion(input.region);
   // Goal 06: preserve the backward-compatible per-annotation page context
-  // (url, stable routeKey, title, viewport, scroll, businessContext) across
-  // the server whitelist — otherwise routeKey marker gating is inert after
-  // the first write. Sanitized and bounded like every other field; a
-  // malformed context is dropped without losing the annotation (legacy
-  // annotations without pageContext keep rendering everywhere).
-  let pageContext: Annotation["pageContext"];
+  // v6: pageContext is REQUIRED on every annotation (shared contract §5).
+  // Sanitized and bounded like every other field; a malformed context
+  // rejects the annotation.
   const rawContext = isRecord(input.pageContext) ? input.pageContext : undefined;
-  if (rawContext) {
-    const url = serverRedactText(
-      readString(rawContext.url, MAX_URL_LENGTH) ?? "",
-      MAX_URL_LENGTH,
-      recorder
-    );
-    const routeKey = serverRedactText(
-      readString(rawContext.routeKey, 200) ?? "",
-      200,
-      recorder
-    );
-    const title = serverRedactText(
-      readString(rawContext.title, MAX_TITLE_LENGTH) ?? "",
-      MAX_TITLE_LENGTH,
-      recorder
-    );
-    const viewport = isRecord(rawContext.viewport) ? rawContext.viewport : undefined;
-    const scroll = isRecord(rawContext.scroll) ? rawContext.scroll : undefined;
-    if (
-      url &&
-      routeKey &&
-      viewport &&
-      scroll &&
-      typeof viewport.width === "number" &&
-      typeof viewport.height === "number" &&
-      typeof scroll.x === "number" &&
-      typeof scroll.y === "number"
-    ) {
-      pageContext = {
-        url,
-        routeKey,
-        title,
-        viewport: { width: viewport.width, height: viewport.height },
-        scroll: { x: scroll.x, y: scroll.y },
-        businessContext: sanitizeBusinessContext(rawContext.businessContext),
-      };
-    }
+  if (!rawContext) return null;
+  const pageUrl = serverRedactText(
+    readString(rawContext.url, MAX_URL_LENGTH) ?? "",
+    MAX_URL_LENGTH,
+    recorder
+  );
+  const routeKey = serverRedactText(
+    readString(rawContext.routeKey, 200) ?? "",
+    200,
+    recorder
+  );
+  const pageTitle = serverRedactText(
+    readString(rawContext.title, MAX_TITLE_LENGTH) ?? "",
+    MAX_TITLE_LENGTH,
+    recorder
+  );
+  const viewport = isRecord(rawContext.viewport) ? rawContext.viewport : undefined;
+  const scroll = isRecord(rawContext.scroll) ? rawContext.scroll : undefined;
+  if (
+    !pageUrl ||
+    !routeKey ||
+    !viewport ||
+    !scroll ||
+    typeof viewport.width !== "number" ||
+    typeof viewport.height !== "number" ||
+    typeof scroll.x !== "number" ||
+    typeof scroll.y !== "number"
+  ) {
+    return null;
   }
+  const pageContext: Annotation["pageContext"] = {
+    url: pageUrl,
+    routeKey,
+    title: pageTitle,
+    viewport: { width: viewport.width, height: viewport.height },
+    scroll: { x: scroll.x, y: scroll.y },
+    businessContext: sanitizeBusinessContext(rawContext.businessContext),
+  };
   return {
     annotationId,
     kind,
@@ -1025,7 +1026,7 @@ function sanitizeAnnotation(
     status,
     ...(completedAt ? { completedAt } : {}),
     ...(completedEvidence ? { completedEvidence } : {}),
-    ...(pageContext ? { pageContext } : {}),
+    pageContext,
     ...(hidden !== undefined ? { hidden } : {}),
     elements,
     ...(region ? { region } : {}),

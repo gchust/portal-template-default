@@ -16,7 +16,21 @@
  * empty chain) instead of throwing.
  */
 
-import type { ComponentCandidate } from "./types";
+/**
+ * NOTE (Goal 03): this module is the older Fiber-based perception adapter
+ * and is UNREACHABLE from production and active tests — the active
+ * perception path is the sole React Grab engine in `./inspection`. It
+ * remains physically present only until the Goal 05 deletion; its local
+ * types are frozen and must not be imported by active code.
+ */
+
+type ComponentCandidateKind = "fiber" | "dom";
+
+type ComponentCandidate = {
+  name: string | null;
+  key: string | null;
+  kind?: ComponentCandidateKind;
+};
 
 const FIBER_KEY_PREFIX = "__reactFiber$";
 

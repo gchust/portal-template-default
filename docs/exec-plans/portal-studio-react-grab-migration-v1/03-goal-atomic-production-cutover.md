@@ -10,6 +10,10 @@ This ExecPlan is a living document. Keep `Progress`, `Surprises & Discoveries`, 
 
 Old source files may remain physically present until Goal 05, but they must be unreachable from production and active tests. No fallback is allowed.
 
+## Context and orientation
+
+Implementation baseline: `feat-agent-feedback` at `8b35fbc` (Goal 02 commit). Goal 03 cut every active path over: `src/studio/{types,task-model,capture,grab,markers,selection,toolbar,vite,format,useActiveTaskSync,StudioAnnotationListPanel,StudioComposer,endpoint}` plus the CLI scripts, locales, `e2e/portal-studio.spec.ts`, and the whole test surface. The pre-existing uncommitted user change in `registry/nocobase-users-example/list.tsx` remains outside this Goal and untouched.
+
 ## Purpose / big picture
 
 Avoid a mixed task format where Pick saves v6 while Area saves v5. This Goal changes the product boundary as one transaction.
@@ -210,27 +214,83 @@ Do not re-enable old code when React Grab inspection fails. Keep the draft/selec
 
 ## Progress
 
-- [ ] Baseline current task/UI/CLI tests.
-- [ ] Change task/schema contracts to v6.
-- [ ] Make capture async and bounded.
-- [ ] Cut Pick and Multi to engine hit testing/inspection.
-- [ ] Cut Area to point-stack sampling.
-- [ ] Cut Marker to selector locator/fingerprint.
-- [ ] Remove active source backfill.
-- [ ] Update formatter/CLI/MCP/revision.
-- [ ] Add old-schema explicit rejection.
-- [ ] Run full focused tests and independent AC audit.
+- [x] Baseline current task/UI/CLI tests. (Baseline `8b35fbc`; 57 files/656 tests; Portal Studio E2E 31 tests serial.)
+- [x] Change task/schema contracts to v6. (`types.ts` v6 `ElementCapture`/`Region`/required `pageContext`; `task-model.ts` v6 identity + shared `describeUnsupportedSchema`; endpoint v6 whitelist; `unsupported_schema` typed result shared by browser/endpoint/print/verify/CLI/MCP.)
+- [x] Make capture async and bounded. (`inspection/pipeline.ts`: concurrency exactly 4, order preserved, all-or-nothing, cancellation guard; toolbar `runCapturePipeline` with session counter, inspecting/error/retry composer states; stale results discarded.)
+- [x] Cut Pick and Multi to engine hit testing/inspection. (Coordinate hit testing via `getTargetAtPoint` with the §3a promotion; hierarchy arrows via `walkComposedAncestors` after engine selection; keyboard seeds via the composed walk; v6 capture payloads verified in E2E.)
+- [x] Cut Area to point-stack sampling. (`inspection/region.ts`: corners/center/adaptive grid via `getTargetsAtPoint`, live-identity dedup, semantic ancestor/descendant pruning, document-relative region conversion at save; no full-DOM scan.)
+- [x] Cut Marker to selector locator/fingerprint. (`markers.ts` resolves the ONE selector via `resolveSelector` + exact fingerprint; no first-match iteration; route-aware via pageContext.)
+- [x] Remove active source backfill. (vite.ts lost `resolveComponentSources`/`assignSourceCandidates`/module-graph scan; POST finalizes the v6 task directly; `serializeTaskArtifact` no longer backfills.)
+- [x] Update formatter/CLI/MCP/revision. (v6 vocabulary + `formatUnsupportedSchemaMarkdown`; CLI usage via pnpm scripts; `studio:print/verify/mcp` scripts added; revision hashes v6 source/sourceStack with bounded exact-basename resolution; print/verify CLIs strip the pnpm `--` separator.)
+- [x] Add old-schema explicit rejection. (Shared typed `unsupported_schema` across browser banner, POST/mutate/GET endpoints, print/verify/CLI/MCP; no migration; E2E proves browser + mutate + CLI paths.)
+- [x] Run full focused tests and independent AC audit. (Focused Vitest; full Vitest 57/656; build; greps; Portal Studio E2E 31/31 in an isolated worktree; fresh reviewer audit; commit.)
 
 ## Surprises & Discoveries
 
-- None yet.
+- The v6 `getElementContext` source paths are bare basenames in this Vite setup (e.g. `data-table.tsx`), so the server-side source-revision hash must resolve them: a bounded, deterministic exact-basename lookup under `src`/`registry`/`e2e` (the whole point is resolving bare filenames, so the guard that skipped `basename === filePath` had to be removed — it silently produced a constant "<missing>" hash and the update-verification E2E caught it).
+- user-event in jsdom always dispatches pointer clicks at (0,0) — it never reads `getBoundingClientRect` — so coordinate-based engine picking in component tests needed a `clickTarget` helper that fires `fireEvent.click` at the element's rect center with focus. Without it, every coordinate hit resolved to the toolbar chrome at the origin.
+- The E2E's Ctrl+Enter saves and Save clicks raced the async inspection pipeline: the Save button is disabled while inspecting, so the tests must wait for it to be enabled first (saveWithCtrlEnter / saveTask). A global test-file replacement made `saveWithCtrlEnter` accidentally recursive (it replaced the helper's own body), which the E2E caught as a 30s hang — fixed to press Control+Enter.
+- `captureViewportPng`'s SVG rasterization can stall in serial E2E runs, leaving saves stuck in flight; a bounded 5s rasterization timeout returns null (best-effort screenshot; the annotation is already persisted) instead of hanging the save.
+- Playwright serial E2E is sensitive to server-start timing: the first save's screenshot ref merge is async server-side, so the spec polls the file for the ref (8s) rather than asserting immediately.
+- The browser's unsupported-schema banner must render independently of the aux panel state (it was initially inside the status-panel block and stayed hidden while the list was open — the E2E caught it).
+- `pnpm run <script> -- args` forwards the literal `--` to the script; the print/verify CLIs now strip a leading `--` (the agent CLI already did). The `--task` value lookup must use the cleaned argv, not the raw one.
+- The global `schemaVersion: 5 → 6` spec edit clobbered two intentionally-legacy fixtures (the agent-side POST rejection and the unsupported-schema seed) — each needed manual restoration to `5`.
 
 ## Decision Log
 
 - Decision: All capture modes and persisted task readers switch in one Goal.
   Rationale: mixed schemas would create temporary compatibility logic and ambiguous artifacts.
-  Date/Author: Goal author; confirm during implementation.
+  Date/Author: Goal author; confirmed during implementation.
+- Decision: The async capture pipeline lives in the inspection domain (`inspection/pipeline.ts`) and is all-or-nothing with concurrency exactly 4, input order preserved, and a cancellation probe; the toolbar keeps a capture-session counter so stale pipeline results are discarded.
+  Rationale: the Goal 03 requirements are literal (concurrency exactly 4, no partial Multi saves, retry without losing the comment/selection).
+  Date/Author: Codex; 2026-08-11.
+- Decision: Area sampling uses React Grab point-stack sampling (corners, center, bounded adaptive grid) with live-identity dedup and a documented semantic ancestor/descendant score (business attributes +3, interactive +2, id +1; ties keep the descendant). The persisted region is converted to document-relative coordinates at save time.
+  Rationale: no full-DOM scan; deterministic and bounded.
+  Date/Author: Codex; 2026-08-11.
+- Decision: The server resolves bare-basename v6 source paths for the revision hash with a bounded exact-basename lookup under `src`/`registry`/`e2e` (deterministic order), falling back to a "<missing>" marker.
+  Rationale: Vite dev source maps report basename-only paths; direct root-relative resolution would hash a constant marker and never track edits.
+  Date/Author: Codex; 2026-08-11.
+- Decision: `captureViewportPng` rasterization is bounded to 5s; a stall returns null and the save completes with the non-blocking screenshot warning.
+  Rationale: the annotation is already persisted before the screenshot; an unbounded capture must never hang the save.
+  Date/Author: Codex; 2026-08-11.
+- Decision: The unsupported-schema browser banner renders whenever the toolbar is open, independent of aux panels.
+  Rationale: the user must see the clear instruction regardless of which panel is open.
+  Date/Author: Codex; 2026-08-11.
 
 ## Outcomes & Retrospective
 
-Fill at completion with exact evidence and every AC status.
+Overall result: **PASS**. Fresh independent review: all 16 criteria PASS after the review fixes (verify endpoint typed result, mutate full payload, CLI reopen mapping, region tie-break, capture-session guard, source-path hardening); gates rerun. Every active production capture, persistence, Marker and Agent-handoff path now runs on the sole React Grab inspection domain and schema v6. Old schema v1-v5 artifacts get one shared typed `unsupported_schema` result everywhere and are never migrated. The legacy `grab.ts`/`capture.ts` remain physically present but are unreachable from production and active tests. Committed on `feat-agent-feedback`; no push and no Goal 04 work.
+
+| Acceptance criterion | Result | Evidence |
+| --- | --- | --- |
+| G03-AC01 | PASS | Pick E2E + component tests: one v6 element per annotation with ONE selector, bounds, componentName, workspace-relative source, bounded stack and fingerprint; POST payload asserted (`selector`, `bounds`, `fingerprint`, `pageContext`). |
+| G03-AC02 | PASS | Multi E2E + component tests: one annotation with N ordered v6 elements; toggle by live identity; duplicates removed; engine coordinate hit testing for every click. |
+| G03-AC03 | PASS | Area E2E: document-relative region (`coordinateSpace: "document"`) + bounded semantically pruned v6 targets; `region.test.ts` pins sampling/pruning; no full-DOM scan (`collectRegionCandidates` removed). |
+| G03-AC04 | PASS | Engine promotion proven in Goal 01/02 unit + Chromium contract tests; toolbar picking uses `getTargetAtPoint` (promotion) — never raw `event.target`. |
+| G03-AC05 | PASS | `markers.ts` resolves the one persisted selector via `resolveSelector` + exact fingerprint; no candidate iteration; route-aware via pageContext; marker E2E reload persistence green. |
+| G03-AC06 | PASS | `marker-editor.test.ts` fingerprint-mismatch case: changed strong identity → unresolved (no marker); locator unit matrix in Goal 02 still green. |
+| G03-AC07 | PASS | Goal 02 Chromium contract `>>>` shadow rehydration test green; marker E2E with shadow targets passes. |
+| G03-AC08 | PASS | Goal 02 Chromium contract iframe test green (top-level bounds + `>>iframe>>` selector); E2E iframe flows unchanged. |
+| G03-AC09 | PASS | `rg 'resolveComponentSources|assignSourceCandidates|transformResult\?\.code' src/studio` → zero; POST finalizes the v6 task directly; `serializeTaskArtifact` has no backfill param. |
+| G03-AC10 | PASS | `format-golden.test.ts` pins v6 markdown (selector/componentName/source `file:line:col`/bounded stack/businessContext, no candidate vocabulary); Copy E2E + print CLI + MCP all render v6. |
+| G03-AC11 | PASS | `computeTaskSourceRevision` hashes v6 source/sourceStack paths (deduped, resolution + "<missing>" marker); update-verification E2E proves an edit to the referenced file changes the revision. |
+| G03-AC12 | PASS | Shared `describeUnsupportedSchema` + `formatUnsupportedSchemaMarkdown`; browser banner, task POST 400 (full typed payload), mutate 400 (full typed payload), GET classification, VERIFY 400 (full typed payload), print CLI, agent CLI list/complete/reopen and MCP all return the typed result; E2E proves no migration. |
+| G03-AC13 | PASS | Full Vitest 57 files/656 tests; Portal Studio E2E 31/31 in an isolated worktree; typecheck; build; `git diff --check`. |
+| G03-AC14 | PASS | Active-import grep: only `capture.ts` imports `grab.ts` (legacy-to-legacy, unreachable); no active module imports `./capture` or `./grab`; candidate vocabulary exists only inside the legacy files. |
+| G03-AC15 | PASS | No perception fallback: `fallback|legacy` zero in `inspection` + `markers.ts`; toolbar hits are the pre-existing product Copy-surface vocabulary (clipboard fallback UI), documented; engine errors are typed and retryable. |
+| G03-AC16 | PASS | `pnpm build` passes; `dist` greps for `react-grab|bippy|portal-studio` are zero (studio plugin is `apply: "serve"`). |
+
+Key command results (evidence in `.portal-studio-evidence/react-grab-g01/commands.log` Goal 03 section):
+
+- `pnpm typecheck`: PASS.
+- `pnpm exec vitest run tests/logic/portal-studio tests/components/portal-studio`: 57 files / 659 tests PASS (35 files / 600 tests when scoped to the two directories; the remaining files are the inspection/ownership suites).
+- `NOCOBASE_E2E_PORT=4176 ... pnpm exec playwright test e2e/portal-studio.spec.ts --config playwright.config.ts`: **31/31 PASS** twice (isolated worktrees; includes the new v6 creation/reload/unsupported-schema scenarios with verify/mutate typed payload assertions).
+- `pnpm build`: PASS; `dist` grep zero.
+- `rg -n 'selectorCandidates|componentCandidates|sourceCandidates' src/studio scripts`: only the legacy `capture.ts`.
+- `rg -n 'resolveComponentSources|assignSourceCandidates|transformResult\?\.code' src/studio`: zero.
+- `rg -n 'from "\./grab"|from "\.\./grab"|from "\./capture"|from "\.\./capture"' src/studio`: only `capture.ts` → `grab.ts`.
+- `rg -n 'fallback|legacy' src/studio/inspection src/studio/markers.ts`: zero.
+- `rg -n 'react-grab|bippy|portal-studio' dist`: zero.
+- `git diff --check`: clean.
+
+No old-engine call in any active path, no schema migration, no push, and no Goal 04 work. The pre-existing user change in `registry/nocobase-users-example/list.tsx` was not edited, staged, or committed.

@@ -127,8 +127,10 @@ describe("inspection domain forbidden patterns", () => {
       "index.ts",
       "nocobase-context.ts",
       "normalize.ts",
+      "pipeline.ts",
       "react-grab-engine.ts",
       "react-grab-selector-locator.ts",
+      "region.ts",
       "types.ts",
     ]);
   });

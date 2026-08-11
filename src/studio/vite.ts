@@ -63,18 +63,15 @@ import {
   verifySessionToken,
   writeActiveTaskSerialized,
 } from "./endpoint";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { isTaskCompleted } from "./format.ts";
 import { normalizeTask } from "./task-model.ts";
 import {
   applyMutationOperations,
   parseMutationRequest,
 } from "./mutation";
-import type {
-  ElementCapture,
-  PortalStudioTask,
-  SourceCandidate,
-} from "./types";
+import type { PortalStudioTask } from "./types";
+import { describeUnsupportedSchema } from "./task-model.ts";
 
 const TASKS_ENDPOINT_PATH = "/__portal-studio/tasks";
 const SCREENSHOTS_ENDPOINT_PATH = "/__portal-studio/screenshots";
@@ -90,9 +87,6 @@ const TOKEN_HEADER = "x-portal-studio-token";
 const MAX_HEARTBEAT_BODY_BYTES = 1024;
 const MAX_SCREENSHOT_COMMAND_BODY_BYTES = 16 * 1024;
 const MAX_ANNOTATIONS = 20;
-const MAX_SOURCE_CANDIDATES_PER_NAME = 3;
-const MAX_SOURCE_CANDIDATES_PER_ELEMENT = 5;
-const MAX_TOTAL_SOURCE_CANDIDATES = 40;
 
 export type PortalStudioPluginOptions = {
   root?: string;
@@ -183,138 +177,26 @@ const writeJsonResponse = (
   response.end(JSON.stringify(payload));
 };
 
-const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs"]);
-
 /**
- * Resolve component names to file/line candidates using the loaded Vite
- * module graph (dev-transformed code is unminified, so authored names match).
- */
-export function resolveComponentSources(
-  server: ViteDevServer,
-  names: string[],
-  root: string
-): SourceCandidate[] {
-  const candidates: SourceCandidate[] = [];
-  const seen = new Set<string>();
-  const uniqueNames = [...new Set(names.filter(Boolean))].slice(0, 30);
-  if (!uniqueNames.length) return candidates;
-
-  const modules = [...server.moduleGraph.urlToModuleMap.values()];
-  const rootPath = path.resolve(root);
-
-  for (const name of uniqueNames) {
-    for (const module of modules) {
-      if (candidates.length >= MAX_TOTAL_SOURCE_CANDIDATES) break;
-      const file = module.file;
-      if (!file) continue;
-      const extension = path.extname(file);
-      if (!SOURCE_EXTENSIONS.has(extension)) continue;
-      const normalized = path.normalize(file);
-      if (!normalized.startsWith(rootPath) || normalized.includes("node_modules")) {
-        continue;
-      }
-      const code = module.transformResult?.code;
-      if (!code) continue;
-
-      const patterns = [
-        new RegExp(`function\\s+${name}\\b`),
-        new RegExp(`(?:const|let|var)\\s+${name}\\s*=\\s*(?:function\\b|async\\s*\\(|\\(|\\w+\\s*=>)`),
-        new RegExp(`\\b${name}\\s*=\\s*(?:function\\b|async\\s*\\(|\\(|\\w+\\s*=>)`),
-      ];
-      let matchIndex = -1;
-      for (const pattern of patterns) {
-        const match = pattern.exec(code);
-        if (match) {
-          matchIndex = match.index;
-          break;
-        }
-      }
-      if (matchIndex < 0) continue;
-
-      const line = code.slice(0, matchIndex).split("\n").length;
-      const key = `${file}:${line}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      candidates.push({ kind: "module", file, line, name });
-    }
-  }
-
-  return candidates;
-}
-
-/**
- * Assign resolved source candidates, serialize, re-verify the final UTF-8
- * artifact size (source-candidate backfill happens after `sanitizeTask`'s
- * own size check, so the limit must be re-enforced here), and redact the
- * session token. Returns the artifact text or a size rejection.
+ * Serialize the v6 task, re-verify the final UTF-8 artifact size, and
+ * redact the session token. Goal 03: there is NO source-candidate backfill
+ * — the v6 artifact already carries the normalized source/sourceStack
+ * produced by the browser-side inspection engine.
  */
 export function serializeTaskArtifact(
   task: PortalStudioTask,
-  resolved: SourceCandidate[],
   sessionToken: string
 ):
   | { ok: true; serialized: string }
   | { ok: false; error: "artifact_too_large" } {
-  const elements = assignSourceCandidates(
-    task.annotations.flatMap((annotation) => annotation.elements),
-    resolved
-  );
-  // Re-assign the resolved candidates back into the per-annotation lists
-  // (they were flattened only for resolution; order is preserved).
-  let elementIndex = 0;
-  const annotations = task.annotations.map((annotation) => ({
-    ...annotation,
-    elements: annotation.elements.map((element) => {
-      const assigned = elements[elementIndex];
-      elementIndex += 1;
-      return assigned ?? element;
-    }),
-  }));
   const serialized = redactSessionToken(
-    JSON.stringify({ ...task, annotations }, null, 2),
+    JSON.stringify(task, null, 2),
     sessionToken
   );
   if (Buffer.byteLength(serialized, "utf8") > MAX_ARTIFACT_BYTES) {
     return { ok: false, error: "artifact_too_large" };
   }
   return { ok: true, serialized };
-}
-
-/**
- * Assign resolved module candidates back to each element by component name
- * (bounded per element and in total).
- */
-export function assignSourceCandidates(
-  elements: ElementCapture[],
-  resolved: SourceCandidate[]
-): ElementCapture[] {
-  const byName = new Map<string, SourceCandidate[]>();
-  for (const candidate of resolved) {
-    if (!candidate.name) continue;
-    const list = byName.get(candidate.name) ?? [];
-    if (list.length < MAX_SOURCE_CANDIDATES_PER_NAME) list.push(candidate);
-    byName.set(candidate.name, list);
-  }
-  let total = 0;
-  return elements.map((element) => {
-    if (total >= MAX_TOTAL_SOURCE_CANDIDATES) return element;
-    const names = new Set(
-      element.componentCandidates
-        .map((candidate) => candidate.name)
-        .filter((name): name is string => typeof name === "string")
-    );
-    const assigned: SourceCandidate[] = [];
-    for (const name of names) {
-      for (const candidate of byName.get(name) ?? []) {
-        if (assigned.length >= MAX_SOURCE_CANDIDATES_PER_ELEMENT) break;
-        assigned.push(candidate);
-        total += 1;
-        if (total >= MAX_TOTAL_SOURCE_CANDIDATES) break;
-      }
-      if (total >= MAX_TOTAL_SOURCE_CANDIDATES) break;
-    }
-    return { ...element, sourceCandidates: assigned };
-  });
 }
 
 /**
@@ -357,22 +239,80 @@ export function portalStudioPlugin(
    * read time (contract §10). Missing files hash as a path marker so edits
    * and deletions both change the revision.
    */
-  const computeTaskSourceRevision = (task: {
-    annotations: Array<{ elements: Array<{ sourceCandidates: SourceCandidate[] }> }>;
-  }): string => {
+  /**
+   * Resolve a normalized v6 workspace-relative source path to an absolute
+   * file. Vite dev source maps can report bare basenames ("data-table.tsx");
+   * direct root-relative resolution fails for those, so a BOUNDED,
+   * deterministic exact-basename lookup under the workspace source roots
+   * (src, registry, e2e) follows. Returns null when nothing matches.
+   */
+  const resolveSourceFile = (
+    workspaceRoot: string,
+    filePath: string
+  ): string | null => {
+    const direct = path.resolve(workspaceRoot, filePath);
+    if (existsSync(direct)) return direct;
+    const basename = path.basename(filePath);
+    if (!basename) return null;
+    const MAX_BASENAME_DEPTH = 8;
+    const visit = (directory: string, depth: number): string | null => {
+      if (depth > MAX_BASENAME_DEPTH) return null;
+      let entries: string[];
+      try {
+        entries = readdirSync(directory);
+      } catch {
+        return null;
+      }
+      for (const entry of entries.sort()) {
+        const full = path.join(directory, entry);
+        let stat;
+        try {
+          stat = statSync(full);
+        } catch {
+          continue;
+        }
+        if (stat.isDirectory()) {
+          const found = visit(full, depth + 1);
+          if (found) return found;
+        } else if (entry === basename) {
+          return full;
+        }
+      }
+      return null;
+    };
+    for (const sourceRoot of ["src", "registry", "e2e"]) {
+      const found = visit(path.join(workspaceRoot, sourceRoot), 0);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  /**
+   * Content hash of the task-referenced source files, computed from disk at
+   * read time (contract §10). Goal 03: uses ONLY the normalized v6
+   * source/sourceStack workspace paths (deduplicated; null and external
+   * frames ignored) — never module-graph backfill. Missing files hash as a
+   * path marker so edits and deletions both change the revision.
+   */
+  const computeTaskSourceRevision = (task: PortalStudioTask): string => {
     const files = new Map<string, string>();
+    const visitFrame = (filePath: string) => {
+      if (files.size >= 20) return;
+      const resolved = resolveSourceFile(root, filePath) ?? filePath;
+      if (files.has(resolved)) return;
+      let content = "";
+      try {
+        content = readFileSync(resolved, "utf8");
+      } catch {
+        content = "<missing>";
+      }
+      files.set(resolved, content);
+    };
     for (const annotation of task.annotations) {
       for (const element of annotation.elements) {
-        for (const candidate of element.sourceCandidates) {
-          if (files.size >= 20) break;
-          if (files.has(candidate.file)) continue;
-          let content = "";
-          try {
-            content = readFileSync(candidate.file, "utf8");
-          } catch {
-            content = "<missing>";
-          }
-          files.set(candidate.file, content);
+        if (element.source?.filePath) visitFrame(element.source.filePath);
+        for (const frame of element.sourceStack) {
+          visitFrame(frame.filePath);
         }
       }
     }
@@ -600,7 +540,13 @@ export function portalStudioPlugin(
               writeJsonResponse(response, 404, { error: "no_active_task" });
               return;
             }
-            writeJsonResponse(response, 200, { task });
+            // Goal 03: schema v1-v5 artifacts are reported with the shared
+            // typed unsupported_schema result; never normalized/migrated.
+            const unsupported = describeUnsupportedSchema(task);
+            writeJsonResponse(response, 200, {
+              task: unsupported ? null : task,
+              ...(unsupported ? { unsupported } : {}),
+            });
             return;
           }
 
@@ -678,6 +624,13 @@ export function portalStudioPlugin(
             const activeTask = readActiveTask(studioRoot);
             if (!activeTask) {
               writeJsonResponse(response, 400, { error: "no_active_task" });
+              return;
+            }
+            // Goal 03: old-schema artifacts get the shared typed
+            // unsupported_schema result — never verified, never migrated.
+            const unsupported = describeUnsupportedSchema(activeTask);
+            if (unsupported) {
+              writeJsonResponse(response, 400, { ...unsupported });
               return;
             }
             const baselineBrowserRevision = activeTask.revision?.browserRevision;
@@ -776,7 +729,16 @@ export function portalStudioPlugin(
                 // v5 task (legacy v1–v4 artifacts have no annotations[]
                 // and would crash the pure apply).
                 const normalized = normalizeTask(authoritative);
-                if (!normalized) return { ok: false, error: "invalid_task" };
+                if (!normalized) {
+                  // Goal 03: old-schema artifacts are rejected, never
+                  // mutated; the typed unsupported_schema error surfaces.
+                  return {
+                    ok: false,
+                    error: describeUnsupportedSchema(authoritative)
+                      ? "unsupported_schema"
+                      : "invalid_task",
+                  };
+                }
                 if (request.taskId !== normalized.taskId) {
                   return { ok: false, error: "task_id_mismatch" };
                 }
@@ -816,13 +778,21 @@ export function portalStudioPlugin(
                 writeJsonResponse(response, 503, { error: "write_busy" });
                 return;
               }
+              const unsupportedMutation =
+                written.error === "unsupported_schema"
+                  ? describeUnsupportedSchema(readActiveTask(studioRoot))
+                  : null;
               writeJsonResponse(response, 400, {
-                error:
-                  written.error === "annotation_not_found"
-                    ? "annotation_not_found"
-                    : written.error === "task_id_mismatch"
-                      ? "task_id_mismatch"
-                      : "invalid_mutation",
+                ...(unsupportedMutation
+                  ? unsupportedMutation
+                  : {
+                      error:
+                        written.error === "annotation_not_found"
+                          ? "annotation_not_found"
+                          : written.error === "task_id_mismatch"
+                            ? "task_id_mismatch"
+                            : "invalid_mutation",
+                    }),
               });
               return;
             }
@@ -941,6 +911,11 @@ export function portalStudioPlugin(
 
           const task = sanitizeTask(raw, { studioRoot });
           if (!task) {
+            const unsupported = describeUnsupportedSchema(raw);
+            if (unsupported) {
+              writeJsonResponse(response, 400, { ...unsupported });
+              return;
+            }
             writeJsonResponse(response, 400, { error: "invalid_task" });
             return;
           }
@@ -963,28 +938,15 @@ export function portalStudioPlugin(
           // authoritative serialized write boundary — the locked
           // authoritative read, the expected-revision validation (a stale
           // browser POST returns 409 and NEVER writes stale whole-task
-          // JSON), the resolve+finalize merge, the revision/updatedAt
-          // stamp and the atomic persist are ONE critical section.
-          let resolved: SourceCandidate[] = [];
+          // JSON), the finalize merge, the revision/updatedAt stamp and
+          // the atomic persist are ONE critical section. Goal 03: NO Vite
+          // module-graph source backfill — the v6 artifact already carries
+          // the normalized source/sourceStack.
           const written = writeActiveTaskSerialized(studioRoot, {
             expectedTaskRevision: expectedCreateRevision,
             apply: (authoritative) => {
               void authoritative;
-              const names = task.annotations.flatMap((annotation) =>
-                annotation.elements.flatMap((element) =>
-                  element.componentCandidates
-                    .map((candidate) => candidate.name)
-                    .filter(
-                      (name): name is string => typeof name === "string"
-                    )
-                )
-              );
-              resolved = resolveComponentSources(server, names, root);
-              const finalized = serializeTaskArtifact(
-                task,
-                resolved,
-                sessionToken
-              );
+              const finalized = serializeTaskArtifact(task, sessionToken);
               if (!finalized.ok) {
                 return { ok: false, error: "artifact_too_large" };
               }
@@ -1034,7 +996,6 @@ export function portalStudioPlugin(
             taskId: task.taskId,
             writtenAt: new Date().toISOString(),
             file: resolveActiveTaskPath(studioRoot),
-            sourceCandidates: resolved,
             // P2-3 review: the create response carries the stamped revision
             // so the client keeps its baseline in sync.
             taskRevision: written.revision,

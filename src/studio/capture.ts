@@ -8,14 +8,54 @@
  * candidates are resolved by the dev server (module graph) at write time.
  */
 
+/**
+ * NOTE (Goal 03): this module is the older capture implementation and is
+ * UNREACHABLE from production and active tests — the active capture path is
+ * the async v6 pipeline in `./inspection`. It remains physically present
+ * only until the Goal 05 deletion; its local types are frozen at the v5
+ * shape and must not be imported by active code.
+ */
+
 import { collectComponentChain, readFiberTypeName } from "./grab";
 import { redactTextValue, sanitizeAttributeMap } from "./redact";
-import type {
-  BusinessContextItem,
-  ElementCapture,
-  ElementSnapshot,
-  SelectorCandidate,
-} from "./types";
+import type { BusinessContextItem } from "./types";
+
+type SelectorCandidateKind = "id" | "attribute" | "path";
+
+type SelectorCandidate = {
+  kind: SelectorCandidateKind;
+  selector: string;
+};
+
+type ComponentCandidateKind = "fiber" | "dom";
+
+type ComponentCandidate = {
+  name: string | null;
+  key: string | null;
+  kind?: ComponentCandidateKind;
+};
+
+type ElementSnapshot = {
+  text: string;
+  attributes: Record<string, string>;
+  childCount: number;
+  domOutline?: string;
+  computedStyle?: Record<string, string>;
+};
+
+type LegacyElementCapture = {
+  tagName: string;
+  selectorCandidates: SelectorCandidate[];
+  componentCandidates: ComponentCandidate[];
+  sourceCandidates: Array<{
+    kind: "module" | "signature";
+    file: string;
+    line?: number;
+    name?: string;
+    excerpt?: string;
+  }>;
+  snapshot: ElementSnapshot;
+};
 
 const PAGE_ELEMENT_ATTRIBUTE = "data-ai-page-element";
 const NB_ATTRIBUTE_PREFIX = "data-nb-";
@@ -157,7 +197,7 @@ export function collectSelectorCandidates(
 /** Read component candidates from the React fiber chain (fails closed). */
 export function collectComponentCandidates(
   element: Element
-): ElementCapture["componentCandidates"] {
+): ComponentCandidate[] {
   return collectComponentChain(element);
 }
 
@@ -259,7 +299,7 @@ export function collectBusinessContext(element: Element): BusinessContextItem[] 
 export function captureElement(
   element: Element,
   options: { includeStyles?: boolean } = {}
-): ElementCapture {
+): LegacyElementCapture {
   const attributes = sanitizeAttributeMap(readAttributes(element));
   const text = redactTextValue(
     (element.textContent ?? "")
@@ -296,7 +336,7 @@ export function captureElement(
 export function captureSelection(
   elements: Element[]
 ): {
-  elements: ElementCapture[];
+  elements: LegacyElementCapture[];
   businessContext: BusinessContextItem[];
 } {
   const captures = elements.map((element) => captureElement(element));

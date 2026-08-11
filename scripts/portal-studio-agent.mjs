@@ -24,7 +24,12 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { ANNOTATION_ID_PATTERN, MAX_COMPLETION_SUMMARY_LENGTH, normalizeTask } from "../src/studio/task-model.ts";
+import {
+  ANNOTATION_ID_PATTERN,
+  MAX_COMPLETION_SUMMARY_LENGTH,
+  describeUnsupportedSchema,
+  normalizeTask,
+} from "../src/studio/task-model.ts";
 import {
   readTaskRevision,
   writeActiveTaskSerialized,
@@ -43,13 +48,26 @@ function readTask() {
   const taskPath = path.join(studioRoot(), "tasks", TASK_FILENAME);
   try {
     const parsed = JSON.parse(readFileSync(taskPath, "utf8"));
-    // Normalize legacy v1-v4 artifacts on read (like the browser and the
-    // print CLI) so the IDs the CLI addresses match what users see; the
-    // write then persists the lossless v5 form (D-033 #17).
+    // v6 only: schema v1-v5 artifacts are rejected with the shared typed
+    // unsupported_schema result; never normalized, never migrated.
     return normalizeTask(parsed);
   } catch {
     return null;
   }
+}
+
+/** Shared old-schema rejection: prints the typed message and exits 1. */
+function failUnsupported(parsed) {
+  const unsupported = describeUnsupportedSchema(parsed);
+  if (!unsupported) return false;
+  fail(
+    `${unsupported.clearInstruction} Clear it with: rm ${path.join(
+      studioRoot(),
+      unsupported.clearPath
+    )}`,
+    1
+  );
+  return true;
 }
 
 function fail(message, code) {
@@ -58,9 +76,17 @@ function fail(message, code) {
 }
 
 function printList() {
+  const taskPath = path.join(studioRoot(), "tasks", TASK_FILENAME);
+  let parsed = null;
+  try {
+    parsed = JSON.parse(readFileSync(taskPath, "utf8"));
+  } catch {
+    parsed = null;
+  }
+  if (parsed !== null && failUnsupported(parsed)) return;
   const task = readTask();
   if (!task) {
-    fail(`no task found at ${path.join(studioRoot(), "tasks", TASK_FILENAME)}`, 1);
+    fail(`no task found at ${taskPath}`, 1);
     return;
   }
   const annotations = Array.isArray(task.annotations) ? task.annotations : [];
@@ -116,9 +142,9 @@ function printUsage() {
       "Portal Studio — agent CLI",
       "",
       "Usage:",
-      "  node scripts/portal-studio-agent.mjs list",
-      "  node scripts/portal-studio-agent.mjs complete -- <annotation-id> --verified --summary \"...\"",
-      "  node scripts/portal-studio-agent.mjs reopen -- <annotation-id>",
+      "  pnpm studio:list",
+      "  pnpm studio:complete -- <annotation-id> --verified --summary \"...\"",
+      "  pnpm studio:reopen -- <annotation-id>",
       "",
       "Commands:",
       "  list       print all annotations (id, status, comment, evidence)",
@@ -189,9 +215,16 @@ function main() {
       expectedTaskRevision,
       apply: (authoritative) => {
         if (!authoritative) return { ok: false, error: "no_active_task" };
-        // Legacy v1-v4 artifacts normalize on read (like the browser).
+        // v6 only: old-schema artifacts are rejected, never mutated.
         const normalized = normalizeTask(authoritative);
-        if (!normalized) return { ok: false, error: "invalid_task" };
+        if (!normalized) {
+          return {
+            ok: false,
+            error: describeUnsupportedSchema(authoritative)
+              ? "unsupported_schema"
+              : "invalid_task",
+          };
+        }
         const annotation = findAnnotation(normalized, annotationId);
         if (!annotation) {
           return { ok: false, error: "annotation_not_found" };
@@ -231,7 +264,13 @@ function main() {
       fail(
         result.error === "annotation_not_found"
           ? `annotation "${annotationId}" not found in the active task`
-          : `apply failed: ${result.error}`,
+          : result.error === "unsupported_schema"
+            ? `the active task uses a removed schema (v1-v5). Clear ${path.join(
+                studioRoot(),
+                "tasks",
+                TASK_FILENAME
+              )} and create the first v6 annotation again.`
+            : `apply failed: ${result.error}`,
         1
       );
       return;
@@ -267,7 +306,14 @@ function main() {
     apply: (authoritative) => {
       if (!authoritative) return { ok: false, error: "no_active_task" };
       const normalized = normalizeTask(authoritative);
-      if (!normalized) return { ok: false, error: "invalid_task" };
+      if (!normalized) {
+        return {
+          ok: false,
+          error: describeUnsupportedSchema(authoritative)
+            ? "unsupported_schema"
+            : "invalid_task",
+        };
+      }
       const annotation = findAnnotation(normalized, annotationId);
       if (!annotation) {
         return { ok: false, error: "annotation_not_found" };
@@ -303,6 +349,12 @@ function main() {
     fail(
       result.error === "annotation_not_found"
         ? `annotation "${annotationId}" not found in the active task`
+        : result.error === "unsupported_schema"
+          ? `the active task uses a removed schema (v1-v5). Clear ${path.join(
+              studioRoot(),
+              "tasks",
+              TASK_FILENAME
+            )} and create the first v6 annotation again.`
         : `apply failed: ${result.error}`,
       1
     );

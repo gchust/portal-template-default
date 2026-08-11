@@ -7,7 +7,7 @@
  * required — the task file is local and the token is never read here.
  *
  * Usage:
- *   node scripts/portal-studio-print.mjs [--json|--markdown] [--task <id>]
+ *   pnpm studio:print [--json|--markdown] [--task <id>]
  *
  * Options:
  *   --json       pretty-printed task JSON (default)
@@ -32,13 +32,15 @@ const TASK_FILENAME = "active-task.json";
 const TASK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
 function parseArguments(argv) {
+  // pnpm run forwards a leading "--" separator after the script name.
+  const cleanArgs = argv[0] === "--" ? argv.slice(1) : argv;
   const options = { format: "json", taskId: undefined };
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
+  for (let index = 0; index < cleanArgs.length; index += 1) {
+    const argument = cleanArgs[index];
     if (argument === "--json" || argument === "--markdown") {
       options.format = argument.slice(2);
     } else if (argument === "--task") {
-      const value = argv[index + 1];
+      const value = cleanArgs[index + 1];
       if (!value || !TASK_ID_PATTERN.test(value) || value.includes("..")) {
         throw new Error(`Invalid --task id: ${value}`);
       }
@@ -78,6 +80,8 @@ function main() {
     const task = readTask(studioRoot, options.taskId);
     if (options.format === "markdown") {
       // Goal 04: explicit all-mode for the CLI (one shared formatter).
+      // Goal 03: schema v1-v5 artifacts render the shared typed
+      // unsupported_schema result (never normalized).
       process.stdout.write(formatTaskMarkdown(task, { includeCompleted: true }));
     } else {
       process.stdout.write(formatTaskJson(task));

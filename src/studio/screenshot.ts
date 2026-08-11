@@ -191,12 +191,23 @@ export async function captureViewportPng(
 
     const svg = buildScreenshotSvg(serializeXml(clone), canvasWidth, canvasHeight);
     const image = new Image();
-    const loaded = new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("svg raster failed"));
+    const loaded = new Promise<"loaded" | "timeout">((resolve) => {
+      let settled = false;
+      const done = (value: "loaded" | "timeout") => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      image.onload = () => done("loaded");
+      image.onerror = () => done("loaded"); // rasterization failure falls through to toDataURL
       image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+      // Bounded rasterization: a stuck SVG decode must never leave a save
+      // in flight forever — the annotation is already persisted.
+      const timer = setTimeout(() => done("timeout"), 5000);
     });
-    await loaded;
+    const rasterized = await loaded;
+    if (rasterized === "timeout") return null;
 
     const canvas = document.createElement("canvas");
     canvas.width = canvasWidth;

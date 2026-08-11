@@ -25,6 +25,10 @@ export type StudioComposerProps = {
   onSave: () => void;
   onCancel: () => void;
   saving: boolean;
+  /** True while the bounded async v6 capture pipeline is running. */
+  inspecting?: boolean;
+  /** Retry a failed inspection (keeps the comment and selection). */
+  onRetry?: () => void;
   /** Inline save error (role=alert); the draft stays in the textarea. */
   error?: string | null;
   /** Round-6 style surface ref for genuine height anchoring. */
@@ -39,6 +43,8 @@ export function StudioComposer({
   onSave,
   onCancel,
   saving,
+  inspecting = false,
+  onRetry,
   error,
   surfaceRef,
 }: StudioComposerProps) {
@@ -88,9 +94,24 @@ export function StudioComposer({
           }
         }}
       />
+      {inspecting ? (
+        <p className="ps-meta ps-composer-inspecting" role="status">
+          {t("studio.inspecting", "Inspecting target…")}
+        </p>
+      ) : null}
       {error ? (
         <p className="ps-error ps-composer-error" role="alert">
           {error}
+          {onRetry ? (
+            <button
+              type="button"
+              className="ps-button ps-composer-retry"
+              disabled={saving}
+              onClick={onRetry}
+            >
+              {t("studio.retry", "Retry")}
+            </button>
+          ) : null}
         </p>
       ) : null}
       <div className="ps-actions ps-composer-actions">
@@ -105,12 +126,14 @@ export function StudioComposer({
         <button
           type="button"
           className="ps-button ps-primary"
-          disabled={saving}
+          disabled={saving || inspecting}
           onClick={onSave}
         >
           {saving
             ? t("studio.saving", "Saving task…")
-            : t("studio.save", "Save")}
+            : inspecting
+              ? t("studio.inspecting", "Inspecting target…")
+              : t("studio.save", "Save")}
         </button>
       </div>
     </div>

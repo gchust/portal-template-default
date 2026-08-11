@@ -5,6 +5,62 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TOOLBAR_STYLES } from "@/studio/styles";
 import { StudioToolbar } from "@/studio/toolbar";
 import { applyMutationOperations } from "@/studio/mutation";
+import { setElementRect } from "../../setup/hit-test-shim";
+
+/**
+ * v6 capture for a LIVE element (selector + fingerprint match the DOM).
+ */
+const captureOfElement = (element: Element) => {
+  const parent = element.parentElement;
+  return {
+    tagName: element.tagName.toLowerCase(),
+    selector: element.id ? `#${element.id}` : element.tagName.toLowerCase(),
+    bounds: { x: 10, y: 10, width: 200, height: 40 },
+    componentName: null,
+    source: null,
+    sourceStack: [],
+    htmlPreview: "",
+    styleText: "",
+    fingerprint: {
+      tagName: element.tagName.toLowerCase(),
+      role: "",
+      accessibleName: "",
+      text: (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+      identityAttributes: element.id ? { id: element.id } : {},
+      childCount: element.children.length,
+      parent: parent
+        ? { tagName: parent.tagName.toLowerCase(), role: "" }
+        : { tagName: "", role: "" },
+    },
+  };
+};
+
+/** Wait until the async v6 capture pipeline finished (Save enabled). */
+const waitForInspection = async () => {
+  await waitFor(() => {
+    expect(
+      within(composer()).getByRole("button", { name: "Save", exact: true })
+    ).not.toBeDisabled();
+  });
+};
+
+/**
+ * Coordinate-aware page-element click. user-event always dispatches at
+ * (0,0) in jsdom, but the v6 engine hit-tests by coordinates — this helper
+ * clicks at the element's real rect center so the engine resolves the
+ * intended target (and never the toolbar chrome at the origin).
+ */
+const clickTarget = async (element: Element, options: { shiftKey?: boolean } = {}) => {
+  // A real pointer click focuses the target (tabindex -1 rows receive
+  // focus via pointerdown); keyboard flows depend on the focus.
+  (element as HTMLElement).focus?.();
+  const rect = element.getBoundingClientRect();
+  fireEvent.click(element, {
+    clientX: rect.x + rect.width / 2,
+    clientY: rect.y + rect.height / 2,
+    ...(options.shiftKey ? { shiftKey: true } : {}),
+  });
+};
 
 vi.mock("@/studio/screenshot", () => ({
   captureViewportPng: vi.fn(async () => ({
@@ -21,11 +77,22 @@ const config = {
   mutateEndpoint: "/__portal-studio/mutate",
 };
 
+let pageElementIndex = 0;
 const makePageElement = (text = "Hello row", id = "") => {
   const row = document.createElement("tr");
   row.setAttribute("tabindex", "-1");
   if (id) row.id = id;
   row.textContent = text;
+  // v6: the engine hit-tests by coordinates; the jsdom shim needs a rect.
+  // Distinct rects per element so coordinate-based picking/toggling never
+  // collapses two page elements onto one hit point.
+  setElementRect(row, {
+    x: 100 + pageElementIndex * 250,
+    y: 200,
+    width: 200,
+    height: 40,
+  });
+  pageElementIndex += 1;
   document.body.appendChild(row);
   return row;
 };
@@ -269,17 +336,29 @@ describe("StudioToolbar", () => {
     expect(shotUrl).toBe("/__portal-studio/screenshots");
     expect(JSON.parse(shotInit.body).taskId).toBeTruthy();
     const payload = JSON.parse(taskInit.body);
-    expect(payload.schemaVersion).toBe(5);
+    expect(payload.schemaVersion).toBe(6);
     expect(payload.annotations).toHaveLength(1);
     expect(payload.annotations[0].comment).toBe("Increase padding");
     expect(payload.annotations[0].kind).toBe("element");
     expect(payload.annotations[0].elements).toHaveLength(1);
     expect(payload.diagnostics).toEqual([]);
-    expect(payload.annotations[0].elements[0].tagName).toBe("tr");
-    expect(payload.annotations[0].elements[0].snapshot.domOutline).toContain("tr");
-    expect(
-      payload.annotations[0].elements[0].snapshot.computedStyle
-    ).toBeDefined();
+    const element = payload.annotations[0].elements[0];
+    expect(element.tagName).toBe("tr");
+    // v6: ONE React Grab selector + bounds + fingerprint (no snapshot).
+    expect(typeof element.selector).toBe("string");
+    expect(element.selector.length).toBeGreaterThan(0);
+    expect(element.bounds).toMatchObject({
+      x: expect.any(Number),
+      y: expect.any(Number),
+      width: expect.any(Number),
+      height: expect.any(Number),
+    });
+    expect(element.fingerprint).toMatchObject({
+      tagName: "tr",
+      identityAttributes: { id: "row-a" },
+    });
+    expect(element.source).toBeNull();
+    expect(payload.annotations[0].pageContext.routeKey).toBe("/");
     expect(payload.businessContext).toEqual([]);
     expect(payload.redaction).toEqual({
       droppedKeys: [],
@@ -306,7 +385,7 @@ describe("StudioToolbar", () => {
     // Re-enter picking: Shift+click must NOT toggle the second element in.
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Pick element" }));
-    await user.click(b, { shiftKey: true });
+    await clickTarget(b, { shiftKey: true });
     expect(composer()).toBeInTheDocument();
     // No additive counter anywhere.
     expect(screen.queryByText(/Selected/)).not.toBeInTheDocument();
@@ -500,7 +579,7 @@ describe("StudioToolbar", () => {
       ok: true,
       json: async () => ({
         task: {
-          schemaVersion: 5,
+          schemaVersion: 6,
           taskId: "task-list-1",
           createdAt: "2026-08-07T12:00:00.000Z",
           url: "http://127.0.0.1:4173/users",
@@ -658,8 +737,8 @@ describe("StudioToolbar", () => {
       screen.getByRole("button", { name: /Annotation tools/ })
     );
     await user.click(screen.getByRole("button", { name: "Multi-select" }));
-    await user.click(cellA);
-    await user.click(cellB);
+    await clickTarget(cellA);
+    await clickTarget(cellB);
     // Same annotation: two elements in the group, no new annotation yet.
     expect(screen.getByText(/Selected/)).toBeInTheDocument();
     // Enter finishes the group → comment editor appears.
@@ -716,7 +795,7 @@ describe("StudioToolbar", () => {
 
   const makeLoadTask = (annotations: unknown[]) => ({
     task: {
-      schemaVersion: 5,
+      schemaVersion: 6,
       taskId: "task-actions-1",
       createdAt: "2026-08-07T12:00:00.000Z",
       url: "http://127.0.0.1:4173/users",
@@ -773,7 +852,7 @@ describe("StudioToolbar", () => {
             annotations?: unknown[];
           };
           const task = {
-            schemaVersion: 5,
+            schemaVersion: 6,
             taskId: baseTask.taskId ?? "task-routed-1",
             createdAt: "2026-08-07T12:00:00.000Z",
             url: "http://127.0.0.1:4173/users",
@@ -1824,7 +1903,7 @@ describe("StudioToolbar", () => {
         respond: async () =>
           jsonResponse({
             task: {
-              schemaVersion: 5,
+              schemaVersion: 6,
               taskId: "task-1",
               createdAt: "2026-08-08T12:00:00.000Z",
               url: "http://127.0.0.1:4173/users",
@@ -1929,7 +2008,7 @@ describe("StudioToolbar", () => {
 
   const makeMarkerTask = (annotations: unknown[]) => ({
     task: {
-      schemaVersion: 5,
+      schemaVersion: 6,
       taskId: "task-markers-1",
       createdAt: "2026-08-08T12:00:00.000Z",
       url: "http://127.0.0.1:4173/users",
@@ -2014,13 +2093,11 @@ describe("StudioToolbar", () => {
     ]);
   };
 
-  const elementCapture = (id: string) => ({
-    tagName: "tr",
-    selectorCandidates: [{ kind: "id", selector: `#${id}` }],
-    componentCandidates: [],
-    sourceCandidates: [],
-    snapshot: { text: id, attributes: {}, childCount: 0 },
-  });
+  const elementCapture = (id: string) => {
+    const element = document.getElementById(id);
+    if (!element) throw new Error(`missing page element ${id}`);
+    return captureOfElement(element);
+  };
 
   it("markers render as semantic buttons labeled with display number and action", async () => {
     makeMarkerPageElement("Alice", "row-a");
@@ -3060,7 +3137,7 @@ describe("StudioToolbar", () => {
             ok: true,
             json: async () => ({
               task: {
-                schemaVersion: 5,
+                schemaVersion: 6,
                 taskId: "poll-task",
                 createdAt: "2026-08-09T00:00:00.000Z",
                 url: "http://127.0.0.1:4173/users",
@@ -3271,7 +3348,7 @@ describe("StudioToolbar", () => {
         respond: async () =>
           jsonResponse({
             task: {
-              schemaVersion: 5,
+              schemaVersion: 6,
               taskId: "task-save-conflict",
               createdAt: "2026-08-09T00:00:00.000Z",
               url: "http://127.0.0.1:4173/users",
@@ -3349,7 +3426,7 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     let mutateCalls = 0;
     const serverTask: unknown = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       taskId: "task-conflict-1",
       annotations: [
         {
@@ -3413,7 +3490,7 @@ describe("StudioToolbar", () => {
     const user = userEvent.setup();
     let mutateCalls = 0;
     let serverTask: unknown = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       taskId: "task-conflict-2",
       annotations: [
         {
@@ -4591,7 +4668,7 @@ describe("StudioToolbar", () => {
             y: 700,
             toJSON: () => ({}),
           }) as DOMRect;
-        await user.click(trigger);
+        await clickTarget(trigger);
         const panel = screen.getByRole("region", {
           name: regionName,
         }) as HTMLElement;
@@ -5236,7 +5313,7 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
         y: 200,
         toJSON: () => ({}),
       }) as DOMRect;
-    await user.click(row);
+    await clickTarget(row);
     expect(composer()).toBeInTheDocument();
     // G02-01/A: the selected target stays highlighted while the composer
     // is open — the .ps-selected outline renders from the committed
@@ -5389,15 +5466,13 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
       (taskPosts(fetchMock)[0][1] as { body: string }).body
     ) as {
       annotations: Array<{
-        elements: Array<{ selectorCandidates: Array<{ selector: string }> }>;
+        elements: Array<{ selector: string }>;
       }>;
     };
     const elements = payload.annotations.at(-1)!.elements;
     // Exactly ONE element, and it is the SECOND target — no accumulation.
     expect(elements).toHaveLength(1);
-    expect(
-      elements[0].selectorCandidates.some((c) => c.selector === "#row-b-g02")
-    ).toBe(true);
+    expect(elements[0].selector).toContain("row-b-g02");
   });
 
   it("G02-06: Multi is the ONLY multi-target path; after save it resumes with an EMPTY group (documented rule)", async () => {
@@ -5408,8 +5483,8 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
     render(<StudioToolbar config={config} />);
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Multi-select" }));
-    await user.click(cellA);
-    await user.click(cellB);
+    await clickTarget(cellA);
+    await clickTarget(cellB);
     expect(screen.getByText(/Selected/)).toHaveTextContent("2");
     await user.keyboard("{Enter}");
     await user.type(composerTextarea(), "group");
@@ -5429,7 +5504,7 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
     // Documented rule: the resumed group is EMPTY (Selected: 0).
     expect(screen.getByText(/Selected/)).toHaveTextContent("0");
     // A fresh group can be built immediately — one click = one member.
-    await user.click(cellB);
+    await clickTarget(cellB);
     expect(screen.getByText(/Selected/)).toHaveTextContent("1");
   });
 
@@ -5528,7 +5603,7 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
             serverTask
               ? {
                   task: {
-                    schemaVersion: 5,
+                    schemaVersion: 6,
                     taskId: serverTask.taskId,
                     createdAt: "2026-08-10T00:00:00.000Z",
                     annotations: serverTask.annotations,
@@ -5713,8 +5788,8 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
     render(<StudioToolbar config={config} />);
     await user.click(screen.getByRole("button", { name: /Annotation tools/ }));
     await user.click(screen.getByRole("button", { name: "Multi-select" }));
-    await user.click(cellA);
-    await user.click(cellB);
+    await clickTarget(cellA);
+    await clickTarget(cellB);
     await user.keyboard("{Enter}");
     await user.type(composerTextarea(), "serial group");
     await user.click(composerSave());
@@ -6096,13 +6171,11 @@ describe("Goal 03 — stable marker/list semantics and viewport polish", () => {
     return element;
   };
 
-  const captureOf = (id: string) => ({
-    tagName: "tr",
-    selectorCandidates: [{ kind: "id", selector: `#${id}` }],
-    componentCandidates: [],
-    sourceCandidates: [],
-    snapshot: { text: id, attributes: {}, childCount: 0 },
-  });
+  const captureOf = (id: string) => {
+    const element = document.getElementById(id);
+    if (!element) throw new Error(`missing page element ${id}`);
+    return captureOfElement(element);
+  };
 
   const taskRoutes = (annotations: unknown[]) => {
     const current = [...annotations];
@@ -6113,7 +6186,7 @@ describe("Goal 03 — stable marker/list semantics and viewport polish", () => {
         respond: async () =>
           jsonResponse({
             task: {
-              schemaVersion: 5,
+              schemaVersion: 6,
               taskId: "task-g03",
               createdAt: "2026-08-10T00:00:00.000Z",
               url: "http://127.0.0.1:4173/users",
@@ -6185,7 +6258,7 @@ describe("Goal 03 — stable marker/list semantics and viewport polish", () => {
     const third = await screen.findByRole("button", {
       name: "Annotation 3: open editor",
     });
-    await user.click(third);
+    await clickTarget(third);
     const editor = screen.getByRole("dialog", { name: "Annotation editor" });
     // The editor label carries the STABLE number from the full order.
     expect(editor).toHaveTextContent("Annotation 3 · Annotation comment");

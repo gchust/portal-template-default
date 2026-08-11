@@ -42,7 +42,7 @@ import {
   ownServerAddresses,
 } from "@/studio/vite";
 
-const TASK_SCHEMA_VERSION = 4;
+const TASK_SCHEMA_VERSION = 6;
 
 const makeTask = (overrides: Record<string, unknown> = {}) => ({
   schemaVersion: TASK_SCHEMA_VERSION,
@@ -50,13 +50,42 @@ const makeTask = (overrides: Record<string, unknown> = {}) => ({
   createdAt: "2026-08-07T12:00:00.000Z",
   url: "http://127.0.0.1:5176/users",
   title: "t",
-  instruction: "i",
-  elements: [
+  annotations: [
     {
-      tagName: "div",
-      selectorCandidates: [],
-      componentCandidates: [],
-      snapshot: { text: "x", attributes: {}, childCount: 0 },
+      annotationId: "ann-1",
+      kind: "element",
+      comment: "i",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      status: "open",
+      elements: [
+        {
+          tagName: "div",
+          selector: "#abuse-el",
+          bounds: { x: 0, y: 0, width: 10, height: 10 },
+          componentName: null,
+          source: null,
+          sourceStack: [],
+          htmlPreview: "x",
+          styleText: "",
+          fingerprint: {
+            tagName: "div",
+            role: "",
+            accessibleName: "",
+            text: "x",
+            identityAttributes: { id: "abuse-el" },
+            childCount: 0,
+            parent: { tagName: "body", role: "" },
+          },
+        },
+      ],
+      pageContext: {
+        url: "http://127.0.0.1:5176/users",
+        routeKey: "/users",
+        title: "t",
+        viewport: { width: 1440, height: 900 },
+        scroll: { x: 0, y: 0 },
+        businessContext: [],
+      },
     },
   ],
   businessContext: [],
@@ -187,27 +216,30 @@ describe("abuse: redaction-leakage seeds never reach artifacts", () => {
     bareToken: "token=abuse-bare-1",
   };
 
-  it("redacts every seed in instruction, snapshot text, and diagnostics", () => {
+  it("redacts every seed in comment, htmlPreview, fingerprint text, and diagnostics", () => {
     const task = sanitizeTask(
       makeTask({
-        instruction: [
-          seeds.authorization,
-          seeds.cookie,
-          seeds.queryToken,
-          seeds.apiKey,
-          seeds.password,
-          seeds.bareToken,
-        ].join(" "),
-        elements: [
+        annotations: [
           {
-            tagName: "div",
-            selectorCandidates: [],
-            componentCandidates: [],
-            snapshot: {
-              text: [seeds.queryToken, seeds.bareToken].join(" "),
-              attributes: { title: seeds.authorization },
-              childCount: 0,
-            },
+            ...makeTask().annotations[0],
+            comment: [
+              seeds.authorization,
+              seeds.cookie,
+              seeds.queryToken,
+              seeds.apiKey,
+              seeds.password,
+              seeds.bareToken,
+            ].join(" "),
+            elements: [
+              {
+                ...makeTask().annotations[0].elements[0],
+                htmlPreview: [seeds.queryToken, seeds.bareToken].join(" "),
+                fingerprint: {
+                  ...makeTask().annotations[0].elements[0].fingerprint,
+                  text: seeds.authorization,
+                },
+              },
+            ],
           },
         ],
         diagnostics: [
@@ -271,7 +303,9 @@ describe("abuse: redaction-leakage seeds never reach artifacts", () => {
     const serialized = JSON.stringify(task);
     expect(serialized).not.toContain("requestBody");
     expect(serialized).not.toContain("responseBody");
-    expect(serialized).not.toContain('"body"');
+    // No standalone body field (the fingerprint's legitimate parent
+    // tagName "body" is a value, not a field).
+    expect(serialized).not.toMatch(/"body"\s*:/);
   });
 });
 

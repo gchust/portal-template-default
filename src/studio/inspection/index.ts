@@ -18,6 +18,22 @@ export {
 } from "./react-grab-engine";
 
 export {
+  buildCaptureDraft,
+  INSPECTION_CONCURRENCY,
+  type CapturePipelineOptions,
+  type CapturePipelineResult,
+} from "./pipeline";
+
+export {
+  MAX_REGION_SAMPLE_POINTS,
+  MAX_REGION_TARGETS,
+  pruneRegionTargets,
+  sampleRegionPoints,
+  sampleRegionTargets,
+  semanticTargetScore,
+} from "./region";
+
+export {
   enrichInspectedElement,
   boundRouteContext,
   collectInspectionBusinessContext,

@@ -79,8 +79,7 @@ const annotationSecondary = (annotation: Annotation): string => {
   if (page?.routeKey) return page.routeKey;
   if (page?.url) return page.url;
   for (const element of annotation.elements) {
-    const selector = element.selectorCandidates[0]?.selector;
-    if (selector) return selector;
+    if (element.selector) return element.selector;
   }
   return "";
 };

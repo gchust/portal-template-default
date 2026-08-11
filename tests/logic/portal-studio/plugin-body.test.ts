@@ -14,7 +14,6 @@ import {
 import {
   TASK_SCHEMA_VERSION,
   type PortalStudioTask,
-  type SourceCandidate,
 } from "@/studio/types";
 
 const toStream = (chunks: Buffer[]) =>
@@ -65,8 +64,8 @@ describe("readRequestBody per-route limits", () => {
   });
 });
 
-describe("serializeTaskArtifact size re-check after source backfill", () => {
-  const baseTask = (names: string[]): PortalStudioTask => ({
+describe("serializeTaskArtifact size re-check (v6, no source backfill)", () => {
+  const baseTask = (count: number): PortalStudioTask => ({
     schemaVersion: TASK_SCHEMA_VERSION,
     taskId: "task-size-1",
     createdAt: "2026-08-07T12:00:00.000Z",
@@ -79,18 +78,30 @@ describe("serializeTaskArtifact size re-check after source backfill", () => {
         comment: "i",
         createdAt: "2026-08-07T12:00:00.000Z",
         status: "open",
-        elements: names.map((name) => ({
-      tagName: "div",
-      selectorCandidates: [],
-      componentCandidates: [{ name, key: null, kind: "fiber" }],
-      sourceCandidates: [],
-      snapshot: {
-        text: "x",
-        attributes: {},
-        childCount: 0,
-        domOutline: "div",
-        computedStyle: { display: "block" },
-      },
+        elements: Array.from({ length: count }, (_, index) => ({
+          tagName: "div",
+          selector: `#el-${index}`,
+          bounds: { x: 0, y: 0, width: 10, height: 10 },
+          componentName: `Component${index}`,
+          source: {
+            filePath: "src/components/ui/table.tsx",
+            lineNumber: 42,
+            columnNumber: 4,
+            componentName: `Component${index}`,
+          },
+          sourceStack: [],
+          htmlPreview: "<div>x</div>",
+          styleText: "display: block;",
+          __pad: "x",
+          fingerprint: {
+            tagName: "div",
+            role: "",
+            accessibleName: "",
+            text: "x",
+            identityAttributes: { id: `el-${index}` },
+            childCount: 0,
+            parent: { tagName: "section", role: "" },
+          },
         })),
       },
     ],
@@ -98,52 +109,33 @@ describe("serializeTaskArtifact size re-check after source backfill", () => {
     redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
   });
 
-  it("accepts artifacts that stay within the limit after backfill", () => {
-    const task = baseTask(["TableRow"]);
-    const resolved: SourceCandidate[] = [
-      {
-        kind: "module",
-        file: "/repo/src/components/ui/table.tsx",
-        line: 42,
-        name: "TableRow",
-      },
-    ];
-    const result = serializeTaskArtifact(task, resolved, "session-token");
+  it("serializes a v6 task without candidate backfill and redacts the token", () => {
+    const task = baseTask(1);
+    const result = serializeTaskArtifact(task, "session-token");
     expect(result.ok).toBe(true);
     if (result.ok) {
       const parsed = JSON.parse(result.serialized) as PortalStudioTask;
-      expect(parsed.annotations[0].elements[0].sourceCandidates).toHaveLength(1);
-      expect(
-        parsed.annotations[0].elements[0].sourceCandidates[0].file
-      ).toContain("table.tsx");
+      expect(parsed.annotations[0].elements[0].selector).toBe("#el-0");
+      expect(parsed.annotations[0].elements[0].source?.filePath).toContain(
+        "table.tsx"
+      );
       // The session token is redacted even inside the serialized artifact.
       expect(result.serialized).not.toContain("session-token");
     }
   });
 
-  it("rejects artifacts that exceed 256 KB after source backfill", () => {
-    // sanitizeTask's own size check passes (no source candidates yet); the
-    // backfill pushes the final artifact over the limit.
-    const names = Array.from({ length: 40 }, (_, i) => `Component${i}`);
-    const task = baseTask(names);
-    const longFile = "/repo/src/".padEnd(7000, "x") + ".tsx";
-    const resolved: SourceCandidate[] = names.flatMap((name, index) => [
-      {
-        kind: "module",
-        file: longFile.slice(0, longFile.length - index),
-        line: 1,
-        name,
-      },
-      {
-        kind: "module",
-        file: `${longFile.slice(0, 6000)}/alt.tsx`,
-        line: 2,
-        name,
-      },
-    ]);
-    // Sanitization itself must accept the task (it is small without sources).
-    expect(sanitizeTask(task)).not.toBeNull();
-    const result = serializeTaskArtifact(task, resolved, "");
+  it("rejects artifacts that exceed 256 KB (sanitize and serialize agree)", () => {
+    const task = baseTask(50);
+    // Pad each capture near the v6 caps so the serialized artifact exceeds
+    // the limit. sanitizeTask is the primary gate; serializeTaskArtifact
+    // re-checks the final size as defense in depth.
+    for (const element of task.annotations[0].elements) {
+      element.htmlPreview = "x".repeat(4000);
+      element.styleText = "y".repeat(6000);
+      element.fingerprint.text = "z".repeat(1000);
+    }
+    expect(sanitizeTask(task)).toBeNull();
+    const result = serializeTaskArtifact(task, "");
     expect(result).toEqual({ ok: false, error: "artifact_too_large" });
   });
 });

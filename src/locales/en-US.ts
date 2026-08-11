@@ -135,6 +135,10 @@ export const starter = {
   "studio.cancel": "Cancel",
   "studio.save": "Save",
   "studio.saving": "Saving…",
+  "studio.inspecting": "Inspecting target…",
+  "studio.captureError": "Could not inspect the target",
+  "studio.retry": "Retry",
+  "studio.unsupportedTask": "Unsupported task schema",
   "studio.savedToast": "Annotation saved",
   "studio.errorSave": "Unable to save",
   "studio.sessionStale":

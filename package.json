@@ -115,7 +115,10 @@
     "sdk:check": "pnpm exec portal-sdk check",
     "studio:list": "tsx ./scripts/portal-studio-agent.mjs list",
     "studio:complete": "tsx ./scripts/portal-studio-agent.mjs complete",
-    "studio:reopen": "tsx ./scripts/portal-studio-agent.mjs reopen"
+    "studio:reopen": "tsx ./scripts/portal-studio-agent.mjs reopen",
+    "studio:print": "tsx ./scripts/portal-studio-print.mjs",
+    "studio:verify": "tsx ./scripts/portal-studio-verify.mjs",
+    "studio:mcp": "tsx ./scripts/portal-studio-mcp.mjs"
   },
   "browserslist": {
     "production": [

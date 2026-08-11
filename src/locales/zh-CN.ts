@@ -128,6 +128,10 @@ export const starter = {
   "studio.cancel": "取消",
   "studio.save": "保存",
   "studio.saving": "正在保存…",
+  "studio.inspecting": "正在检查目标…",
+  "studio.captureError": "无法检查目标",
+  "studio.retry": "重试",
+  "studio.unsupportedTask": "不支持的任务格式",
   "studio.savedToast": "批注已保存",
   "studio.errorSave": "无法保存",
   "studio.sessionStale":

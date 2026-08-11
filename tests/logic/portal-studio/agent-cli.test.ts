@@ -15,7 +15,7 @@ const SCRIPT = path.resolve(
 );
 
 const baseTask = {
-  schemaVersion: 5,
+  schemaVersion: 6,
   taskId: "agent-test-1",
   createdAt: "2026-08-09T00:00:00.000Z",
   url: "http://127.0.0.1:4173/users",
@@ -28,6 +28,14 @@ const baseTask = {
       createdAt: "2026-08-09T00:00:00.000Z",
       status: "open",
       elements: [],
+      pageContext: {
+        url: "http://127.0.0.1:4173/users",
+        routeKey: "/users",
+        title: "Users",
+        viewport: { width: 1440, height: 900 },
+        scroll: { x: 0, y: 0 },
+        businessContext: [],
+      },
     },
     {
       annotationId: "ann-b",
@@ -37,6 +45,14 @@ const baseTask = {
       status: "completed",
       completedAt: "2026-08-09T01:00:00.000Z",
       elements: [],
+      pageContext: {
+        url: "http://127.0.0.1:4173/users",
+        routeKey: "/users",
+        title: "Users",
+        viewport: { width: 1440, height: 900 },
+        scroll: { x: 0, y: 0 },
+        businessContext: [],
+      },
     },
   ],
   businessContext: [],
@@ -240,40 +256,55 @@ describe("studio:reopen", () => {
   });
 });
 
-describe("legacy v1-v4 artifact normalization (review P2)", () => {
-  it("list shows the normalized v5 annotation and complete addresses the browser-visible id", () => {
-    const v4 = {
-      schemaVersion: 4,
-      taskId: "legacy-task",
-      createdAt: "2026-08-09T00:00:00.000Z",
-      url: "http://127.0.0.1:4173/users",
-      title: "Users",
-      instruction: "Fix the header",
-      elements: [],
-      businessContext: [],
-      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
-    };
+describe("old-schema artifacts (shared typed unsupported_schema)", () => {
+  it("list exits 1 with the clear instruction and never mutates", () => {
+    for (const version of [1, 2, 3, 4, 5]) {
+      const old = {
+        schemaVersion: version,
+        taskId: "legacy-task",
+        ...(version === 1
+          ? { instruction: "x", element: {} }
+          : { instruction: "x", elements: [] }),
+      };
+      writeFileSync(
+        path.join(root, "tasks", "active-task.json"),
+        JSON.stringify(old, null, 2)
+      );
+      const listed = run(["list"]);
+      expect(listed.status).toBe(1);
+      expect(listed.stderr).toContain("removed schema");
+      expect(listed.stderr).toContain("tasks/active-task.json");
+      // The artifact is never migrated.
+      const task = readTask() as { schemaVersion: number };
+      expect(task.schemaVersion).toBe(version);
+    }
+  });
+
+  it("complete exits 1 with the clear instruction on an old-schema artifact", () => {
     writeFileSync(
       path.join(root, "tasks", "active-task.json"),
-      JSON.stringify(v4, null, 2)
+      JSON.stringify({ schemaVersion: 5, annotations: [] }, null, 2)
     );
-    const listed = run(["list"]);
-    expect(listed.status).toBe(0);
-    // normalizeV4ToV5 produces the browser-visible id `${taskId}-v4`.
-    expect(listed.stdout).toContain("legacy-task-v4");
     const result = run([
       "complete",
       "--",
-      "legacy-task-v4",
+      "ann-a",
       "--verified",
       "--summary",
       "Fixed; verified",
     ]);
-    expect(result.status).toBe(0);
-    const task = readTask();
-    expect(task.schemaVersion).toBe(5);
-    expect(task.annotations[0].status).toBe("completed");
-    expect(task.annotations[0].completedEvidence?.summary).toBe("Fixed; verified");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("removed schema");
+  });
+
+  it("reopen exits 1 with the clear instruction on an old-schema artifact", () => {
+    writeFileSync(
+      path.join(root, "tasks", "active-task.json"),
+      JSON.stringify({ schemaVersion: 4, instruction: "x", elements: [] }, null, 2)
+    );
+    const result = run(["reopen", "--", "ann-a"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("removed schema");
   });
 });
 

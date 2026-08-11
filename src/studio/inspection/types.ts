@@ -13,7 +13,12 @@
  * normalization.
  */
 
-import type { BusinessContextItem } from "../types";
+import type {
+  BusinessContextItem,
+  ElementCapture,
+  ElementFingerprint,
+  SourceFrame,
+} from "../types";
 
 /** v6 bounded limits (shared contract §5 invariants). */
 export const INSPECTION_SELECTOR_LIMIT = 4096;
@@ -35,37 +40,14 @@ export type ViewportRect = {
   height: number;
 };
 
-/** Workspace-relative POSIX source location (shared contract §5). */
-export type SourceFrame = {
-  filePath: string;
-  lineNumber: number;
-  columnNumber: number;
-  componentName: string | null;
-};
+export type { ElementCapture, ElementFingerprint, SourceFrame };
 
-/** Deterministic rehydration fingerprint (shared contract §6). */
-export type ElementFingerprint = {
-  tagName: string;
-  role: string;
-  accessibleName: string;
-  text: string;
-  identityAttributes: Record<string, string>;
-  childCount: number;
-  parent: { tagName: string; role: string };
-};
-
-/** Normalized v6 element capture (shared contract §5 `ElementCapture`). */
-export type InspectedElement = {
-  tagName: string;
-  selector: string;
-  bounds: ViewportRect;
-  componentName: string | null;
-  source: SourceFrame | null;
-  sourceStack: SourceFrame[];
-  htmlPreview: string;
-  styleText: string;
-  fingerprint: ElementFingerprint;
-};
+/**
+ * Normalized v6 element capture — the canonical shared-contract §5 model
+ * defined in `src/studio/types.ts` (type-only import; erased at runtime so
+ * the vite-config-loaded modules never pull the engine).
+ */
+export type InspectedElement = ElementCapture;
 
 /** Bounded route context consumed by the enrichment boundary. */
 export type RouteContext = {

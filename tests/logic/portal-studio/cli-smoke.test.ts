@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const TASK_PATH = path.join("tasks", "active-task.json");
 
 const baseTask = {
-  schemaVersion: 5,
+  schemaVersion: 6,
   taskId: "task-smoke-1",
   createdAt: "2026-08-11T00:00:00.000Z",
   url: "http://127.0.0.1:4173/users",
@@ -27,6 +27,14 @@ const baseTask = {
       createdAt: "2026-08-11T00:00:00.000Z",
       status: "open",
       elements: [],
+      pageContext: {
+        url: "http://127.0.0.1:4173/users",
+        routeKey: "/users",
+        title: "Users",
+        viewport: { width: 1440, height: 900 },
+        scroll: { x: 0, y: 0 },
+        businessContext: [],
+      },
     },
     {
       annotationId: "ann-bbb",
@@ -35,6 +43,14 @@ const baseTask = {
       createdAt: "2026-08-11T00:00:00.000Z",
       status: "open",
       elements: [],
+      pageContext: {
+        url: "http://127.0.0.1:4173/users",
+        routeKey: "/users",
+        title: "Users",
+        viewport: { width: 1440, height: 900 },
+        scroll: { x: 0, y: 0 },
+        businessContext: [],
+      },
     },
   ],
   businessContext: [],

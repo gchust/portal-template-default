@@ -26,7 +26,7 @@ const FIXTURE = path.resolve(
 );
 
 const baseTask = (annotationIds: string[]) => ({
-  schemaVersion: 5,
+  schemaVersion: 6,
   taskId: "task-serialized-1",
   createdAt: "2026-08-11T00:00:00.000Z",
   url: "http://127.0.0.1:4173/users",
@@ -38,6 +38,14 @@ const baseTask = (annotationIds: string[]) => ({
     createdAt: "2026-08-11T00:00:00.000Z",
     status: "open",
     elements: [],
+    pageContext: {
+      url: "http://127.0.0.1:4173/users",
+      routeKey: "/users",
+      title: "Users",
+      viewport: { width: 1440, height: 900 },
+      scroll: { x: 0, y: 0 },
+      businessContext: [],
+    },
   })),
   businessContext: [],
   redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },

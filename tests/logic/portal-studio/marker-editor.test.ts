@@ -119,13 +119,31 @@ describe("resolveMarkerEditorPosition — viewport edges", () => {
 });
 
 describe("resolveAnnotationTargets — multi-target resolution", () => {
-  const makeCapture = (id: string) => ({
-    tagName: "td",
-    selectorCandidates: [{ kind: "id" as const, selector: `#${id}` }],
-    componentCandidates: [],
-    sourceCandidates: [],
-    snapshot: { text: id, attributes: {}, childCount: 0 },
-  });
+  /** v6 capture whose selector + fingerprint match the live element. */
+  const makeCapture = (element: Element) => {
+    const parent = element.parentElement;
+    return {
+      tagName: element.tagName.toLowerCase(),
+      selector: `#${element.id}`,
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+      componentName: null,
+      source: null,
+      sourceStack: [],
+      htmlPreview: "",
+      styleText: "",
+      fingerprint: {
+        tagName: element.tagName.toLowerCase(),
+        role: "",
+        accessibleName: "",
+        text: (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+        identityAttributes: { id: element.id },
+        childCount: element.children.length,
+        parent: parent
+          ? { tagName: parent.tagName.toLowerCase(), role: "" }
+          : { tagName: "", role: "" },
+      },
+    };
+  };
 
   const makeAnnotation = (elements: Annotation["elements"]): Annotation => ({
     annotationId: "multi-1",
@@ -134,6 +152,14 @@ describe("resolveAnnotationTargets — multi-target resolution", () => {
     createdAt: "2026-08-08T00:00:00.000Z",
     status: "open",
     elements,
+    pageContext: {
+      url: "http://localhost/",
+      routeKey: "/",
+      title: "",
+      viewport: { width: 1440, height: 900 },
+      scroll: { x: 0, y: 0 },
+      businessContext: [],
+    },
   });
 
   afterEach(() => {
@@ -147,7 +173,7 @@ describe("resolveAnnotationTargets — multi-target resolution", () => {
     b.id = "b";
     document.body.appendChild(a);
     document.body.appendChild(b);
-    const annotation = makeAnnotation([makeCapture("a"), makeCapture("b")]);
+    const annotation = makeAnnotation([makeCapture(a), makeCapture(b)]);
     expect(resolveAnnotationTargets(annotation)).toEqual([a, b]);
   });
 
@@ -167,8 +193,23 @@ describe("resolveAnnotationTargets — multi-target resolution", () => {
     const a = document.createElement("td");
     a.id = "a";
     document.body.appendChild(a);
-    const annotation = makeAnnotation([makeCapture("a"), makeCapture("ghost")]);
+    const ghost = document.createElement("td");
+    ghost.id = "ghost";
+    // Captured but REMOVED from the DOM: selector resolves nothing.
+    const annotation = makeAnnotation([makeCapture(a), makeCapture(ghost)]);
+    ghost.remove();
     expect(resolveAnnotationTargets(annotation)).toEqual([a]);
+  });
+
+  it("returns unresolved when the fingerprint no longer matches", () => {
+    const a = document.createElement("td");
+    a.id = "a";
+    document.body.appendChild(a);
+    const capture = makeCapture(a);
+    // The live element changes its strong identity: hard mismatch.
+    a.id = "changed";
+    const annotation = makeAnnotation([capture]);
+    expect(resolveAnnotationTargets(annotation)).toEqual([]);
   });
 
   it("returns [] for region annotations", () => {
@@ -178,6 +219,14 @@ describe("resolveAnnotationTargets — multi-target resolution", () => {
       comment: "area",
       createdAt: "2026-08-08T00:00:00.000Z",
       status: "open",
+      pageContext: {
+        url: "http://localhost/",
+        routeKey: "/",
+        title: "",
+        viewport: { width: 1440, height: 900 },
+        scroll: { x: 0, y: 0 },
+        businessContext: [],
+      },
       elements: [],
       region: { x: 0, y: 0, width: 100, height: 100 },
     };

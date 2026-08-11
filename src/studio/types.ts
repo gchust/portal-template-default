@@ -1,68 +1,62 @@
 /**
  * Portal Studio — task artifact schema (shared client/server contract).
  *
- * Contract: docs/exec-plans/portal-studio/00-shared-contract.md §6.
- * Version 3 (Goal 03): additive over v2 — `diagnostics` (bounded ring
- * buffer of redacted runtime errors), `heartbeat` (server-derived page
- * state), and `screenshot.capturedAt`. v1 payloads (single `element`) and
- * v2 payloads remain accepted and normalized by the server; the print CLI
- * renders all three versions.
+ * Contract: docs/exec-plans/portal-studio-react-grab-migration-v1/
+ * 00-shared-contract.md §5 (schema v6) and §8.
+ * Version 6 (React Grab migration Goal 03): every element capture carries
+ * ONE React Grab selector plus the normalized v6 source/stack/fingerprint;
+ * regions are document-relative; pageContext is required on every new
+ * annotation. Schema v1-v5 artifacts are NEVER normalized or migrated —
+ * they receive one shared typed `unsupported_schema` result (see
+ * task-model.describeUnsupportedSchema).
  */
 
-export const TASK_SCHEMA_VERSION = 5 as const;
-export const TASK_SCHEMA_VERSION_V4 = 4 as const;
+export const TASK_SCHEMA_VERSION = 6 as const;
 export const TASK_SCHEMA_VERSION_V1 = 1 as const;
 export const TASK_SCHEMA_VERSION_V2 = 2 as const;
+export const TASK_SCHEMA_VERSION_V4 = 4 as const;
+export const TASK_SCHEMA_VERSION_V5 = 5 as const;
 
 export const TASK_FILENAME = "active-task.json";
 export const SCREENSHOTS_DIRECTORY = "screenshots";
 
-export type SelectorCandidateKind = "id" | "attribute" | "path";
-
-export type SelectorCandidate = {
-  kind: SelectorCandidateKind;
-  selector: string;
+/** Workspace-relative POSIX source location (shared contract §5). */
+export type SourceFrame = {
+  filePath: string;
+  lineNumber: number;
+  columnNumber: number;
+  componentName: string | null;
 };
 
-/** Explainable candidate origin (contract: candidates carry provenance). */
-export type ComponentCandidateKind = "fiber" | "dom";
-
-export type ComponentCandidate = {
-  name: string | null;
-  key: string | null;
-  kind?: ComponentCandidateKind;
-};
-
-export type SourceCandidateKind = "module" | "signature";
-
-export type SourceCandidate = {
-  kind: SourceCandidateKind;
-  file: string;
-  line?: number;
-  name?: string;
-  excerpt?: string;
-};
-
-export type ElementSnapshot = {
+/** Deterministic rehydration fingerprint (shared contract §6). */
+export type ElementFingerprint = {
+  tagName: string;
+  role: string;
+  accessibleName: string;
   text: string;
-  attributes: Record<string, string>;
+  identityAttributes: Record<string, string>;
   childCount: number;
-  /** Bounded DOM outline, e.g. `button#save.primary[role=button]`. */
-  domOutline?: string;
-  /** Curated computed-style excerpt (≤ 30 properties, values ≤ 200 chars). */
-  computedStyle?: Record<string, string>;
+  parent: { tagName: string; role: string };
 };
 
+/** Normalized v6 element capture (shared contract §5 `ElementCapture`). */
 export type ElementCapture = {
   tagName: string;
-  selectorCandidates: SelectorCandidate[];
-  componentCandidates: ComponentCandidate[];
-  sourceCandidates: SourceCandidate[];
-  snapshot: ElementSnapshot;
+  /** ONE React Grab selector; no candidate array. */
+  selector: string;
+  /** Top-level viewport bounds. */
+  bounds: { x: number; y: number; width: number; height: number };
+  componentName: string | null;
+  source: SourceFrame | null;
+  sourceStack: SourceFrame[];
+  htmlPreview: string;
+  styleText: string;
+  fingerprint: ElementFingerprint;
 };
 
-/** Viewport-relative integer rect (marquee selection). */
+/** Document-relative marquee region (shared contract §5 `Region`). */
 export type Region = {
+  coordinateSpace: "document";
   x: number;
   y: number;
   width: number;
@@ -173,18 +167,17 @@ export type Annotation = {
   };
   /** Hidden without deletion (D-033 #11; used by G03). */
   hidden?: boolean;
-  /** Element captures for element/multi kinds (schema-v2-shaped). */
+  /** v6 element captures for element/multi kinds. */
   elements: ElementCapture[];
-  /** Viewport rect for the region kind (marquee). */
+  /** Document-relative rect for the region kind (marquee). */
   region?: Region;
   /**
-   * Goal 06: page context captured when the annotation was created
-   * (backward-compatible — absent on legacy annotations). routeKey gates
-   * marker rendering: markers only resolve/render when the current route
+   * v6: REQUIRED on every new annotation. routeKey gates marker
+   * rendering: markers only resolve/render when the current route
    * matches. url/title/viewport/scroll/businessContext describe the page
    * state the annotation refers to.
    */
-  pageContext?: {
+  pageContext: {
     url: string;
     routeKey: string;
     title: string;
@@ -192,6 +185,23 @@ export type Annotation = {
     scroll: { x: number; y: number };
     businessContext: BusinessContextItem[];
   };
+};
+
+/**
+ * Shared typed old-schema result (shared contract §5 "Unsupported old
+ * artifacts"): returned by the browser, endpoint, print, verify, CLI and
+ * MCP when the active artifact is schema v1-v5. Never normalized or
+ * migrated; carries the actual/expected version and a safe instruction to
+ * clear the dev-only task.
+ */
+export type UnsupportedSchemaResult = {
+  status: "unsupported_schema";
+  schemaVersion: number | null;
+  expectedSchemaVersion: typeof TASK_SCHEMA_VERSION;
+  /** Safe instruction to clear the dev-only artifact. */
+  clearInstruction: string;
+  /** Path of the dev-only artifact to clear (POSIX, relative to studio root). */
+  clearPath: string;
 };
 
 /**
@@ -235,29 +245,4 @@ export type PortalStudioTask = {
    * Cleared by add/reopen/clear, which make the task active again.
    */
   completedAt?: string;
-};
-
-/**
- * v4 payload shape (unpublished dev-only intermediate, D-033 #17): kept
- * for the simple normalize-on-read path — never a migration framework.
- */
-export type PortalStudioTaskV4 = Omit<
-  PortalStudioTask,
-  "schemaVersion" | "annotations"
-> & {
-  schemaVersion: typeof TASK_SCHEMA_VERSION_V4;
-  instruction: string;
-  elements: ElementCapture[];
-  region?: Region;
-};
-
-/** v1 payload shape (accepted by the server, normalized to v2+). */
-export type PortalStudioTaskV1 = {
-  schemaVersion: typeof TASK_SCHEMA_VERSION_V1;
-  taskId: string;
-  createdAt: string;
-  url: string;
-  title: string;
-  instruction: string;
-  element: ElementCapture;
 };

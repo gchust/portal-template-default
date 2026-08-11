@@ -60,11 +60,13 @@ import {
 } from "./dock";
 
 import {
-  captureSelection,
-  collectTargetStack,
+  buildCaptureDraft,
+  inspectionEngine,
+  isInspectionCandidate,
   isStudioElement,
-  readHostComponentName,
-} from "./capture";
+  sampleRegionTargets,
+  walkComposedAncestors,
+} from "./inspection";
 import { sharedDiagnosticsBuffer, snapshotDiagnostics } from "./diagnostics";
 import { formatTaskMarkdown } from "./format.ts";
 import { captureViewportPng } from "./screenshot";
@@ -81,7 +83,6 @@ import {
   type ViewFilter,
 } from "./task-model";
 import {
-  commitRegion,
   EMPTY_SELECTION,
   normalizeRegion,
   replaceSelection,
@@ -93,9 +94,8 @@ import {
   type BusinessContextItem,
   type ElementCapture,
   type PortalStudioTask,
-  type Region,
-  type SourceCandidate,
 } from "./types";
+import { toDocumentRegion } from "./selection";
 
 export type PortalStudioConfig = {
   token: string;
@@ -111,7 +111,6 @@ export type PortalStudioSaveResult = {
   ok: boolean;
   taskId?: string;
   file?: string;
-  sourceCandidates?: SourceCandidate[];
   error?: string;
 };
 
@@ -119,7 +118,6 @@ const t = (key: string, fallback: string) =>
   translate(key, { ns: "starter" }, fallback);
 
 const STACK_DEPTH = 4;
-const MAX_REGION_SCAN_ELEMENTS = 5000;
 const readDockStorage = (): DockStorage | null => {
   try {
     return typeof window !== "undefined" ? window.localStorage : null;
@@ -160,11 +158,19 @@ type ToolbarMode =
   | { kind: "marquee"; start: { x: number; y: number }; current: { x: number; y: number } }
   | {
       kind: "draft";
+      /**
+       * null while the bounded async v6 capture pipeline is running or
+       * after a failed inspection (captureError set); the live selection
+       * and comment are retained for retry.
+       */
       capture: {
         elements: ElementCapture[];
         businessContext: BusinessContextItem[];
-        region?: Region;
-      };
+        /** Viewport-space marquee rect (converted to v6 at save time). */
+        region?: { x: number; y: number; width: number; height: number };
+      } | null;
+      inspecting: boolean;
+      captureError: string | null;
     }
   | { kind: "saving" }
   | { kind: "error"; message: string };
@@ -197,7 +203,9 @@ const rectStyle = (rect: DOMRect | undefined): CSSProperties => {
   };
 };
 
-const regionStyle = (region: Region | undefined): CSSProperties => {
+const regionStyle = (
+  region: { x: number; y: number; width: number; height: number } | undefined
+): CSSProperties => {
   if (!region) return { display: "none" };
   return {
     display: "block",
@@ -210,7 +218,10 @@ const regionStyle = (region: Region | undefined): CSSProperties => {
 
 
 
-const toRegion = (mode: ToolbarMode): Region | undefined => {
+/** Viewport-space marquee rect (persisted document-relative in v6). */
+const toRegion = (mode: ToolbarMode):
+  | { x: number; y: number; width: number; height: number }
+  | undefined => {
   if (mode.kind !== "marquee") return undefined;
   return normalizeRegion(
     {
@@ -221,17 +232,6 @@ const toRegion = (mode: ToolbarMode): Region | undefined => {
     },
     { width: window.innerWidth, height: window.innerHeight }
   );
-};
-
-const collectRegionCandidates = (): Element[] => {
-  const body = document.body;
-  if (!body) return [];
-  const candidates: Element[] = [];
-  for (const element of Array.from(body.querySelectorAll("*"))) {
-    if (candidates.length >= MAX_REGION_SCAN_ELEMENTS) break;
-    candidates.push(element);
-  }
-  return candidates;
 };
 
 export function StudioToolbar({
@@ -285,7 +285,7 @@ export function StudioToolbar({
   const lastDraftCaptureRef = useRef<{
     elements: ElementCapture[];
     businessContext: BusinessContextItem[];
-    region?: Region;
+    region?: { x: number; y: number; width: number; height: number };
   } | null>(null);
   const [saveToast, setSaveToast] = useState<{
     message: string;
@@ -899,45 +899,115 @@ export function StudioToolbar({
 
 
   const refreshSelectionRects = useCallback(() => {
-    setSelectionRects(
-      selectionRef.current.elements
-        .map((element) => element.getBoundingClientRect())
-        .filter((rect) => rect.width > 0 || rect.height > 0)
-    );
+    const rects = selectionRef.current.elements
+      .map((element) => element.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 || rect.height > 0);
+    setSelectionRects(rects);
   }, []);
 
   const updateOutline = useCallback((element: Element | undefined) => {
     setOutlineRect(element?.getBoundingClientRect());
-    setHoverName(element ? readHostComponentName(element) : null);
+    // v6: the hover label is the deterministic tag name — component names
+    // come from the async inspection result, never from Fiber reads.
+    setHoverName(element ? element.tagName.toLowerCase() : null);
   }, []);
 
   const cancelPicking = useCallback(() => {
+    // Abandon any in-flight capture session so a late pipeline result can
+    // never resurrect a stale draft.
+    captureSessionRef.current += 1;
     setMode({ kind: "idle" });
     setOutlineRect(undefined);
     setHoverName(null);
   }, []);
 
-  const commitDraft = useCallback((selection: SelectionState) => {
-    selectionRef.current = selection;
-    setSelectionCount(selection.elements.length);
-    const capture = captureSelection(selection.elements);
-    // The marquee region must survive into the draft so it lands in the
-    // artifact (regression: the region was dropped here).
-    setMode({
-      kind: "draft",
-      capture: {
-        ...capture,
-        ...(selection.region ? { region: selection.region } : {}),
-      },
-    });
-    setOutlineRect(undefined);
-    setHoverName(null);
-    // Goal 02 A: the selected target stays highlighted while the composer
-    // is open — the .ps-selected outline renders from selectionRects, so
-    // the committed selection must be measured NOW (before, the highlight
-    // only appeared while picking).
-    refreshSelectionRects();
-  }, [refreshSelectionRects]);
+  // Capture-session guard (Goal 03): every new capture session bumps the
+  // counter; a pipeline result whose session is stale is DISCARDED so a
+  // canceled capture can never write a stale draft.
+  const captureSessionRef = useRef(0);
+
+  /**
+   * Bounded async v6 capture pipeline (Goal 03): live elements -> sole
+   * InspectionEngine (concurrency 4, order preserved, all-or-nothing) ->
+   * NocoBase enrichment -> redacted v6 captures. On failure the live
+   * selection and comment are retained and a retryable error is shown.
+   */
+  const runCapturePipeline = useCallback(
+    (selection: SelectionState) => {
+      const session = captureSessionRef.current + 1;
+      captureSessionRef.current = session;
+      setMode({
+        kind: "draft",
+        capture: null,
+        inspecting: true,
+        captureError: null,
+      });
+      setOutlineRect(undefined);
+      setHoverName(null);
+      void buildCaptureDraft(
+        selection.elements,
+        {
+          url: window.location.href,
+          routeKey: currentRouteKey(),
+          title: document.title,
+        },
+        { isCancelled: () => captureSessionRef.current !== session }
+      ).then((result) => {
+        if (captureSessionRef.current !== session) return;
+        if (!result.ok) {
+          setMode({
+            kind: "draft",
+            capture: null,
+            inspecting: false,
+            captureError: `${t(
+              "studio.captureError",
+              "Could not inspect the target"
+            )}: ${result.error.message}`,
+          });
+          return;
+        }
+        setMode({
+          kind: "draft",
+          capture: {
+            elements: result.captures,
+            businessContext: result.businessContext,
+            // The marquee region survives into the draft (viewport-space)
+            // so it lands in the artifact (regression guard) and anchors
+            // the composer; conversion to document-relative happens at
+            // save time.
+            ...(selection.region ? { region: selection.region } : {}),
+          },
+          inspecting: false,
+          captureError: null,
+        });
+        // The selected target stays highlighted while the composer is
+        // open — the .ps-selected outline renders from selectionRects.
+        refreshSelectionRects();
+      });
+    },
+    [refreshSelectionRects]
+  );
+
+  const commitDraft = useCallback(
+    (selection: SelectionState) => {
+      selectionRef.current = selection;
+      setSelectionCount(selection.elements.length);
+      setComposerError(null);
+      // The selected target stays highlighted IMMEDIATELY (the .ps-selected
+      // outline renders from the live selection rects, independent of the
+      // async inspection result).
+      refreshSelectionRects();
+      runCapturePipeline(selection);
+    },
+    [refreshSelectionRects, runCapturePipeline]
+  );
+
+  /** Retry a failed inspection with the retained live selection. */
+  const retryCapture = useCallback(() => {
+    const current = modeRef.current;
+    if (current.kind !== "draft" || !current.captureError) return;
+    runCapturePipeline(selectionRef.current);
+  }, [runCapturePipeline]);
 
   // Goal 01 v5 review P1: Pick is STRICTLY single-target. Shift is inert —
   // Shift+click / Shift+Enter commit the same single-element draft as a
@@ -958,12 +1028,20 @@ export function StudioToolbar({
     if (!picking || !open || auxPanel !== "none") return;
 
     const handlePointerMove = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element) || isStudioElement(target)) return;
-      const stack = collectTargetStack(target, STACK_DEPTH);
+      if (!(event.target instanceof Element) || isStudioElement(event.target)) return;
+      // v6: engine coordinate hit testing — never raw event.target.
+      const target = inspectionEngine.getTargetAtPoint(
+        event.clientX,
+        event.clientY
+      );
+      if (!target) return;
+      const stack = walkComposedAncestors(target, {
+        isIncluded: isInspectionCandidate,
+        maxDepth: STACK_DEPTH,
+      });
       if (!stack.length) return;
       setMode({ kind: "picking", stack, index: 0 });
-      updateOutline(stack[0]);
+      updateOutline(target);
     };
     const handleScroll = () => {
       const current = modeRef.current;
@@ -990,13 +1068,17 @@ export function StudioToolbar({
       const keyTarget = event.target;
       if (keyTarget instanceof Element && isStudioElement(keyTarget)) return;
       // Keyboard picking without hover: seed the stack from the focused page
-      // element so arrow keys and Enter work with no pointer input.
+      // element (no pointer coordinates exist; the engine filter still
+      // applies through the hierarchy walk).
       const stack =
         current.stack.length > 0
           ? current.stack
           : document.activeElement instanceof Element &&
             !isStudioElement(document.activeElement)
-            ? collectTargetStack(document.activeElement, STACK_DEPTH)
+            ? walkComposedAncestors(document.activeElement, {
+                isIncluded: isInspectionCandidate,
+                maxDepth: STACK_DEPTH,
+              })
             : [];
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -1019,11 +1101,19 @@ export function StudioToolbar({
       }
     };
     const handleClick = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element) || isStudioElement(target)) return;
+      if (!(event.target instanceof Element) || isStudioElement(event.target)) return;
       const current = modeRef.current;
       if (current.kind !== "picking") return;
-      const stack = collectTargetStack(target, STACK_DEPTH);
+      // v6: engine coordinate hit testing with the §3a promotion rule.
+      const target = inspectionEngine.getTargetAtPoint(
+        event.clientX,
+        event.clientY
+      );
+      if (!target) return;
+      const stack = walkComposedAncestors(target, {
+        isIncluded: isInspectionCandidate,
+        maxDepth: STACK_DEPTH,
+      });
       const picked = stack[0] ?? target;
       event.preventDefault();
       event.stopPropagation();
@@ -1082,8 +1172,11 @@ export function StudioToolbar({
         setMode({ kind: "idle" });
         return;
       }
-      const selection = commitRegion(collectRegionCandidates(), region);
-      commitDraft(selection);
+      // v6: bounded React Grab point-stack sampling across the marquee —
+      // corners, center and an adaptive grid; deduplicated and semantically
+      // pruned. No full-DOM scan.
+      const targets = sampleRegionTargets(region);
+      commitDraft({ elements: targets, region });
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -1112,6 +1205,7 @@ export function StudioToolbar({
     annotations,
     setAnnotations,
     lastTaskRevisionRef,
+    unsupported,
     refreshTask,
   } = useActiveTaskSync(
     {
@@ -1172,6 +1266,7 @@ export function StudioToolbar({
   const startPicking = useCallback(() => {
     // A new capture session always starts from a clean selection; stale
     // selections from a previous draft/save must never leak into it.
+    captureSessionRef.current += 1;
     selectionRef.current = EMPTY_SELECTION;
     setSelectionRects([]);
     setSelectionCount(0);
@@ -1179,7 +1274,10 @@ export function StudioToolbar({
     const active = document.activeElement;
     const initial =
       active instanceof Element && !isStudioElement(active)
-        ? collectTargetStack(active, STACK_DEPTH)
+        ? walkComposedAncestors(active, {
+            isIncluded: isInspectionCandidate,
+            maxDepth: STACK_DEPTH,
+          })
         : [];
     if (initial.length) {
       setMode({ kind: "picking", stack: initial, index: 0 });
@@ -1193,13 +1291,17 @@ export function StudioToolbar({
   /** True multi-select (D-033 #5): seed the group and enter multi mode. */
   const startMulti = () => {
     // A new capture session always starts from a clean selection.
+    captureSessionRef.current += 1;
     selectionRef.current = EMPTY_SELECTION;
     setSelectionRects([]);
     setSelectionCount(0);
     const active = document.activeElement;
     const initial =
       active instanceof Element && !isStudioElement(active)
-        ? collectTargetStack(active, STACK_DEPTH)
+        ? walkComposedAncestors(active, {
+            isIncluded: isInspectionCandidate,
+            maxDepth: STACK_DEPTH,
+          })
         : [];
     setMode({ kind: "multi", stack: initial, index: 0, group: [] });
     updateOutline(initial[0]);
@@ -1231,6 +1333,7 @@ export function StudioToolbar({
 
   /** Cancel the multi session (Esc). */
   const cancelMulti = useCallback(() => {
+    captureSessionRef.current += 1;
     selectionRef.current = EMPTY_SELECTION;
     setSelectionRects([]);
     setSelectionCount(0);
@@ -1248,16 +1351,23 @@ export function StudioToolbar({
     if (!isMulti || !open || auxPanel !== "none") return;
 
     const handlePointerMove = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element) || isStudioElement(target)) return;
-      const stack = collectTargetStack(target, STACK_DEPTH);
+      if (!(event.target instanceof Element) || isStudioElement(event.target)) return;
+      const target = inspectionEngine.getTargetAtPoint(
+        event.clientX,
+        event.clientY
+      );
+      if (!target) return;
+      const stack = walkComposedAncestors(target, {
+        isIncluded: isInspectionCandidate,
+        maxDepth: STACK_DEPTH,
+      });
       if (!stack.length) return;
       setMode((current) =>
         current.kind === "multi"
           ? { ...current, stack, index: 0 }
           : current
       );
-      updateOutline(stack[0]);
+      updateOutline(target);
     };
     const handleScroll = () => {
       const current = modeRef.current;
@@ -1286,7 +1396,10 @@ export function StudioToolbar({
           ? current.stack
           : document.activeElement instanceof Element &&
             !isStudioElement(document.activeElement)
-            ? collectTargetStack(document.activeElement, STACK_DEPTH)
+            ? walkComposedAncestors(document.activeElement, {
+                isIncluded: isInspectionCandidate,
+                maxDepth: STACK_DEPTH,
+              })
             : [];
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -1315,11 +1428,19 @@ export function StudioToolbar({
       }
     };
     const handleClick = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element) || isStudioElement(target)) return;
+      if (!(event.target instanceof Element) || isStudioElement(event.target)) return;
       const current = modeRef.current;
       if (current.kind !== "multi") return;
-      const stack = collectTargetStack(target, STACK_DEPTH);
+      // v6: engine coordinate hit testing with the §3a promotion rule.
+      const target = inspectionEngine.getTargetAtPoint(
+        event.clientX,
+        event.clientY
+      );
+      if (!target) return;
+      const stack = walkComposedAncestors(target, {
+        isIncluded: isInspectionCandidate,
+        maxDepth: STACK_DEPTH,
+      });
       const picked = stack[0] ?? target;
       event.preventDefault();
       event.stopPropagation();
@@ -1350,6 +1471,7 @@ export function StudioToolbar({
 
   const startMarquee = () => {
     // New session: clean selection (see startPicking).
+    captureSessionRef.current += 1;
     selectionRef.current = EMPTY_SELECTION;
     setSelectionRects([]);
     setSelectionCount(0);
@@ -1901,6 +2023,10 @@ export function StudioToolbar({
 
   const saveTask = async () => {
     if (mode.kind !== "draft") return;
+    // v6: never save while the capture pipeline is still inspecting, after
+    // a failed inspection, or while an old-schema artifact is active.
+    if (mode.capture === null || mode.inspecting || mode.captureError) return;
+    if (unsupported) return;
     // Strict serialization: a second save while one is in flight is a
     // no-op (the composer controls are disabled, but a hotkey/race must
     // never start a second POST).
@@ -1944,10 +2070,19 @@ export function StudioToolbar({
       createdAt: new Date().toISOString(),
       status: "open",
       elements: mode.capture.elements,
-      ...(mode.capture.region ? { region: mode.capture.region } : {}),
-      // Goal 06: per-annotation page context (url, stable routeKey, title,
-      // viewport, scroll, businessContext) — gates marker rendering to the
-      // route the annotation was created on.
+      // v6: the persisted region is DOCUMENT-relative (shared contract §5)
+      // so scrolling never moves the saved region.
+      ...(mode.capture.region
+        ? {
+            region: toDocumentRegion(mode.capture.region, {
+              x: window.scrollX,
+              y: window.scrollY,
+            }),
+          }
+        : {}),
+      // v6: per-annotation page context is REQUIRED (url, stable routeKey,
+      // title, viewport, scroll, businessContext) — gates marker rendering
+      // to the route the annotation was created on.
       pageContext: capturePageContext(mode.capture.businessContext),
     };
     const task: PortalStudioTask = {
@@ -2042,7 +2177,12 @@ export function StudioToolbar({
         // Second conflict — a genuine concurrent writer. Never silently
         // overwrite: explicit conflict feedback INLINE in the composer;
         // the draft and target stay preserved for a manual retry.
-        setMode({ kind: "draft", capture: draftCapture });
+        setMode({
+          kind: "draft",
+          capture: draftCapture,
+          inspecting: false,
+          captureError: null,
+        });
         setComposerError(
           t(
             "studio.conflict",
@@ -2054,7 +2194,12 @@ export function StudioToolbar({
       if (!response.ok || !payload.ok || !payload.taskId) {
         // Goal 02 E: POST failure preserves the draft and target — the
         // composer stays open with the inline error.
-        setMode({ kind: "draft", capture: draftCapture });
+        setMode({
+          kind: "draft",
+          capture: draftCapture,
+          inspecting: false,
+          captureError: null,
+        });
         setComposerError(
           `${t("studio.errorSave", "Unable to save")}: ${sessionErrorMessage(
             response.status,
@@ -2156,7 +2301,12 @@ export function StudioToolbar({
       finishSave(kind);
     } catch (error) {
       // Goal 02 E: failure preserves the draft and target.
-      setMode({ kind: "draft", capture: draftCapture });
+      setMode({
+        kind: "draft",
+        capture: draftCapture,
+        inspecting: false,
+        captureError: null,
+      });
       setComposerError(
         `${t("studio.errorSave", "Unable to save")}: ${
           error instanceof Error ? error.message : String(error)
@@ -2597,7 +2747,12 @@ export function StudioToolbar({
           value={draftComment}
           onChange={setDraftComment}
           onSave={saveTask}
+          inspecting={mode.kind === "draft" && mode.inspecting}
+          onRetry={
+            mode.kind === "draft" && mode.captureError ? retryCapture : undefined
+          }
           onCancel={() => {
+            captureSessionRef.current += 1;
             selectionRef.current = EMPTY_SELECTION;
             setSelectionRects([]);
             setSelectionCount(0);
@@ -2607,9 +2762,23 @@ export function StudioToolbar({
             setMode({ kind: "idle" });
           }}
           saving={mode.kind === "saving"}
-          error={composerError}
+          error={
+            composerError ??
+            (mode.kind === "draft" ? mode.captureError : null)
+          }
           surfaceRef={composerSurfaceRef}
         />
+      ) : null}
+
+      {unsupported && open ? (
+        <div className="ps-status-panel ps-unsupported-panel" style={layout.panel} role="alert">
+          <div className="ps-section">
+            <p className="ps-error">
+              {t("studio.unsupportedTask", "Unsupported task schema")}:{" "}
+              {unsupported.clearInstruction}
+            </p>
+          </div>
+        </div>
       ) : null}
 
       {statusPanelVisible ? (

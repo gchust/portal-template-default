@@ -45,12 +45,32 @@ const sampleTask = {
       elements: [
         {
           tagName: "div",
-          selectorCandidates: [],
-          componentCandidates: [{ name: "X", key: null, kind: "fiber" }],
-          sourceCandidates: [],
-          snapshot: { text: "t", attributes: {}, childCount: 0 },
+          selector: "#mcp-el",
+          bounds: { x: 0, y: 0, width: 10, height: 10 },
+          componentName: "X",
+          source: null,
+          sourceStack: [],
+          htmlPreview: "<div>t</div>",
+          styleText: "",
+          fingerprint: {
+            tagName: "div",
+            role: "",
+            accessibleName: "",
+            text: "t",
+            identityAttributes: { id: "mcp-el" },
+            childCount: 0,
+            parent: { tagName: "body", role: "" },
+          },
         },
       ],
+      pageContext: {
+        url: "http://127.0.0.1:5176/users",
+        routeKey: "/users",
+        title: "t",
+        viewport: { width: 1440, height: 900 },
+        scroll: { x: 0, y: 0 },
+        businessContext: [],
+      },
     },
   ],
   businessContext: [],
@@ -171,29 +191,15 @@ describe("portal-studio MCP server (stdio, zero-dep)", () => {
     client.close();
   });
 
-  it("print_task normalizes a v4 artifact through the shared formatter (F-5)", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "portal-studio-mcp-v4-"));
+  it("print_task renders the shared typed unsupported_schema result for old artifacts", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "portal-studio-mcp-v5-"));
     mkdirSync(path.join(dir, "tasks"), { recursive: true });
     writeFileSync(
       path.join(dir, "tasks", "active-task.json"),
       JSON.stringify({
-        schemaVersion: 4,
-        taskId: "task-mcp-v4",
-        createdAt: "2026-08-07T12:00:00.000Z",
-        url: "http://127.0.0.1:5176/users",
-        title: "t",
-        instruction: "legacy v4 via MCP",
-        elements: [
-          {
-            tagName: "div",
-            selectorCandidates: [],
-            componentCandidates: [],
-            sourceCandidates: [],
-            snapshot: { text: "t", attributes: {}, childCount: 0 },
-          },
-        ],
-        businessContext: [],
-        redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+        schemaVersion: 5,
+        taskId: "task-mcp-v5",
+        annotations: [],
       })
     );
     const client = new McpClient(dir);
@@ -204,8 +210,9 @@ describe("portal-studio MCP server (stdio, zero-dep)", () => {
     const content = (result.result as { content: Array<{ text: string }> })
       .content[0].text;
     const parsed = JSON.parse(content);
+    expect(parsed.status).toBe("unsupported_schema");
     expect(parsed.schemaVersion).toBe(5);
-    expect(parsed.annotations[0].comment).toBe("legacy v4 via MCP");
+    expect(parsed.expectedSchemaVersion).toBe(6);
     client.close();
   });
 

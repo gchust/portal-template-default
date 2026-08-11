@@ -7,18 +7,34 @@
  *     explicit `.ts` specifier — type stripping keeps it standalone),
  *  3. the MCP `print_task` tool.
  *
- * Contract: accepts v4 or v5 artifacts via `normalizeTask` (D-033 #17
- * normalize-on-read); output is byte-identical across all three consumers
+ * Contract: accepts the canonical v6 artifact via `normalizeTask`; schema
+ * v1-v5 artifacts produce the shared typed `unsupported_schema` result
+ * (never normalized). Output is byte-identical across all three consumers
  * (golden-tested). Erasable-syntax-only (no enums/namespaces) so Node's
  * type stripping works; NO runtime imports beyond the pure task model.
  */
 
-import { annotationDisplayNumber, normalizeTask } from "./task-model.ts";
+import {
+  annotationDisplayNumber,
+  describeUnsupportedSchema,
+  normalizeTask,
+} from "./task-model.ts";
 import type {
   Annotation,
   ElementCapture,
   PortalStudioTask,
+  UnsupportedSchemaResult,
 } from "./types";
+
+const formatSourceFrame = (frame: {
+  filePath: string;
+  lineNumber: number;
+  columnNumber: number;
+  componentName: string | null;
+}): string =>
+  `${frame.filePath}:${frame.lineNumber}:${frame.columnNumber}${
+    frame.componentName ? ` (${frame.componentName})` : ""
+  }`;
 
 const formatElementLines = (elements: ElementCapture[]): string[] => {
   const lines: string[] = [];
@@ -28,52 +44,38 @@ const formatElementLines = (elements: ElementCapture[]): string[] => {
         ? `Element ${index + 1}: <${element.tagName}>`
         : `Element: <${element.tagName}>`;
     lines.push(`### ${label}`, "");
-    lines.push("#### Selector candidates");
+    lines.push(`- selector: ${element.selector}`);
     lines.push(
-      ...element.selectorCandidates.map(
-        (candidate) => `- [${candidate.kind}] ${candidate.selector}`
-      )
+      `- componentName: ${element.componentName ?? "(unresolved)"}`
     );
-    lines.push("", "#### Component candidates");
     lines.push(
-      ...(element.componentCandidates.length
-        ? element.componentCandidates
-            .slice(0, 20)
-            .map(
-              (candidate) =>
-                `- ${candidate.name ?? "(unknown)"}${
-                  candidate.kind ? ` (${candidate.kind})` : ""
-                }`
-            )
-        : ["- (none — DOM fallback)"])
+      `- source: ${
+        element.source ? formatSourceFrame(element.source) : "(unresolved)"
+      }`
     );
-    lines.push("", "#### Source candidates");
-    lines.push(
-      ...(element.sourceCandidates.length
-        ? element.sourceCandidates.map(
-            (source) =>
-              `- ${source.file}${
-                typeof source.line === "number" ? `:${source.line}` : ""
-              }`
-          )
-        : ["- (none)"])
-    );
-    lines.push("", "#### Snapshot");
-    lines.push(
-      `- text: ${element.snapshot.text.slice(0, 200) || "(empty)"}`
-    );
-    if (element.snapshot.domOutline) {
-      lines.push(`- domOutline: ${element.snapshot.domOutline}`);
-    }
-    if (element.snapshot.computedStyle) {
+    if (element.sourceStack.length) {
+      lines.push("- sourceStack:");
       lines.push(
-        `- computedStyle: ${JSON.stringify(element.snapshot.computedStyle)}`
+        ...element.sourceStack
+          .slice(0, 12)
+          .map((frame) => `  - ${formatSourceFrame(frame)}`)
       );
+    } else {
+      lines.push("- sourceStack: (none)");
     }
     lines.push(
-      `- attributes: ${JSON.stringify(element.snapshot.attributes)}`
+      `- bounds: ${element.bounds.x},${element.bounds.y} ${element.bounds.width}x${element.bounds.height}`
     );
-    lines.push(`- childCount: ${element.snapshot.childCount}`);
+    const fingerprint = element.fingerprint;
+    lines.push(
+      `- fingerprint: tagName=${fingerprint.tagName} role=${
+        fingerprint.role || "(none)"
+      } accessibleName=${fingerprint.accessibleName || "(none)"} text=${
+        fingerprint.text.slice(0, 120) || "(empty)"
+      } childCount=${fingerprint.childCount} identity=${JSON.stringify(
+        fingerprint.identityAttributes
+      )}`
+    );
     lines.push("");
   }
   return lines;
@@ -81,13 +83,22 @@ const formatElementLines = (elements: ElementCapture[]): string[] => {
 
 const formatAnnotation = (annotation: Annotation): string[] => {
   const lines: string[] = [];
-  // Goal 04 D: Copy/list output uses EACH annotation's own page context.
-  if (annotation.pageContext) {
+  // v6: pageContext is required on new annotations; the formatter stays
+  // defensive for raw/legacy files that lack it.
+  const pageContext = annotation.pageContext;
+  lines.push(
+    `- page: ${pageContext?.routeKey || pageContext?.url || "(unknown)"}` +
+      (pageContext?.title ? ` (${pageContext.title})` : "")
+  );
+  if (pageContext && pageContext.businessContext.length) {
+    lines.push("- businessContext:");
     lines.push(
-      `- page: ${annotation.pageContext.routeKey || annotation.pageContext.url}` +
-        (annotation.pageContext.title
-          ? ` (${annotation.pageContext.title})`
-          : "")
+      ...annotation.pageContext.businessContext
+        .slice(0, 20)
+        .map(
+          (item) =>
+            `  - [${item.type}] ${item.id ?? ""} (source: ${item.source})`
+        )
     );
   }
   if (annotation.region) {
@@ -122,12 +133,34 @@ const formatAnnotation = (annotation: Annotation): string[] => {
  * CLI passes `{ includeCompleted: true }` explicitly for all-mode (MCP's
  * print_task renders the artifact as JSON via formatTaskJson).
  */
+/**
+ * Render the shared typed old-schema rejection as Markdown (used by the
+ * print CLI and MCP when the active artifact is schema v1-v5).
+ */
+export function formatUnsupportedSchemaMarkdown(
+  result: UnsupportedSchemaResult
+): string {
+  return [
+    `# Unsupported task schema`,
+    "",
+    `- status: ${result.status}`,
+    `- schemaVersion: ${result.schemaVersion}`,
+    `- expectedSchemaVersion: ${result.expectedSchemaVersion}`,
+    `- clear: ${result.clearPath}`,
+    "",
+    result.clearInstruction,
+    "",
+  ].join("\n");
+}
+
 export function formatTaskMarkdown(
   input: unknown,
   options: { includeCompleted?: boolean } = {}
 ): string {
   const task = normalizeTask(input);
   if (!task) {
+    const unsupported = describeUnsupportedSchema(input);
+    if (unsupported) return formatUnsupportedSchemaMarkdown(unsupported);
     throw new Error("cannot format: unrecognized task artifact");
   }
   const annotations =
@@ -234,9 +267,15 @@ export function formatTaskMarkdown(
  * by the print CLI `--json` and MCP `print_task` so all consumers see the
  * exact same artifact (v4 files are served normalized, D-033 #17).
  */
-export function formatTaskJson(input: unknown): string {
+export function formatTaskJson(
+  input: unknown
+): string {
   const task = normalizeTask(input);
   if (!task) {
+    const unsupported = describeUnsupportedSchema(input);
+    if (unsupported) {
+      return JSON.stringify(unsupported, null, 2);
+    }
     throw new Error("cannot format: unrecognized task artifact");
   }
   return JSON.stringify(task, null, 2);

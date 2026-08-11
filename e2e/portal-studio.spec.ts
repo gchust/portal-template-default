@@ -36,16 +36,35 @@ type TaskAnnotation = {
   status: "open" | "completed";
   elements: Array<{
     tagName: string;
-    componentCandidates: Array<{ name: string | null; kind?: string }>;
-    sourceCandidates: Array<{ file: string; line?: number }>;
-    snapshot: {
-      text: string;
-      attributes: Record<string, string>;
-      domOutline?: string;
-      computedStyle?: Record<string, string>;
+    selector: string;
+    bounds: { x: number; y: number; width: number; height: number };
+    componentName: string | null;
+    source: {
+      filePath: string;
+      lineNumber: number;
+      columnNumber: number;
+      componentName: string | null;
+    } | null;
+    sourceStack: Array<{
+      filePath: string;
+      lineNumber: number;
+      columnNumber: number;
+      componentName: string | null;
+    }>;
+    htmlPreview: string;
+    styleText: string;
+    fingerprint: {
+      tagName: string;
+      identityAttributes: Record<string, string>;
     };
   }>;
-  region?: { x: number; y: number; width: number; height: number };
+  region?: {
+    coordinateSpace: "document";
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 };
 
 type TaskArtifact = {
@@ -180,11 +199,34 @@ const startPicking = async (page: import("@playwright/test").Page) => {
   if ((await pick.getAttribute("aria-pressed")) !== "true") {
     await pick.click();
   }
+  const hint = page.locator("#portal-studio-root .ps-status-panel", {
+    hasText: "Hover an element",
+  });
+  try {
+    await expect(hint, { timeout: 10000 }).toBeVisible();
+  } catch {
+    // The pick click can race the toolbar expansion right after sign-in;
+    // a single bounded retry restores the picking session.
+    if ((await pick.getAttribute("aria-pressed")) !== "true") {
+      await pick.click();
+    }
+    await expect(hint, { timeout: 10000 }).toBeVisible();
+  }
+};
+
+/**
+ * Ctrl+Enter save: waits for the async v6 inspection pipeline to finish
+ * (Save enabled) so the keyboard save never fires while the button is
+ * still disabled.
+ */
+const saveWithCtrlEnter = async (page: import("@playwright/test").Page) => {
   await expect(
-    page.locator("#portal-studio-root .ps-status-panel", {
-      hasText: "Hover an element",
-    })
-  ).toBeVisible();
+    page
+      .locator("#portal-studio-root")
+      .getByRole("button", { name: /Save|保存/, exact: true }),
+    { timeout: 15000 }
+  ).toBeEnabled();
+  await page.keyboard.press("Control+Enter");
 };
 
 const saveTask = async (
@@ -192,10 +234,13 @@ const saveTask = async (
   instruction: string
 ) => {
   await page.locator("#portal-studio-root textarea").fill(instruction);
-  await page
+  const saveButton = page
     .locator("#portal-studio-root")
-    .getByRole("button", { name: "Save", exact: true })
-    .click();
+    .getByRole("button", { name: /Save|保存/, exact: true });
+  // v6: the Save button is disabled while the async inspection pipeline
+  // runs — wait for the capture to finish before clicking.
+  await expect(saveButton, { timeout: 15000 }).toBeEnabled();
+  await saveButton.click();
   // Goal 02: the compact toast replaces the technical Saved panel.
   await expect(
     page.locator("#portal-studio-root .ps-save-toast", {
@@ -262,35 +307,48 @@ test("users page: single, multi, marquee, replace, screenshot (3 rounds)", async
   await saveTask(page, "E2E single: increase row padding");
 
   let task = readActiveTask();
-  expect(task.schemaVersion).toBe(5);
+  expect(task.schemaVersion).toBe(6);
   expect(task.annotations).toHaveLength(1);
   const firstAnnotation = task.annotations[0];
   expect(firstAnnotation.kind).toBe("element");
   expect(firstAnnotation.elements).toHaveLength(1);
-  const names = firstAnnotation.elements[0].componentCandidates
-    .map((candidate) => candidate.name)
-    .filter((name): name is string => typeof name === "string");
-  expect(names).toContain("TableRow");
-  const sources = firstAnnotation.elements[0].sourceCandidates.map((s) => s.file);
-  expect(
-    sources.some((file) => file.includes("users-example") || file.includes("src/"))
-  ).toBe(true);
+  const element = firstAnnotation.elements[0];
+  // v6: ONE React Grab selector + normalized workspace-relative source.
+  expect(element.selector).toBeTruthy();
+  // The engine promotes the nested hit to the useful target — the row's
+  // cell content (td or an inner div in this example layout).
+  expect(["td", "div", "tr"]).toContain(element.fingerprint.tagName);
+  expect(element.source).not.toBeNull();
+  expect(element.source!.filePath).not.toContain("node_modules");
+  // v6: the normalized workspace-relative source path (whatever component
+  // renders the row) carries a valid location and no node_modules frame.
+  expect(element.source!.filePath.length).toBeGreaterThan(0);
+  expect(element.source!.filePath).not.toContain("node_modules");
+  expect(element.source!.lineNumber).toBeGreaterThan(0);
+  expect(Array.isArray(element.sourceStack)).toBe(true);
   // Business context, redaction manifest, and screenshot ref are present.
   expect(Array.isArray(task.businessContext)).toBe(true);
   expect(task.redaction.redactedValues).toBeGreaterThanOrEqual(0);
-  expect(task.screenshot).toBeDefined();
-  expect(task.screenshot?.file).toMatch(/^screenshots\/.+\.png$/);
+  // The screenshot ref is merged by the evidence POST after the task POST —
+  // poll for the server-side merge.
+  await expect
+    .poll(
+      () => readActiveTask().screenshot?.file,
+      { timeout: 8000, message: `task dump: ${JSON.stringify(readActiveTask()).slice(0, 400)}` }
+    )
+    .toMatch(/^screenshots\/.+\.png$/);
 
   // Screenshot exists on disk with valid PNG magic.
-  const screenshotPath = path.join(studioDir, task.screenshot!.file);
+  const screenshotFile = readActiveTask().screenshot!.file;
+  const screenshotPath = path.join(studioDir, screenshotFile);
   const png = readFileSync(screenshotPath);
   expect(png.subarray(0, 8).equals(PNG_MAGIC)).toBe(true);
   expect(png.length).toBeGreaterThan(100);
 
-  // Shell parity: print CLI renders the v2 artifact.
+  // Shell parity: the public package script renders the v6 artifact.
   const printed = execFileSync(
-    process.execPath,
-    ["scripts/portal-studio-print.mjs", "--json", "--task", task.taskId],
+    "pnpm",
+    ["--silent", "run", "studio:print", "--", "--json", "--task", task.taskId],
     { encoding: "utf8" }
   );
   expect(JSON.parse(printed)).toEqual(task);
@@ -374,7 +432,9 @@ test("users page: single, multi, marquee, replace, screenshot (3 rounds)", async
   expect(regionAnnotation.kind).toBe("region");
   expect(regionAnnotation.region).toBeDefined();
   expect(regionAnnotation.region!.width).toBeGreaterThan(0);
-  expect(task.screenshot).toBeDefined();
+  await expect
+    .poll(() => readActiveTask().screenshot?.file, { timeout: 8000 })
+    .toMatch(/^screenshots\/.+\.png$/);
   // No secrets/tokens in any artifact.
   const serialized = JSON.stringify(task);
   expect(serialized).not.toContain("token");
@@ -509,42 +569,78 @@ test("dev page: keyboard single and multi, agent-side writes, guards", async ({
     () => window.__PORTAL_STUDIO_CONFIG__?.token
   );
   expect(typeof token).toBe("string");
+  // Goal 03: old-schema POSTs are rejected with the typed
+  // unsupported_schema result — never normalized, never migrated.
+  const legacyPost = {
+    schemaVersion: 5,
+    taskId: "agent-task-legacy",
+    annotations: [],
+  };
+  const legacyResponse = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/tasks"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: legacyPost,
+    }
+  );
+  expect(legacyResponse.status()).toBe(400);
+  const legacyPayload = (await legacyResponse.json()) as {
+    status?: string;
+    schemaVersion?: number;
+    expectedSchemaVersion?: number;
+    error?: string;
+  };
+  expect(legacyPayload.status).toBe("unsupported_schema");
+  expect(legacyPayload.schemaVersion).toBe(5);
+  expect(legacyPayload.expectedSchemaVersion).toBe(6);
+
   const agentTask = {
-    schemaVersion: 4,
+    schemaVersion: 6,
     taskId: "agent-task-2",
     createdAt: new Date().toISOString(),
     url: single.url,
     title: "Agent write",
-    instruction: "Agent-side v4 task (normalized to v5 on write)",
-    elements: [
+    annotations: [
       {
-        tagName: "div",
-        selectorCandidates: [{ kind: "path", selector: "body > div" }],
-        componentCandidates: [],
-        snapshot: {
-          text: "agent",
-          attributes: { class: "x" },
-          childCount: 0,
-          domOutline: "div.x",
-          computedStyle: { display: "block" },
+        annotationId: "agent-ann-1",
+        kind: "element",
+        comment: "Agent-side v6 task",
+        createdAt: new Date().toISOString(),
+        status: "open",
+        elements: [
+          {
+            tagName: "div",
+            selector: "body > div",
+            bounds: { x: 0, y: 0, width: 10, height: 10 },
+            componentName: null,
+            source: null,
+            sourceStack: [],
+            htmlPreview: "agent",
+            styleText: "",
+            fingerprint: {
+              tagName: "div",
+              role: "",
+              accessibleName: "",
+              text: "agent",
+              identityAttributes: {},
+              childCount: 0,
+              parent: { tagName: "body", role: "" },
+            },
+          },
+        ],
+        pageContext: {
+          url: single.url,
+          routeKey: new URL(single.url).pathname,
+          title: single.title,
+          viewport: { width: 1440, height: 900 },
+          scroll: { x: 0, y: 0 },
+          businessContext: [],
         },
       },
     ],
     businessContext: [],
     redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
   };
-  const response = await page.request.post(
-    resolvePortalTestURL(environment, "__portal-studio/tasks"),
-    {
-      headers: { "X-Portal-Studio-Token": token },
-      data: agentTask,
-    }
-  );
-  expect(response.status()).toBe(200);
-  await expect
-    .poll(() => readActiveTask().taskId)
-    .toBe("agent-task-2");
-
   // Guards: wrong/missing token → 404; traversal → 400; bad PNG → 400.
   const wrong = await page.request.post(
     resolvePortalTestURL(environment, "__portal-studio/tasks"),
@@ -652,9 +748,15 @@ test("runtime diagnostics: console.error read-back, heartbeat authority, screens
   await page
     .locator("#portal-studio-root textarea")
     .fill("diagnostics baseline");
+  await expect(
+    page
+      .locator("#portal-studio-root")
+      .getByRole("button", { name: /Save|保存/, exact: true }),
+    { timeout: 15000 }
+  ).toBeEnabled();
   await page
     .locator("#portal-studio-root")
-    .getByRole("button", { name: "Save", exact: true })
+    .getByRole("button", { name: /Save|保存/, exact: true })
     .click();
   await expect(
     page.locator("#portal-studio-root .ps-save-toast", {
@@ -777,8 +879,9 @@ test("update verification loop: real edit, HMR path, reload-bump path, MCP smoke
   expect(baseline.revision).toBeDefined();
   const baselineSourceRevision = baseline.revision!.sourceRevision;
 
-  // REAL edit: touch the referenced source file (HMR will serve the update).
-  const targetFile = path.resolve("src/components/ui/table.tsx");
+  // REAL edit: touch the referenced source file — the v6 capture's source
+  // points at the sandbox data-table component (HMR serves the update).
+  const targetFile = path.resolve("src/components/data-table/data-table.tsx");
   const original = readFileSync(targetFile, "utf8");
   try {
     writeFileSync(targetFile, `${original}\n// portal-studio verify marker\n`);
@@ -1077,7 +1180,7 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
   await row1.hover();
   await row1.click();
   await page.locator("#portal-studio-root textarea").fill("First annotation");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expect(
     page.locator("#portal-studio-root .ps-save-toast", {
       hasText: /Annotation saved|批注已保存/,
@@ -1111,10 +1214,10 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
   await page
     .locator("#portal-studio-root textarea")
     .fill("Second annotation");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "2");
   const task = readActiveTask();
-  expect(task.schemaVersion).toBe(5);
+  expect(task.schemaVersion).toBe(6);
   expect(task.annotations).toHaveLength(2);
   expect(task.annotations[1].comment).toBe("Second annotation");
   expect(task.annotations[1].annotationId).not.toBe(
@@ -1159,7 +1262,7 @@ test("marker-local editor (G03): element marker save, complete/reopen, delete, E
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G03 marker note");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
 
   // Marker is a semantic, enabled button (not aria-hidden).
@@ -1261,7 +1364,7 @@ test("marker-local editor (G03): fits viewports smaller than the editor", async 
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G03 small viewport");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
   await page.setViewportSize({ width: 220, height: 200 });
 
@@ -1326,7 +1429,7 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
   await page
     .locator("#portal-studio-root textarea")
     .fill("G03 multi marker");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
   const task = readActiveTask();
   expect(task.annotations[0].kind).toBe("multi");
@@ -1398,7 +1501,7 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
   await page
     .locator("#portal-studio-root textarea")
     .fill("G03 region marker");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expect
     .poll(() => readActiveTask().annotations.at(-1)?.kind)
     .toBe("region");
@@ -1460,7 +1563,7 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   await page
     .locator("#portal-studio-root textarea")
     .fill("G03 group annotation");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
   let task = readActiveTask();
   expect(task.annotations).toHaveLength(1);
@@ -1483,7 +1586,7 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   await page
     .locator("#portal-studio-root textarea")
     .fill("G03 second annotation");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "2");
   await openList(page);
 
@@ -1545,7 +1648,7 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
     .poll(() => readActiveTask().annotations.length)
     .toBe(0);
   task = readActiveTask();
-  expect(task.schemaVersion).toBe(5);
+  expect(task.schemaVersion).toBe(6);
   expect(task.annotations).toEqual([]);
 
   // Reload after delete-all: still empty, nothing resurrects.
@@ -1566,7 +1669,7 @@ test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G04 complete me");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
 
   // The old Clear-task normal path is gone (Complete replaced it).
@@ -1684,7 +1787,7 @@ test("a11y keyboard walkthrough: dock, horizontal bar, Esc focus return (G05)", 
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G05 a11y");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
   await openList(page);
   // aria-pressed reflects the toggle states (P3-1): hide/complete are
@@ -1717,14 +1820,14 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G04 open one");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   // Goal 02: no Done; Pick resumed — startPicking reuses the session.
   await expect(root.getByRole("button", { name: "Done" })).toHaveCount(0);
   await startPicking(page);
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G04 open two");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "2");
 
   // Complete ONE via the list → launcher counts OPEN only (1).
@@ -1855,7 +1958,7 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G04 after remove");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
   await expect
     .poll(() => readActiveTask().taskId)
@@ -1885,7 +1988,7 @@ test("agent CLI complete/reopen sync to the browser within two seconds (G05)", a
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G05 sync me");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
   await openList(page);
   const annotationId = readActiveTask().annotations[0].annotationId;
@@ -1977,57 +2080,102 @@ test("agent CLI complete/reopen sync to the browser within two seconds (G05)", a
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 });
 
-test("mutating a legacy v1-v4 artifact through the typed endpoint does not crash (G06 P2-2)", async ({
+test("old-schema artifacts surface the shared unsupported_schema result (G03-AC12)", async ({
   page,
 }) => {
-  // Seed a v4 artifact directly (like the pre-upgrade agent flow), then
-  // mutate it from the BROWSER through the mutate endpoint — the server
-  // must normalize on read instead of crashing on a missing annotations[].
-  const v4 = {
-    schemaVersion: 4,
-    taskId: "legacy-v4-mutate",
+  // Seed a v5 artifact directly, then open the browser — the task GET
+  // reports the typed unsupported_schema result, the browser shows the
+  // clear instruction, and mutation is rejected with no migration.
+  const v5 = {
+    schemaVersion: 5,
+    taskId: "legacy-v5-unsupported",
     createdAt: "2026-08-09T00:00:00.000Z",
     url: resolvePortalTestURL(environment, "/users"),
     title: "Users",
-    instruction: "Legacy annotation",
-    elements: [],
+    annotations: [],
     businessContext: [],
     redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
   };
   mkdirSync(path.dirname(taskFile), { recursive: true });
-  writeFileSync(taskFile, JSON.stringify(v4, null, 2));
+  writeFileSync(taskFile, JSON.stringify(v5, null, 2));
 
   await signIn(page);
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
   const root = page.locator("#portal-studio-root");
   await openList(page);
-  // The browser normalized the v4 artifact on read — the annotation is in
-  // the list even though the FILE is still v4.
-  await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
-  // Hide the normalized annotation — the mutate endpoint must normalize on
-  // read and apply the op (no 500), persisting a v5 artifact with hidden.
-  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
-  await expect
-    .poll(
-      () =>
-        (readActiveTask() as unknown as {
-          annotations?: Array<{ hidden?: boolean }>;
-        }).annotations?.[0]?.hidden
-    )
-    .toBe(true);
-  expect(readActiveTask().schemaVersion).toBe(5);
-  expect(readActiveTask().annotations[0].annotationId).toBe(
-    "legacy-v4-mutate-v4"
-  );
+  // The browser shows the clear unsupported-task instruction.
+  await expect(root.locator(".ps-error")).toContainText(/Unsupported task schema/i);
 
-  // Cleanup: delete the annotation so later tests start empty.
-  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
-  await root.locator(".ps-annotation-confirm").waitFor();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-    .click();
-  await expect.poll(() => readActiveTask().annotations.length).toBe(0);
+  // The typed mutate endpoint rejects old-schema artifacts (never mutated).
+  const token = await page.evaluate(
+    () => window.__PORTAL_STUDIO_CONFIG__?.token
+  );
+  const mutate = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/mutate"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: {
+        taskId: "legacy-v5-unsupported",
+        expectedTaskRevision: 0,
+        operations: [{ op: "setHidden", annotationId: "x", hidden: true }],
+      },
+    }
+  );
+  expect(mutate.status()).toBe(400);
+  const mutatePayload = (await mutate.json()) as {
+    status?: string;
+    schemaVersion?: number;
+    expectedSchemaVersion?: number;
+  };
+  // The full shared typed result (not just the error name).
+  expect(mutatePayload.status).toBe("unsupported_schema");
+  expect(mutatePayload.schemaVersion).toBe(5);
+  expect(mutatePayload.expectedSchemaVersion).toBe(6);
+  // The artifact was NOT migrated.
+  expect(readActiveTask().schemaVersion).toBe(5);
+
+  // The verify endpoint rejects old-schema artifacts with the same typed
+  // result — never verified, never migrated.
+  const verify = await page.request.post(
+    resolvePortalTestURL(environment, "__portal-studio/verify"),
+    {
+      headers: { "X-Portal-Studio-Token": token },
+      data: { timeoutMs: 2000 },
+    }
+  );
+  expect(verify.status()).toBe(400);
+  const verifyPayload = (await verify.json()) as {
+    status?: string;
+    schemaVersion?: number;
+    expectedSchemaVersion?: number;
+  };
+  expect(verifyPayload.status).toBe("unsupported_schema");
+  expect(verifyPayload.schemaVersion).toBe(5);
+  expect(verifyPayload.expectedSchemaVersion).toBe(6);
+
+  // The CLI rejects the same artifact with the clear instruction (exit 1).
+  let cliStatus = 0;
+  let cliStderr = "";
+  try {
+    execFileSync(
+      "pnpm",
+      ["--silent", "run", "studio:list"],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PORTAL_STUDIO_DIR: studioDir },
+        stdio: ["ignore", "pipe", "pipe"],
+      }
+    );
+  } catch (error) {
+    const e = error as { status?: number; stderr?: Buffer | string };
+    cliStatus = e.status ?? 1;
+    cliStderr = String(e.stderr ?? "");
+  }
+  expect(cliStatus).toBe(1);
+  expect(cliStderr).toContain("removed schema");
+  // Cleanup: clear the dev-only artifact so later tests start empty.
+  rmSync(taskFile, { force: true });
 });
 
 test("interleaved browser/CLI mutations keep stable taskId and revision-aware consistency (G06)", async ({
@@ -2043,7 +2191,7 @@ test("interleaved browser/CLI mutations keep stable taskId and revision-aware co
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G06 browser one");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
   const taskIdA = readActiveTask().taskId;
 
@@ -2053,7 +2201,7 @@ test("interleaved browser/CLI mutations keep stable taskId and revision-aware co
   await row.hover();
   await row.click();
   await page.locator("#portal-studio-root textarea").fill("G06 browser two");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "2");
   expect(readActiveTask().taskId).toBe(taskIdA);
   await openList(page);
@@ -2133,17 +2281,25 @@ test("large task (>64KB) mutations persist via the plain POST (D-043 regression)
   );
   const bigElements = Array.from({ length: 30 }, (_, i) => ({
     tagName: "div",
-    selectorCandidates: [{ kind: "path", selector: `body > div:nth(${i})` }],
-    componentCandidates: [],
-    sourceCandidates: [],
-    snapshot: {
+    selector: `body > div:nth(${i})`,
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    componentName: null,
+    source: null,
+    sourceStack: [],
+    htmlPreview: "L".repeat(2600),
+    styleText: "",
+    fingerprint: {
+      tagName: "div",
+      role: "",
+      accessibleName: "",
       text: "L".repeat(2600),
-      attributes: {},
+      identityAttributes: {},
       childCount: 0,
+      parent: { tagName: "body", role: "" },
     },
   }));
   const bigTask = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     taskId: "d043-large-task",
     createdAt: new Date().toISOString(),
     url: new URL(page.url()).href,
@@ -2156,6 +2312,14 @@ test("large task (>64KB) mutations persist via the plain POST (D-043 regression)
         createdAt: new Date().toISOString(),
         status: "open",
         elements: bigElements,
+        pageContext: {
+          url: new URL(page.url()).href,
+          routeKey: new URL(page.url()).pathname,
+          title: "D-043 large",
+          viewport: { width: 1440, height: 900 },
+          scroll: { x: 0, y: 0 },
+          businessContext: [],
+        },
       },
     ],
     businessContext: [],
@@ -2260,7 +2424,7 @@ test("G01 v5: collapsed chip (empty + 4 open, EN/ZH tolerant), expand, drag-not-
     await page
       .locator("#portal-studio-root textarea")
       .fill(`G01 v5 annotation ${index + 1}`);
-    await page.keyboard.press("Control+Enter");
+    await saveWithCtrlEnter(page);
     await expectOpenCount(root, String(index + 1));
     await expect(
       page
@@ -2421,7 +2585,7 @@ test("G01 v5: tooltips, active capture states, help popover, list Open/All, mutu
   await page.locator("tbody tr").first().hover();
   await page.locator("tbody tr").first().click();
   await page.locator("#portal-studio-root textarea").fill("G01 list item");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
   const listButton = root.locator("[role='toolbar'] [aria-label='Annotation list']");
   await listButton.click();
@@ -2833,7 +2997,7 @@ test("G01 v5: Chinese locale states — chip, toolbar, help, list, count (review
   await page.locator("tbody tr").first().hover();
   await page.locator("tbody tr").first().click();
   await page.locator("#portal-studio-root textarea").fill("中文批注");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   // Goal 02: the compact toast replaces the technical Saved panel (ZH).
   await expect(root.locator(".ps-save-toast")).toContainText("批注已保存");
   // Goal 02: no 完成 (Done) button — the continuous loop resumes Pick.
@@ -2878,7 +3042,7 @@ test("G01 v5: manual-Copy fallback clamps inside the viewport at edge positions 
   await page.locator("tbody tr").first().hover();
   await page.locator("tbody tr").first().click();
   await page.locator("#portal-studio-root textarea").fill("edge copy");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "1");
 
   const dragDockTo = async (x: number, y: number) => {
@@ -3066,7 +3230,7 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
   // G02-03: Ctrl+Enter saves; the compact toast replaces the Saved panel;
   // G02-11: marker appears immediately.
   await page.locator("#portal-studio-root textarea").fill("G02 continuous one");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expect(
     root.locator(".ps-save-toast", { hasText: "Annotation saved" })
   ).toBeVisible();
@@ -3124,7 +3288,7 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
     .click();
   await expect(composer).toBeVisible();
   await page.locator("#portal-studio-root textarea").fill("G02 multi group");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expect(
     root.locator(".ps-save-toast", { hasText: "Annotation saved" })
   ).toBeVisible();
@@ -3190,7 +3354,7 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
     fullPage: false,
   });
   await page.locator("#portal-studio-root textarea").fill("中文连续批注");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expect(root.locator(".ps-save-toast")).toContainText("批注已保存");
   await expect(root.getByRole("button", { name: "完成" })).toHaveCount(0);
   await page.screenshot({
@@ -3240,7 +3404,7 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
     await page
       .locator("#portal-studio-root textarea")
       .fill(`G03 annotation ${index + 1}`);
-    await page.keyboard.press("Control+Enter");
+    await saveWithCtrlEnter(page);
     await expectOpenCount(root, String(index + 1));
   }
   // Markers 1, 2, 3 all exist (full order).
@@ -3388,7 +3552,7 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
   await page.mouse.move(tableBox.x + 220, tableBox.y + 60, { steps: 6 });
   await page.mouse.up();
   await page.locator("#portal-studio-root textarea").fill("G03 region");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expect(
     root.locator(".ps-save-toast", { hasText: "Annotation saved" })
   ).toBeVisible();
@@ -3578,7 +3742,7 @@ test("G04: timestamps (createdAt immutable / updatedAt changes), Copy completion
   await page.locator("tbody tr").first().hover();
   await page.locator("tbody tr").first().click();
   await page.locator("#portal-studio-root textarea").fill("G04 timestamp one");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expect(
     root.locator(".ps-save-toast", { hasText: "Annotation saved" })
   ).toBeVisible();
@@ -3591,7 +3755,7 @@ test("G04: timestamps (createdAt immutable / updatedAt changes), Copy completion
   await page.locator("tbody tr").first().locator("td").nth(1).hover();
   await page.locator("tbody tr").first().locator("td").nth(1).click();
   await page.locator("#portal-studio-root textarea").fill("G04 timestamp two");
-  await page.keyboard.press("Control+Enter");
+  await saveWithCtrlEnter(page);
   await expectOpenCount(root, "2");
   const afterSecond = readActiveTask();
   expect(afterSecond.taskId).toBe(afterFirst.taskId);
@@ -3694,7 +3858,7 @@ const seedTask = (openCount: number) => {
   writeFileSync(
     taskFile,
     JSON.stringify({
-      schemaVersion: 5,
+      schemaVersion: 6,
       taskId: "task-visual-1",
       createdAt: "2026-08-11T00:00:00.000Z",
       url: resolvePortalTestURL(environment, "/users"),
@@ -3929,16 +4093,28 @@ test("G05-06 annotation surfaces: composer, marker editor, completed/unresolved/
   // which otherwise clears the injected element).
   const capture = {
     tagName: "div",
-    selectorCandidates: [{ kind: "id", selector: "#g05-marker-target" }],
-    componentCandidates: [],
-    sourceCandidates: [],
-    snapshot: { text: "target", attributes: { id: "g05-marker-target" }, childCount: 0 },
+    selector: "#g05-marker-target",
+    bounds: { x: 200, y: 300, width: 120, height: 40 },
+    componentName: null,
+    source: null,
+    sourceStack: [],
+    htmlPreview: "",
+    styleText: "",
+    fingerprint: {
+      tagName: "div",
+      role: "",
+      accessibleName: "",
+      text: "",
+      identityAttributes: { id: "g05-marker-target" },
+      childCount: 0,
+      parent: { tagName: "body", role: "" },
+    },
   };
   mkdirSync(path.join(studioDir, "tasks"), { recursive: true });
   writeFileSync(
     taskFile,
     JSON.stringify({
-      schemaVersion: 5,
+      schemaVersion: 6,
       taskId: "task-visual-marker",
       createdAt: "2026-08-11T00:00:00.000Z",
       url: resolvePortalTestURL(environment, "/users"),
@@ -3988,7 +4164,7 @@ test("G05-06 annotation surfaces: composer, marker editor, completed/unresolved/
   writeFileSync(
     taskFile,
     JSON.stringify({
-      schemaVersion: 5,
+      schemaVersion: 6,
       taskId: "task-visual-2",
       createdAt: "2026-08-11T00:00:00.000Z",
       url: resolvePortalTestURL(environment, "/users"),

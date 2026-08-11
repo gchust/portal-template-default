@@ -1,11 +1,12 @@
 /**
- * Goal 04 — shared formatter golden tests (D-033 #15).
+ * Goal 03/04 — shared formatter golden tests (D-033 #15).
  *
  * formatTaskMarkdown/formatTaskJson are the SINGLE renderer for the browser
  * Copy action, the print CLI, and MCP print_task. These tests pin the exact
- * output bytes (golden strings) for v4 + v5 fixtures and prove the CLI
- * consumes the same module (spawned standalone under Node 22 type
- * stripping). MCP parity is asserted in mcp.test.ts via the same module.
+ * v6 output (selector/component/source/business context, no candidate
+ * vocabulary), prove the shared typed unsupported_schema result for schema
+ * v1-v5 artifacts, and verify the CLI consumes the same module through the
+ * public package script.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -14,83 +15,108 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { formatTaskJson, formatTaskMarkdown } from "@/studio/format";
+import {
+  formatTaskJson,
+  formatTaskMarkdown,
+  formatUnsupportedSchemaMarkdown,
+} from "@/studio/format";
+import {
+  annotationFixture,
+  taskFixture,
+} from "./fixtures/task-fixtures";
 
-const v5Fixture = {
-  schemaVersion: 5,
-  taskId: "golden-v5-1",
-  createdAt: "2026-08-08T10:00:00.000Z",
-  url: "http://127.0.0.1:4173/users",
-  title: "Users",
+const v6Fixture = taskFixture({
+  taskId: "golden-v6-1",
   annotations: [
-    {
+    annotationFixture({
       annotationId: "ann-1",
       kind: "element",
       comment: "Bold the header",
-      createdAt: "2026-08-08T10:00:00.000Z",
       status: "completed",
-      completedAt: "2026-08-08T10:05:00.000Z",
+      completedAt: "2026-08-11T10:05:00.000Z",
       elements: [
         {
           tagName: "h1",
-          selectorCandidates: [{ kind: "path", selector: "main > h1" }],
-          componentCandidates: [{ name: "PageHeader", key: null }],
-          sourceCandidates: [
-            { kind: "module", file: "/repo/src/pages/users.tsx", line: 12 },
+          selector: "main > h1",
+          bounds: { x: 10, y: 20, width: 200, height: 40 },
+          componentName: "PageHeader",
+          source: {
+            filePath: "src/pages/users.tsx",
+            lineNumber: 12,
+            columnNumber: 4,
+            componentName: "PageHeader",
+          },
+          sourceStack: [
+            {
+              filePath: "src/pages/users.tsx",
+              lineNumber: 12,
+              columnNumber: 4,
+              componentName: "PageHeader",
+            },
           ],
-          snapshot: { text: "Users", attributes: {}, childCount: 0 },
+          htmlPreview: "<h1>Users</h1>",
+          styleText: "font-weight: 700;",
+          fingerprint: {
+            tagName: "h1",
+            role: "",
+            accessibleName: "",
+            text: "Users",
+            identityAttributes: {},
+            childCount: 0,
+            parent: { tagName: "main", role: "" },
+          },
         },
       ],
-    },
-    {
+      pageContext: {
+        url: "http://127.0.0.1:4173/users",
+        routeKey: "/users",
+        title: "Users",
+        viewport: { width: 1440, height: 900 },
+        scroll: { x: 0, y: 0 },
+        businessContext: [
+          { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
+        ],
+      },
+    }),
+    annotationFixture({
       annotationId: "ann-2",
       kind: "region",
       comment: "Highlight the table",
-      createdAt: "2026-08-08T10:01:00.000Z",
-      status: "open",
+      createdAt: "2026-08-11T10:01:00.000Z",
       elements: [],
-      region: { x: 1, y: 2, width: 100, height: 40 },
-    },
+      region: {
+        coordinateSpace: "document",
+        x: 1,
+        y: 2,
+        width: 100,
+        height: 40,
+      },
+    }),
   ],
   businessContext: [
     { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
   ],
   redaction: { droppedKeys: ["token"], redactedValues: 2, truncatedValues: 1 },
   screenshot: {
-    file: "screenshots/golden-v5-1.png",
+    file: "screenshots/golden-v6-1.png",
     width: 100,
     height: 50,
-    capturedAt: "2026-08-08T10:02:00.000Z",
+    capturedAt: "2026-08-11T10:02:00.000Z",
   },
   diagnostics: [
     {
       source: "console",
       message: "HTTP 500 [REDACTED]",
-      timestamp: "2026-08-08T10:03:00.000Z",
+      timestamp: "2026-08-11T10:03:00.000Z",
       occurrenceCount: 2,
     },
   ],
-};
+});
 
-const v4Fixture = {
-  schemaVersion: 4,
-  taskId: "golden-v4-1",
-  createdAt: "2026-08-08T09:00:00.000Z",
-  url: "http://127.0.0.1:4173/users",
-  title: "Users",
-  instruction: "Legacy instruction",
-  elements: [
-    {
-      tagName: "h1",
-      selectorCandidates: [{ kind: "path", selector: "main > h1" }],
-      componentCandidates: [],
-      sourceCandidates: [],
-      snapshot: { text: "Users", attributes: {}, childCount: 0 },
-    },
-  ],
-  region: { x: 5, y: 5, width: 50, height: 20 },
-  businessContext: [],
-  redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+const v5Fixture = {
+  schemaVersion: 5,
+  taskId: "old-v5-1",
+  annotations: [],
 };
 
 const runCli = (args: string[], fixture: unknown): string => {
@@ -101,9 +127,11 @@ const runCli = (args: string[], fixture: unknown): string => {
       path.join(dir, "tasks", "active-task.json"),
       JSON.stringify(fixture)
     );
+    // Goal 03: process tests spawn the PUBLIC package script (tsx), never
+    // raw node execution of the .mjs entrypoint.
     return execFileSync(
-      process.execPath,
-      ["scripts/portal-studio-print.mjs", ...args],
+      "pnpm",
+      ["--silent", "run", "studio:print", "--", ...args],
       {
         encoding: "utf8",
         env: { ...process.env, PORTAL_STUDIO_DIR: dir },
@@ -114,193 +142,198 @@ const runCli = (args: string[], fixture: unknown): string => {
   }
 };
 
-describe("formatTaskMarkdown — golden v5 output", () => {
-  it("renders the exact expected bytes (annotations/comments/elements/status)", () => {
-    const markdown = formatTaskMarkdown(v5Fixture);
-    expect(markdown).toContain("# Task golden-v5-1");
-    expect(markdown).toContain("- schemaVersion: 5");
-    expect(markdown).toContain("- capturedAt: 2026-08-08T10:00:00.000Z");
+describe("formatTaskMarkdown — golden v6 output", () => {
+  it("renders selector, component, source location and no candidate vocabulary", () => {
+    const markdown = formatTaskMarkdown(v6Fixture);
+    expect(markdown).toContain("# Task golden-v6-1");
+    expect(markdown).toContain("- schemaVersion: 6");
     expect(markdown).toContain("## Annotations (2)");
-    expect(markdown).toContain(
-      "### Annotation 1: [element] ann-1"
-    );
+    expect(markdown).toContain("### Annotation 1: [element] ann-1");
     expect(markdown).toContain("Comment: Bold the header");
+    expect(markdown).toContain("- selector: main > h1");
+    expect(markdown).toContain("- componentName: PageHeader");
+    expect(markdown).toContain("- source: src/pages/users.tsx:12:4 (PageHeader)");
+    expect(markdown).toContain("- sourceStack:");
+    expect(markdown).toContain("  - src/pages/users.tsx:12:4 (PageHeader)");
     expect(markdown).toContain(
-      "- status: completed @ 2026-08-08T10:05:00.000Z"
+      "- bounds: 10,20 200x40"
     );
-    expect(markdown).toContain("/repo/src/pages/users.tsx:12");
+    expect(markdown).toContain("- fingerprint: tagName=h1");
+    expect(markdown).toContain("- page: /users (Users)");
+    expect(markdown).toContain("- businessContext:");
     expect(markdown).toContain(
-      "### Annotation 2: [region] ann-2"
+      "  - [page-element] pe-1 (source: data-ai-page-element)"
     );
+    expect(markdown).toContain(
+      "- status: completed @ 2026-08-11T10:05:00.000Z"
+    );
+    expect(markdown).toContain("### Annotation 2: [region] ann-2");
     expect(markdown).toContain("- region: 1,2 100x40");
-    expect(markdown).toContain("- redaction: droppedKeys=[\"token\"]");
-    expect(markdown).toContain(
-      "- diagnostics:"
-    );
-    expect(markdown).toContain("x2 @ 2026-08-08T10:03:00.000Z");
+    // v6 vocabulary: NO candidate terminology.
+    expect(markdown).not.toContain("Selector candidates");
+    expect(markdown).not.toContain("Component candidates");
+    expect(markdown).not.toContain("Source candidates");
+    expect(markdown).not.toContain("snapshot");
+  });
+
+  it("shows unresolved source explicitly when null", () => {
+    const fixture = taskFixture({
+      annotations: [
+        annotationFixture({
+          elements: [
+            {
+              tagName: "button",
+              selector: "#save",
+              bounds: { x: 0, y: 0, width: 10, height: 10 },
+              componentName: null,
+              source: null,
+              sourceStack: [],
+              htmlPreview: "",
+              styleText: "",
+              fingerprint: {
+                tagName: "button",
+                role: "",
+                accessibleName: "",
+                text: "",
+                identityAttributes: { id: "save" },
+                childCount: 0,
+                parent: { tagName: "div", role: "" },
+              },
+            },
+          ],
+        }),
+      ],
+    });
+    const markdown = formatTaskMarkdown(fixture);
+    expect(markdown).toContain("- componentName: (unresolved)");
+    expect(markdown).toContain("- source: (unresolved)");
+    expect(markdown).toContain("- sourceStack: (none)");
   });
 });
 
-describe("formatTaskJson — golden v5 output", () => {
-  it("serializes the normalized artifact pretty-printed", () => {
-    const json = formatTaskJson(v5Fixture);
-    expect(JSON.parse(json)).toEqual(v5Fixture);
-    expect(json).toContain('"schemaVersion": 5');
-    expect(json.endsWith("}")).toBe(true);
-  });
-});
-
-describe("formatTaskMarkdown — Goal 04 includeCompleted option", () => {
-  it("default renders ALL annotations (existing golden behavior)", () => {
-    const markdown = formatTaskMarkdown(v5Fixture);
+describe("formatTaskMarkdown — includeCompleted option", () => {
+  it("default renders ALL annotations", () => {
+    const markdown = formatTaskMarkdown(v6Fixture);
     expect(markdown).toContain("## Annotations (2)");
-    expect(markdown).toContain("Bold the header");
-    expect(markdown).toContain("Highlight the table");
-    expect(markdown).toContain("- status: completed @ 2026-08-08T10:05:00.000Z");
-  });
-
-  it("includeCompleted:true is the explicit all-mode option (identical to default)", () => {
-    const all = formatTaskMarkdown(v5Fixture, { includeCompleted: true });
-    expect(all).toBe(formatTaskMarkdown(v5Fixture));
-    expect(all).toContain("## Annotations (2)");
   });
 
   it("includeCompleted:false renders ONLY open annotations (browser Copy default)", () => {
-    const openOnly = formatTaskMarkdown(v5Fixture, { includeCompleted: false });
-    expect(openOnly).toContain("## Annotations (1)");
-    expect(openOnly).toContain("Highlight the table");
-    expect(openOnly).not.toContain("Bold the header");
-    expect(openOnly).not.toContain("status: completed");
+    const markdown = formatTaskMarkdown(v6Fixture, {
+      includeCompleted: false,
+    });
+    expect(markdown).toContain("## Annotations (1)");
+    expect(markdown).toContain("### Annotation 2: [region] ann-2");
+    expect(markdown).not.toContain("ann-1");
   });
 
-  it("G04-04: Copy output uses EACH annotation's OWN page context (per-annotation page line)", () => {
-    const withPages = {
-      ...v5Fixture,
-      annotations: [
-        {
-          ...v5Fixture.annotations[0],
-          pageContext: {
-            url: "http://127.0.0.1:4173/users",
-            routeKey: "/users",
-            title: "Users",
-          },
-        },
-        {
-          ...v5Fixture.annotations[1],
-          pageContext: {
-            url: "http://127.0.0.1:4173/dev/ai-chat",
-            routeKey: "/dev/ai-chat",
-            title: "AI Chat",
-          },
-        },
-      ],
-    };
-    const markdown = formatTaskMarkdown(withPages);
-    expect(markdown).toContain("- page: /users (Users)");
-    expect(markdown).toContain("- page: /dev/ai-chat (AI Chat)");
-    // Each page line sits under ITS OWN annotation heading.
-    const ann1 = markdown.slice(
-      markdown.indexOf("### Annotation 1"),
-      markdown.indexOf("### Annotation 2")
-    );
-    expect(ann1).toContain("- page: /users (Users)");
-    expect(ann1).not.toContain("/dev/ai-chat");
-    const ann2 = markdown.slice(markdown.indexOf("### Annotation 2"));
-    expect(ann2).toContain("- page: /dev/ai-chat (AI Chat)");
+  it("includeCompleted:true is the explicit all-mode option (identical to default)", () => {
+    const markdown = formatTaskMarkdown(v6Fixture, {
+      includeCompleted: true,
+    });
+    expect(markdown).toContain("## Annotations (2)");
   });
 
-  it("G03-01: the OPEN-only copy keeps FULL-ORDER numbers (1 open / 2 completed / 3 open → Annotation 1 and Annotation 3)", () => {
-    const mixed = {
-      ...v5Fixture,
+  it("the OPEN-only copy keeps FULL-ORDER numbers (G03-01)", () => {
+    const fixture = taskFixture({
       annotations: [
-        { ...v5Fixture.annotations[0], status: "open" },
-        { ...v5Fixture.annotations[1], status: "completed" },
-        {
+        annotationFixture({
+          annotationId: "ann-1",
+          status: "completed",
+          completedAt: "2026-08-11T10:05:00.000Z",
+        }),
+        annotationFixture({
+          annotationId: "ann-2",
+          comment: "Open one",
+        }),
+        annotationFixture({
           annotationId: "ann-3",
-          kind: "element",
-          comment: "Third item",
-          createdAt: "2026-08-08T11:00:00.000Z",
-          status: "open",
-          elements: [],
-        },
+          comment: "Open two",
+        }),
       ],
-    };
-    const openOnly = formatTaskMarkdown(mixed, { includeCompleted: false });
-    // The filtered list has 2 items but they keep their FULL-ORDER
-    // numbers 1 and 3 — never renumbered 1 and 2.
-    expect(openOnly).toContain("## Annotations (2)");
-    expect(openOnly).toContain("### Annotation 1: [element] ann-1");
-    expect(openOnly).toContain("### Annotation 3: [element] ann-3");
-    expect(openOnly).not.toContain("Annotation 2:");
-    expect(openOnly).not.toContain("status: completed");
-    // The all-mode copy numbers every annotation in full order.
-    const all = formatTaskMarkdown(mixed, { includeCompleted: true });
-    expect(all).toContain("### Annotation 1: [element] ann-1");
-    expect(all).toContain("### Annotation 2: [region] ann-2");
-    expect(all).toContain("### Annotation 3: [element] ann-3");
+    });
+    const markdown = formatTaskMarkdown(fixture, { includeCompleted: false });
+    expect(markdown).toContain("### Annotation 2: [element] ann-2");
+    expect(markdown).toContain("### Annotation 3: [element] ann-3");
   });
 
   it("includeCompleted:false with only completed annotations renders an empty list", () => {
-    const onlyDone = {
-      ...v5Fixture,
-      annotations: v5Fixture.annotations.filter(
-        (annotation) => annotation.status === "completed"
-      ),
-    };
-    const markdown = formatTaskMarkdown(onlyDone, { includeCompleted: false });
+    const fixture = taskFixture({
+      annotations: [
+        annotationFixture({
+          annotationId: "ann-1",
+          status: "completed",
+          completedAt: "2026-08-11T10:05:00.000Z",
+        }),
+      ],
+    });
+    const markdown = formatTaskMarkdown(fixture, { includeCompleted: false });
     expect(markdown).toContain("## Annotations (0)");
   });
 });
 
-describe("formatTaskMarkdown — Goal 05 completion command template", () => {
-  it("includes the stable annotationId and the exact completion command for every annotation", () => {
-    const markdown = formatTaskMarkdown(v5Fixture);
+describe("formatTaskMarkdown — completion command template", () => {
+  it("includes the stable annotationId and the exact completion command", () => {
+    const markdown = formatTaskMarkdown(v6Fixture);
     expect(markdown).toContain(
       "Complete (verified): pnpm studio:complete -- ann-1 --verified --summary \"what changed and how it was verified\""
     );
-    expect(markdown).toContain(
-      "Complete (verified): pnpm studio:complete -- ann-2 --verified --summary \"what changed and how it was verified\""
-    );
-  });
-
-  it("the open-only (includeCompleted:false) output keeps the command template too", () => {
-    const markdown = formatTaskMarkdown(v5Fixture, { includeCompleted: false });
-    expect(markdown).toContain("pnpm studio:complete -- ann-2 --verified");
-    expect(markdown).not.toContain("pnpm studio:complete -- ann-1 --verified");
   });
 });
 
-describe("formatTaskMarkdown — v4 normalize-on-read (D-033 #17)", () => {
-  it("renders a v4 artifact as its normalized v5 single annotation", () => {
-    const markdown = formatTaskMarkdown(v4Fixture);
-    expect(markdown).toContain("- schemaVersion: 5");
-    expect(markdown).toContain("## Annotations (1)");
-    expect(markdown).toContain("Comment: Legacy instruction");
-    expect(markdown).toContain("- region: 5,5 50x20");
-    expect(markdown).not.toContain("## Instruction");
+describe("unsupported schema (shared typed result)", () => {
+  it("renders v1-v5 artifacts as the unsupported_schema markdown, never normalized", () => {
+    for (const version of [1, 2, 3, 4, 5]) {
+      const markdown = formatTaskMarkdown({ schemaVersion: version });
+      expect(markdown).toContain("# Unsupported task schema");
+      expect(markdown).toContain(`- schemaVersion: ${version}`);
+      expect(markdown).toContain("- expectedSchemaVersion: 6");
+      expect(markdown).toContain("- clear: tasks/active-task.json");
+    }
+  });
+
+  it("formatTaskJson renders the typed unsupported result", () => {
+    const json = JSON.parse(formatTaskJson(v5Fixture));
+    expect(json.status).toBe("unsupported_schema");
+    expect(json.schemaVersion).toBe(5);
+    expect(json.expectedSchemaVersion).toBe(6);
+  });
+
+  it("formatUnsupportedSchemaMarkdown renders the shared message", () => {
+    const markdown = formatUnsupportedSchemaMarkdown({
+      status: "unsupported_schema",
+      schemaVersion: 5,
+      expectedSchemaVersion: 6,
+      clearInstruction: "clear it",
+      clearPath: "tasks/active-task.json",
+    });
+    expect(markdown).toContain("# Unsupported task schema");
+    expect(markdown).toContain("clear it");
   });
 });
 
-describe("CLI ↔ browser shared-module byte parity", () => {
-  it("the standalone CLI emits EXACTLY formatTaskMarkdown output", () => {
-    const cliMarkdown = runCli(["--markdown"], v5Fixture);
-    expect(cliMarkdown).toBe(`${formatTaskMarkdown(v5Fixture)}\n`);
-    const cliJson = runCli(["--json"], v5Fixture);
-    expect(cliJson).toBe(`${formatTaskJson(v5Fixture)}\n`);
-  });
-
-  it("CLI v4 output matches the shared formatter too (normalized)", () => {
-    const cliMarkdown = runCli(["--markdown"], v4Fixture);
-    expect(cliMarkdown).toBe(`${formatTaskMarkdown(v4Fixture)}\n`);
+describe("formatTaskJson — golden v6 output", () => {
+  it("serializes the artifact pretty-printed", () => {
+    const json = formatTaskJson(v6Fixture);
+    expect(json).toContain('"schemaVersion": 6');
+    expect(JSON.parse(json).annotations).toHaveLength(2);
   });
 });
 
-describe("formatting rejects non-artifacts", () => {
-  it("throws for unrecognized payloads", () => {
-    expect(() => formatTaskMarkdown(null)).toThrow("cannot format");
-    expect(() => formatTaskMarkdown({ schemaVersion: 99 })).toThrow(
-      "cannot format"
-    );
-    expect(() => formatTaskJson("nope")).toThrow("cannot format");
+describe("print CLI via the public package script", () => {
+  it("prints the v6 task as JSON and exits 0", () => {
+    const stdout = runCli(["--json"], v6Fixture);
+    expect(JSON.parse(stdout).schemaVersion).toBe(6);
+  });
+
+  it("prints the v6 task as markdown and exits 0", () => {
+    const stdout = runCli(["--markdown"], v6Fixture);
+    expect(stdout).toContain("# Task golden-v6-1");
+    expect(stdout).toContain("- selector: main > h1");
+  });
+
+  it("prints the unsupported_schema result for an old artifact and exits 0", () => {
+    const stdout = runCli(["--markdown"], v5Fixture);
+    expect(stdout).toContain("# Unsupported task schema");
+    expect(stdout).toContain("- schemaVersion: 5");
   });
 });

@@ -24,9 +24,11 @@ import path from "node:path";
 const VERIFY_PATH = "/__portal-studio/verify";
 
 function parseArguments(argv) {
+  // pnpm run forwards a leading "--" separator after the script name.
+  const cleanArgs = argv[0] === "--" ? argv.slice(1) : argv;
   let timeoutMs;
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
+  for (let index = 0; index < cleanArgs.length; index += 1) {
+    const argument = cleanArgs[index];
     if (argument === "--timeout-ms") {
       const value = Number(argv[index + 1]);
       if (!Number.isFinite(value) || value < 1000) {

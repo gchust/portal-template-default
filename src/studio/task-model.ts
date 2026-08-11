@@ -1,33 +1,29 @@
 /**
  * Portal Studio — annotation task model (pure, testable).
  *
- * Goal 02 (D-033 #14/#17): the canonical artifact is schemaVersion 5 with
- * `annotations[]`. v4 files are unpublished dev-only intermediates — the
- * ONLY compatibility path is normalize-on-read via `normalizeTask` (a pure
- * mapping, never a migration framework). Display numbers are the live order
- * index + 1 (D-034 #4); stable `annotationId`s never renumber.
+ * Goal 03 (React Grab migration): the canonical artifact is schemaVersion 6
+ * with `annotations[]` of v6 element captures. Schema v1-v5 artifacts are
+ * NEVER normalized or migrated — `normalizeTask` accepts v6 only, and
+ * `describeUnsupportedSchema` produces the one shared typed old-schema
+ * result used by the browser, endpoint, print, verify, CLI and MCP.
+ * Display numbers are the live order index + 1 (D-034 #4); stable
+ * `annotationId`s never renumber.
  */
 
 // Value imports carry the explicit .ts extension so Node 22 type
 // stripping can resolve them when the print CLI / MCP import this module.
 import {
+  TASK_FILENAME,
   TASK_SCHEMA_VERSION,
   TASK_SCHEMA_VERSION_V1,
   TASK_SCHEMA_VERSION_V2,
   TASK_SCHEMA_VERSION_V4,
+  TASK_SCHEMA_VERSION_V5,
 } from "./types.ts";
 import type {
   Annotation,
-  BusinessContextItem,
-  DiagnosticEntry,
-  ElementCapture,
-  HeartbeatReport,
   PortalStudioTask,
-  PortalStudioTaskV4,
-  RedactionManifest,
-  Region,
-  RevisionInfo,
-  ScreenshotRef,
+  UnsupportedSchemaResult,
 } from "./types";
 
 export const MAX_ANNOTATIONS = 50;
@@ -37,157 +33,51 @@ export const ANNOTATION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value);
 
+/** The dev-only artifact the unsupported-schema result points at. */
+export const ACTIVE_TASK_CLEAR_PATH = `tasks/${TASK_FILENAME}`;
+
 /**
- * Legacy (v1–v4) → v5 normalization (D-033 #17): `instruction` becomes a
- * single annotation's comment, `elements[]` its captures, `region` its
- * rect. Lossless for every legacy field (bookkeeping is carried through
- * untouched). v1 payloads carry a single `element` instead of `elements[]`.
+ * Shared typed old-schema result (shared contract §5 "Unsupported old
+ * artifacts"): any task-shaped artifact whose schemaVersion is not 6 gets
+ * this one result with the actual/expected version and a safe instruction
+ * to clear the dev-only task. Never normalized, never migrated. Returns
+ * null for v6 tasks and for non-task inputs (which stay "invalid_task").
  */
-export function normalizeV4ToV5(task: PortalStudioTaskV4): PortalStudioTask {
-  const { instruction, elements, region, ...rest } = task;
-  const upgradedElements = elements
-    .map(normalizeElementCaptureV5)
-    .filter((element): element is ElementCapture => element !== null);
-  const annotation: Annotation = {
-    annotationId: `${task.taskId}-v4`,
-    kind: upgradedElements.length > 0 ? "element" : "region",
-    comment: instruction,
-    createdAt: task.createdAt,
-    status: "open",
-    elements: upgradedElements,
-    ...(region ? { region } : {}),
-  };
+export function describeUnsupportedSchema(
+  input: unknown
+): UnsupportedSchemaResult | null {
+  if (!isRecord(input)) return null;
+  const schemaVersion = input.schemaVersion;
+  if (typeof schemaVersion !== "number") return null;
+  if (schemaVersion === TASK_SCHEMA_VERSION) return null;
+  const known = new Set([
+    TASK_SCHEMA_VERSION_V1,
+    TASK_SCHEMA_VERSION_V2,
+    3,
+    TASK_SCHEMA_VERSION_V4,
+    TASK_SCHEMA_VERSION_V5,
+  ]);
+  if (!known.has(schemaVersion)) return null;
   return {
-    ...rest,
-    schemaVersion: TASK_SCHEMA_VERSION,
-    annotations: [annotation],
+    status: "unsupported_schema",
+    schemaVersion,
+    expectedSchemaVersion: TASK_SCHEMA_VERSION,
+    clearInstruction: `The active task uses the removed schema v${schemaVersion}. Clear the dev-only artifact (${ACTIVE_TASK_CLEAR_PATH}) and create the first v6 annotation again.`,
+    clearPath: ACTIVE_TASK_CLEAR_PATH,
   };
 }
 
-const isElementCaptureArray = (value: unknown): value is ElementCapture[] =>
-  Array.isArray(value);
-
 /**
- * CSS-escape an id-derived selector value (D-044 pattern): ids containing
- * `.`/`:`/leading digits would silently misresolve or throw otherwise.
- * Falls back to the raw value outside browser contexts (node/CLI).
- */
-const escapeCssSelectorValue = (value: string) =>
-  typeof CSS !== "undefined" && typeof CSS.escape === "function"
-    ? CSS.escape(value)
-    : value;
-
-/**
- * Upgrade one legacy element record to the v5 ElementCapture shape without
- * data loss. v5-shaped records pass through; pre-v5 records (id/tag/text/
- * attributes era, or agent-seeded legacy artifacts) are mapped onto the
- * v5 fields so marker resolution can never crash on a missing
- * selectorCandidates array (the marker layer treats it as unresolved).
- */
-export function normalizeElementCaptureV5(
-  raw: unknown
-): ElementCapture | null {
-  if (!isRecord(raw)) return null;
-  const selectorCandidates = Array.isArray(raw.selectorCandidates)
-    ? (raw.selectorCandidates as ElementCapture["selectorCandidates"])
-    : typeof raw.id === "string" && raw.id
-      ? [{ kind: "id" as const, selector: `#${escapeCssSelectorValue(raw.id)}` }]
-      : [];
-  const tagName =
-    typeof raw.tagName === "string" && raw.tagName
-      ? raw.tagName
-      : typeof raw.tag === "string" && raw.tag
-        ? raw.tag
-        : "div";
-  const snapshot = isRecord(raw.snapshot)
-    ? (raw.snapshot as ElementCapture["snapshot"])
-    : {
-        text: typeof raw.text === "string" ? raw.text : "",
-        attributes: isRecord(raw.attributes)
-          ? (raw.attributes as Record<string, string>)
-          : {},
-        childCount: 0,
-      };
-  return {
-    tagName,
-    selectorCandidates,
-    componentCandidates: Array.isArray(raw.componentCandidates)
-      ? (raw.componentCandidates as ElementCapture["componentCandidates"])
-      : [],
-    sourceCandidates: Array.isArray(raw.sourceCandidates)
-      ? (raw.sourceCandidates as ElementCapture["sourceCandidates"])
-      : [],
-    snapshot,
-  };
-}
-
-/** v1–v3 payloads (single `element` or `elements[]`) → v5. */
-function normalizeLegacyToV5(
-  input: Record<string, unknown>
-): PortalStudioTask | null {
-  const taskId = input.taskId;
-  if (typeof taskId !== "string") return null;
-  const instruction = input.instruction;
-  if (typeof instruction !== "string") return null;
-  const rawElements =
-    input.schemaVersion === 1 ? [input.element] : input.elements;
-  if (!isElementCaptureArray(rawElements)) return null;
-  const v4: PortalStudioTaskV4 = {
-    schemaVersion: TASK_SCHEMA_VERSION_V4,
-    taskId,
-    createdAt: typeof input.createdAt === "string" ? input.createdAt : "",
-    url: typeof input.url === "string" ? input.url : "",
-    title: typeof input.title === "string" ? input.title : "",
-    instruction,
-    elements: rawElements,
-    ...(input.region ? { region: input.region as Region } : {}),
-    businessContext: (input.businessContext ?? []) as BusinessContextItem[],
-    redaction: (input.redaction ?? {
-      droppedKeys: [],
-      redactedValues: 0,
-      truncatedValues: 0,
-    }) as RedactionManifest,
-    ...(input.screenshot ? { screenshot: input.screenshot as ScreenshotRef } : {}),
-    ...(input.diagnostics
-      ? { diagnostics: input.diagnostics as DiagnosticEntry[] }
-      : {}),
-    ...(input.heartbeat ? { heartbeat: input.heartbeat as HeartbeatReport } : {}),
-    ...(input.revision ? { revision: input.revision as RevisionInfo } : {}),
-  };
-  return normalizeV4ToV5(v4);
-}
-
-/**
- * Normalize a raw task (v4 or v5) to the canonical v5 shape; null when the
- * input is not a recognizable v4/v5 task. v5 payloads are returned as-is
- * (identity) after a minimal shape check.
+ * Normalize a raw task to the canonical v6 shape; null when the input is
+ * not a recognizable v6 task. v6 payloads are returned as-is (identity)
+ * after a minimal shape check. Schema v1-v5 artifacts are NOT normalized —
+ * callers use `describeUnsupportedSchema` for the typed rejection.
  */
 export function normalizeTask(input: unknown): PortalStudioTask | null {
   if (!isRecord(input)) return null;
-  if (input.schemaVersion === TASK_SCHEMA_VERSION) {
-    if (!Array.isArray(input.annotations)) return null;
-    return input as unknown as PortalStudioTask;
-  }
-  if (input.schemaVersion === TASK_SCHEMA_VERSION_V4) {
-    if (
-      typeof input.instruction !== "string" ||
-      !Array.isArray(input.elements) ||
-      typeof input.taskId !== "string"
-    ) {
-      return null;
-    }
-    return normalizeV4ToV5(input as unknown as PortalStudioTaskV4);
-  }
-  // v1–v3 historical intermediates: normalized on read like v4 (D-033 #17
-  // dual reader — the print CLI keeps printing them, now as v5).
-  if (
-    input.schemaVersion === TASK_SCHEMA_VERSION_V2 ||
-    input.schemaVersion === 3 ||
-    input.schemaVersion === TASK_SCHEMA_VERSION_V1
-  ) {
-    return normalizeLegacyToV5(input);
-  }
-  return null;
+  if (input.schemaVersion !== TASK_SCHEMA_VERSION) return null;
+  if (!Array.isArray(input.annotations)) return null;
+  return input as unknown as PortalStudioTask;
 }
 
 /**

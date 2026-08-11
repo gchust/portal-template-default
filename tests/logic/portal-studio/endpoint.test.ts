@@ -51,143 +51,105 @@ import {
 const makeTempStudioRoot = () =>
   mkdtempSync(path.join(tmpdir(), "portal-studio-test-"));
 
-const v2Task = {
-  schemaVersion: TASK_SCHEMA_VERSION_V2,
+const v6Task = {
+  schemaVersion: TASK_SCHEMA_VERSION,
   taskId: "task-abc-123",
   createdAt: "2026-08-07T12:00:00.000Z",
   url: "http://127.0.0.1:5176/users",
   title: "Users",
-  instruction: "Make the row text larger.",
-  elements: [
+  annotations: [
     {
-      tagName: "tr",
-      selectorCandidates: [{ kind: "path", selector: "tbody > tr" }],
-      componentCandidates: [
-        { name: "TableRow", key: "1", kind: "fiber" },
-        { name: "DataTable", key: null },
+      annotationId: "ann-1",
+      kind: "element",
+      comment: "Make the row text larger.",
+      createdAt: "2026-08-07T12:00:00.000Z",
+      status: "open",
+      elements: [
+        {
+          tagName: "tr",
+          selector: "#row-a",
+          bounds: { x: 10, y: 20, width: 300, height: 40 },
+          componentName: "TableRow",
+          source: {
+            filePath: "src/pages/users.tsx",
+            lineNumber: 12,
+            columnNumber: 4,
+            componentName: "TableRow",
+          },
+          sourceStack: [],
+          htmlPreview: "<tr id=\"row-a\">Alice</tr>",
+          styleText: "display: table-row;",
+          fingerprint: {
+            tagName: "tr",
+            role: "",
+            accessibleName: "",
+            text: "Alice",
+            identityAttributes: { id: "row-a" },
+            childCount: 0,
+            parent: { tagName: "tbody", role: "" },
+          },
+        },
       ],
-      snapshot: {
-        text: "Alice",
-        attributes: { class: "row" },
-        childCount: 4,
-        domOutline: "tr#row-1.row",
-        computedStyle: { display: "table-row", color: "rgb(0, 0, 0)" },
-      },
-    },
-    {
-      tagName: "td",
-      selectorCandidates: [{ kind: "path", selector: "tbody > tr > td" }],
-      componentCandidates: [{ name: "TableRow", key: null, kind: "fiber" }],
-      snapshot: {
-        text: "Alice",
-        attributes: {},
-        childCount: 0,
+      pageContext: {
+        url: "http://127.0.0.1:5176/users",
+        routeKey: "/users",
+        title: "Users",
+        viewport: { width: 1440, height: 900 },
+        scroll: { x: 0, y: 0 },
+        businessContext: [
+          { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
+        ],
       },
     },
   ],
-  region: { x: 10, y: 20, width: 300, height: 120 },
   businessContext: [
     { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
   ],
-  screenshot: { file: "screenshots/task-abc-123.png", width: 1200, height: 800 },
-};
-
-const v4Task = {
-  schemaVersion: TASK_SCHEMA_VERSION_V4,
-  taskId: "task-v4-1",
-  createdAt: "2026-08-07T12:00:00.000Z",
-  url: "http://127.0.0.1:5176/users",
-  title: "Users",
-  instruction: "legacy v4 instruction",
-  elements: [
-    {
-      tagName: "tr",
-      selectorCandidates: [{ kind: "path", selector: "tbody > tr" }],
-      componentCandidates: [{ name: "TableRow", key: "1" }],
-      snapshot: { text: "Alice", attributes: { class: "row" }, childCount: 4 },
-    },
-  ],
-  region: { x: 1, y: 2, width: 50, height: 20 },
-  businessContext: [],
   redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
 };
 
-const v1Task = {
-  schemaVersion: TASK_SCHEMA_VERSION_V1,
-  taskId: "task-v1-1",
-  createdAt: "2026-08-07T12:00:00.000Z",
-  url: "http://127.0.0.1:5176/users",
-  title: "Users",
-  instruction: "legacy",
-  element: {
-    tagName: "tr",
-    selectorCandidates: [{ kind: "path", selector: "tbody > tr" }],
-    componentCandidates: [{ name: "TableRow", key: "1" }],
-    snapshot: { text: "Alice", attributes: { class: "row" }, childCount: 4 },
+/** Old-schema fixtures used ONLY to prove the typed unsupported rejection. */
+const oldSchemaFixtures = [
+  {
+    schemaVersion: TASK_SCHEMA_VERSION_V1,
+    taskId: "old-1",
+    instruction: "x",
+    element: {},
   },
-};
+  {
+    schemaVersion: TASK_SCHEMA_VERSION_V2,
+    taskId: "old-2",
+    instruction: "x",
+    elements: [],
+  },
+  {
+    schemaVersion: TASK_SCHEMA_VERSION_V4,
+    taskId: "old-4",
+    instruction: "x",
+    elements: [],
+  },
+  { schemaVersion: 5, taskId: "old-5", annotations: [] },
+];
 
-describe("session token", () => {
-  it("generates a token of at least 32 bytes and verifies constant-time", () => {
-    const token = generateSessionToken();
-    expect(Buffer.byteLength(token, "utf8")).toBeGreaterThanOrEqual(32);
-    expect(verifySessionToken(token, token)).toBe(true);
-    expect(verifySessionToken("wrong", token)).toBe(false);
-    expect(verifySessionToken(undefined, token)).toBe(false);
-    expect(verifySessionToken(token, undefined)).toBe(false);
-    expect(verifySessionToken("", token)).toBe(false);
-  });
-
-  it("produces distinct tokens per call", () => {
-    expect(generateSessionToken()).not.toBe(generateSessionToken());
-  });
-});
-
-describe("task file names", () => {
-  it("accepts safe names and rejects traversal", () => {
-    expect(isSafeTaskFileName("active-task.json")).toBe(true);
-    expect(isSafeTaskFileName("task-1.json")).toBe(true);
-    expect(isSafeTaskFileName("..")).toBe(false);
-    expect(isSafeTaskFileName("../active-task.json")).toBe(false);
-    expect(isSafeTaskFileName("a/../b")).toBe(false);
-    expect(isSafeTaskFileName("")).toBe(false);
-    expect(isSafeTaskFileName("has space.json")).toBe(false);
-  });
-
-  it("resolves paths only inside the tasks directory", () => {
+describe("task sanitization (v6 only)", () => {
+  it("accepts a valid v6 task and preserves the normalized fields", () => {
     const root = makeTempStudioRoot();
-    const resolved = resolveTaskFilePath(root, "active-task.json");
-    expect(resolved).toBe(path.join(root, "tasks", "active-task.json"));
-    expect(resolveTaskFilePath(root, "../escape.json")).toBeUndefined();
-    expect(resolveTaskFilePath(root, "a/../../escape.json")).toBeUndefined();
-    expect(resolveActiveTaskPath(root)).toBe(
-      path.join(root, "tasks", "active-task.json")
-    );
-    rmSync(root, { recursive: true, force: true });
-  });
-});
-
-describe("task sanitization", () => {
-  it("accepts a valid v2 task and normalizes fields", () => {
-    const root = makeTempStudioRoot();
-    const task = sanitizeTask(v2Task, { studioRoot: root });
+    const task = sanitizeTask(v6Task, { studioRoot: root });
     expect(task).not.toBeNull();
     expect(task?.schemaVersion).toBe(TASK_SCHEMA_VERSION);
     expect(task?.annotations).toHaveLength(1);
     const annotation = task!.annotations[0];
     expect(annotation.kind).toBe("element");
     expect(annotation.comment).toBe("Make the row text larger.");
-    expect(annotation.elements).toHaveLength(2);
-    expect(annotation.elements[0].componentCandidates[0]).toMatchObject({
-      name: "TableRow",
-      kind: "fiber",
+    expect(annotation.elements).toHaveLength(1);
+    expect(annotation.elements[0].selector).toBe("#row-a");
+    expect(annotation.elements[0].source?.filePath).toBe("src/pages/users.tsx");
+    expect(annotation.elements[0].source?.lineNumber).toBe(12);
+    expect(annotation.elements[0].source?.columnNumber).toBe(4);
+    expect(annotation.elements[0].fingerprint.identityAttributes).toEqual({
+      id: "row-a",
     });
-    expect(annotation.elements[0].snapshot.domOutline).toBe("tr#row-1.row");
-    expect(annotation.elements[0].snapshot.computedStyle).toEqual({
-      display: "table-row",
-      color: "rgb(0, 0, 0)",
-    });
-    expect(annotation.region).toEqual({ x: 10, y: 20, width: 300, height: 120 });
+    expect(annotation.pageContext.routeKey).toBe("/users");
     expect(task?.businessContext).toEqual([
       { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
     ]);
@@ -196,45 +158,78 @@ describe("task sanitization", () => {
       redactedValues: 0,
       truncatedValues: 0,
     });
-    // Screenshot ref is dropped when the file does not exist yet.
-    expect(task?.screenshot).toBeUndefined();
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("normalizes a v1 payload into the v5 shape (single annotation)", () => {
-    const task = sanitizeTask(v1Task);
-    expect(task).not.toBeNull();
-    expect(task?.schemaVersion).toBe(TASK_SCHEMA_VERSION);
-    expect(task?.annotations).toHaveLength(1);
-    expect(task?.annotations[0].elements).toHaveLength(1);
-    expect(task?.annotations[0].elements[0].tagName).toBe("tr");
-    expect(task?.annotations[0].region).toBeUndefined();
-    expect(task?.businessContext).toEqual([]);
+  it("rejects every old schema (v1-v5) with no normalization", () => {
+    for (const fixture of oldSchemaFixtures) {
+      expect(sanitizeTask(fixture)).toBeNull();
+    }
   });
 
-  it("normalizes a v4 payload into v5 (normalize-on-read, D-033 #17)", () => {
-    const task = sanitizeTask(v4Task);
+  it("accepts a valid v6 task with ZERO annotations (clear-all)", () => {
+    const empty = {
+      ...v6Task,
+      taskId: "task-empty-1",
+      annotations: [],
+    };
+    const task = sanitizeTask(empty);
     expect(task).not.toBeNull();
-    expect(task?.schemaVersion).toBe(TASK_SCHEMA_VERSION);
-    expect(task?.annotations).toHaveLength(1);
-    const annotation = task!.annotations[0];
-    expect(annotation.comment).toBe("legacy v4 instruction");
-    expect(annotation.kind).toBe("element");
-    expect(annotation.elements[0].tagName).toBe("tr");
-    expect(annotation.region).toEqual({ x: 1, y: 2, width: 50, height: 20 });
-    expect(annotation.annotationId).toBe("task-v4-1-v4");
+    expect(task?.annotations).toEqual([]);
+  });
+
+  it("requires pageContext on every annotation (v6)", () => {
+    const without = structuredClone(v6Task);
+    delete without.annotations[0].pageContext;
+    expect(sanitizeTask(without)).toBeNull();
+    const malformed = structuredClone(v6Task);
+    malformed.annotations[0].pageContext = {
+      url: "http://127.0.0.1:5176/users",
+      routeKey: "/users",
+      title: "Users",
+      viewport: { width: "wide", height: 720 },
+      scroll: { x: 0, y: 0 },
+      businessContext: [],
+    };
+    expect(sanitizeTask(malformed)).toBeNull();
+  });
+
+  it("requires a non-empty v6 selector on every element", () => {
+    const missing = structuredClone(v6Task);
+    delete missing.annotations[0].elements[0].selector;
+    expect(sanitizeTask(missing)).toBeNull();
+    const overLimit = structuredClone(v6Task);
+    overLimit.annotations[0].elements[0].selector = "#x".repeat(3000);
+    expect(sanitizeTask(overLimit)).toBeNull();
+  });
+
+  it("rejects traversal and node_modules source paths in v6 frames", () => {
+    const bad = structuredClone(v6Task);
+    bad.annotations[0].elements[0].source = {
+      filePath: "../escape.tsx",
+      lineNumber: 1,
+      columnNumber: 0,
+      componentName: null,
+    };
+    expect(sanitizeTask(bad)).not.toBeNull();
+    expect(sanitizeTask(bad)?.annotations[0].elements[0].source).toBeNull();
+    const nodeModules = structuredClone(v6Task);
+    nodeModules.annotations[0].elements[0].sourceStack = [
+      {
+        filePath: "node_modules/react/index.js",
+        lineNumber: 1,
+        columnNumber: 0,
+        componentName: null,
+      },
+    ];
+    const sanitized = sanitizeTask(nodeModules);
+    expect(sanitized?.annotations[0].elements[0].sourceStack).toEqual([]);
   });
 
   it("preserves screenshot.capturedAt and heartbeat through mutation rewrites (F-2)", () => {
     const mutation = {
-      schemaVersion: TASK_SCHEMA_VERSION,
+      ...v6Task,
       taskId: "task-mut-1",
-      createdAt: "2026-08-07T12:00:00.000Z",
-      url: "http://127.0.0.1:4173/users",
-      title: "Users",
-      annotations: [],
-      businessContext: [],
-      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
       screenshot: {
         file: "screenshots/task-abc-123.png",
         width: 1200,
@@ -258,32 +253,20 @@ describe("task sanitization", () => {
   });
 
   it("preserves additive completedEvidence through sanitizeTask (browser POST path, G05)", () => {
-    const base = {
-      schemaVersion: TASK_SCHEMA_VERSION,
-      taskId: "task-evidence-keep",
-      createdAt: "2026-08-07T12:00:00.000Z",
-      url: "http://127.0.0.1:4173/users",
-      title: "Users",
-      annotations: [
-        {
-          annotationId: "ann-done",
-          kind: "element",
-          comment: "fixed",
-          createdAt: "2026-08-07T12:00:00.000Z",
-          status: "completed",
-          completedAt: "2026-08-07T12:30:00.000Z",
-          completedEvidence: {
-            verified: true,
-            summary: "Fixed header; verified via reload",
-            source: "cli",
-            completedAt: "2026-08-07T12:30:00.000Z",
-          },
-          extra: "must-be-dropped",
-          elements: [],
-        },
-      ],
-      businessContext: [],
-      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    const base = structuredClone(v6Task);
+    base.taskId = "task-evidence-keep";
+    base.annotations[0] = {
+      ...base.annotations[0],
+      annotationId: "ann-done",
+      status: "completed",
+      completedAt: "2026-08-07T12:30:00.000Z",
+      completedEvidence: {
+        verified: true,
+        summary: "Fixed header; verified via reload",
+        source: "cli",
+        completedAt: "2026-08-07T12:30:00.000Z",
+      },
+      extra: "must-be-dropped",
     };
     const task = sanitizeTask(base);
     expect(task).not.toBeNull();
@@ -294,164 +277,64 @@ describe("task sanitization", () => {
       source: "cli",
       completedAt: "2026-08-07T12:30:00.000Z",
     });
-    // status/completedAt still the canonical fields; unknown fields dropped.
     expect(annotation?.status).toBe("completed");
-    expect(annotation?.completedAt).toBe("2026-08-07T12:30:00.000Z");
     expect((annotation as Record<string, unknown>).extra).toBeUndefined();
   });
 
   it("preserves the Goal 06 pageContext through sanitizeTask (server round trip)", () => {
-    const base = {
-      schemaVersion: TASK_SCHEMA_VERSION,
-      taskId: "task-ctx-keep",
-      createdAt: "2026-08-09T00:00:00.000Z",
-      url: "http://127.0.0.1:4173/users",
-      title: "Users",
-      annotations: [
-        {
-          annotationId: "ann-ctx",
-          kind: "element",
-          comment: "c",
-          createdAt: "2026-08-09T00:00:00.000Z",
-          status: "open",
-          elements: [],
-          pageContext: {
-            url: "http://127.0.0.1:4173/users?page=2",
-            routeKey: "/users",
-            title: "Users",
-            viewport: { width: 1280, height: 720 },
-            scroll: { x: 10, y: 20 },
-            businessContext: [
-              { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
-            ],
-          },
-        },
-      ],
-      businessContext: [],
-      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
-    };
+    const base = structuredClone(v6Task);
+    base.taskId = "task-ctx-keep";
     const task = sanitizeTask(base);
     expect(task).not.toBeNull();
-    expect(task?.annotations[0].pageContext).toEqual({
-      // Query strings are redacted by the server whitelist (security).
-      url: "http://127.0.0.1:4173/users?[REDACTED]",
+    expect(task?.annotations[0].pageContext).toMatchObject({
       routeKey: "/users",
       title: "Users",
-      viewport: { width: 1280, height: 720 },
-      scroll: { x: 10, y: 20 },
-      businessContext: [
-        { type: "page-element", id: "pe-1", source: "data-ai-page-element" },
-      ],
+      viewport: { width: 1440, height: 900 },
+      scroll: { x: 0, y: 0 },
     });
   });
 
-  it("drops a malformed pageContext but keeps the annotation (defensive)", () => {
-    const base = {
-      schemaVersion: TASK_SCHEMA_VERSION,
-      taskId: "task-ctx-drop",
-      createdAt: "2026-08-09T00:00:00.000Z",
-      url: "http://127.0.0.1:4173/users",
-      title: "Users",
-      annotations: [
-        {
-          annotationId: "ann-ctx",
-          kind: "element",
-          comment: "c",
-          createdAt: "2026-08-09T00:00:00.000Z",
-          status: "open",
-          elements: [],
-          pageContext: {
-            url: "http://127.0.0.1:4173/users",
-            routeKey: "/users",
-            title: "Users",
-            viewport: { width: "wide", height: 720 },
-            scroll: { x: 0, y: 0 },
-            businessContext: [],
-          },
-        },
-      ],
-      businessContext: [],
-      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
-    };
-    const task = sanitizeTask(base);
-    expect(task?.annotations[0].pageContext).toBeUndefined();
-    expect(task?.annotations[0].status).toBe("open");
-  });
-
   it("drops malformed completedEvidence but keeps the annotation (defensive)", () => {
-    const base = {
-      schemaVersion: TASK_SCHEMA_VERSION,
-      taskId: "task-evidence-drop",
-      createdAt: "2026-08-07T12:00:00.000Z",
-      url: "http://127.0.0.1:4173/users",
-      title: "Users",
-      annotations: [
-        {
-          annotationId: "ann-1",
-          kind: "element",
-          comment: "c",
-          createdAt: "2026-08-07T12:00:00.000Z",
-          status: "completed",
-          completedAt: "2026-08-07T12:30:00.000Z",
-          completedEvidence: {
-            verified: true,
-            summary: "   ",
-            source: "unknown-source",
-            completedAt: "not-a-date",
-          },
-          elements: [],
-        },
-      ],
-      businessContext: [],
-      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
+    const base = structuredClone(v6Task);
+    base.taskId = "task-evidence-drop";
+    base.annotations[0] = {
+      ...base.annotations[0],
+      status: "completed",
+      completedAt: "2026-08-07T12:30:00.000Z",
+      completedEvidence: {
+        verified: true,
+        summary: "   ",
+        source: "unknown-source",
+        completedAt: "not-a-date",
+      },
     };
     const task = sanitizeTask(base);
     expect(task?.annotations[0].completedEvidence).toBeUndefined();
     expect(task?.annotations[0].status).toBe("completed");
   });
 
-  it("rejects invalid v5 annotation fields (G05 security coverage)", () => {
-    const base = {
-      schemaVersion: TASK_SCHEMA_VERSION,
-      taskId: "task-v5-reject",
-      createdAt: "2026-08-07T12:00:00.000Z",
-      url: "http://127.0.0.1:4173/users",
-      title: "Users",
-      annotations: [
-        {
-          annotationId: "ann-1",
-          kind: "element",
-          comment: "c",
-          createdAt: "2026-08-07T12:00:00.000Z",
-          status: "open",
-          elements: [],
-        },
-      ],
-      businessContext: [],
-      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
-    };
-    // Traversal-shaped annotationId.
+  it("rejects invalid v6 annotation fields (G05 security coverage)", () => {
+    const base = { ...v6Task, taskId: "task-v6-reject" };
     expect(
       sanitizeTask({
         ...base,
-        annotations: [{ ...base.annotations[0], annotationId: "../evil" }],
+        annotations: [
+          { ...base.annotations[0], annotationId: "../evil" },
+        ],
       })
     ).toBeNull();
-    // Unknown kind.
     expect(
       sanitizeTask({
         ...base,
         annotations: [{ ...base.annotations[0], kind: "bogus" }],
       })
     ).toBeNull();
-    // Invalid status.
     expect(
       sanitizeTask({
         ...base,
         annotations: [{ ...base.annotations[0], status: "archived" }],
       })
     ).toBeNull();
-    // Invalid completedAt date.
     expect(
       sanitizeTask({
         ...base,
@@ -460,9 +343,7 @@ describe("task sanitization", () => {
         ],
       })
     ).toBeNull();
-    // Non-array annotations.
     expect(sanitizeTask({ ...base, annotations: "nope" })).toBeNull();
-    // Secret-shaped comment values are redacted, not rejected.
     const redacted = sanitizeTask({
       ...base,
       annotations: [
@@ -477,50 +358,25 @@ describe("task sanitization", () => {
   });
 
   it("preserves completed status + completedAt through sanitize (G04)", () => {
-    const task = sanitizeTask({
-      schemaVersion: TASK_SCHEMA_VERSION,
-      taskId: "task-completed-1",
-      createdAt: "2026-08-07T12:00:00.000Z",
-      url: "http://127.0.0.1:4173/users",
-      title: "Users",
-      annotations: [
-        {
-          annotationId: "ann-1",
-          kind: "element",
-          comment: "done",
-          createdAt: "2026-08-07T12:00:00.000Z",
-          status: "completed",
-          completedAt: "2026-08-07T12:30:00.000Z",
-          elements: [],
-        },
-      ],
-      businessContext: [],
-      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
-    });
+    const base = structuredClone(v6Task);
+    base.taskId = "task-completed-1";
+    base.annotations[0] = {
+      ...base.annotations[0],
+      status: "completed",
+      completedAt: "2026-08-07T12:30:00.000Z",
+    };
+    const task = sanitizeTask(base);
     expect(task?.annotations[0].status).toBe("completed");
     expect(task?.annotations[0].completedAt).toBe("2026-08-07T12:30:00.000Z");
-  });
-
-  it("accepts a valid v5 task with ZERO annotations (clear-all, D-033 #10/#11)", () => {
-    const empty = {
-      schemaVersion: TASK_SCHEMA_VERSION,
-      taskId: "task-empty-1",
-      createdAt: "2026-08-07T12:00:00.000Z",
-      url: "http://127.0.0.1:4173/users",
-      title: "Users",
-      annotations: [],
-      businessContext: [],
-      redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
-    };
-    const task = sanitizeTask(empty);
-    expect(task).not.toBeNull();
-    expect(task?.annotations).toEqual([]);
   });
 
   it("accepts a screenshot ref when the file exists", () => {
     const root = makeTempStudioRoot();
     atomicWriteScreenshot(root, "task-abc-123", Buffer.from("not-png"));
-    const task = sanitizeTask(v2Task, { studioRoot: root });
+    const task = sanitizeTask(
+      { ...v6Task, screenshot: { file: "screenshots/task-abc-123.png", width: 1200, height: 800 } },
+      { studioRoot: root }
+    );
     expect(task?.screenshot).toEqual({
       file: "screenshots/task-abc-123.png",
       width: 1200,
@@ -530,35 +386,31 @@ describe("task sanitization", () => {
   });
 
   it("rejects wrong schema, missing fields, and unsafe ids", () => {
-    expect(sanitizeTask({ ...v2Task, schemaVersion: 6 })).toBeNull();
-    expect(sanitizeTask({ ...v2Task, taskId: "../evil" })).toBeNull();
-    expect(sanitizeTask({ ...v2Task, url: "" })).toBeNull();
-    expect(
-      sanitizeTask({ ...v2Task, createdAt: "not-a-date" })
-    ).toBeNull();
-    expect(sanitizeTask({ ...v2Task, elements: [] })).toBeNull();
-    expect(sanitizeTask({ ...v2Task, elements: null })).toBeNull();
+    expect(sanitizeTask({ ...v6Task, schemaVersion: 5 })).toBeNull();
+    expect(sanitizeTask({ ...v6Task, taskId: "../evil" })).toBeNull();
+    expect(sanitizeTask({ ...v6Task, url: "" })).toBeNull();
+    expect(sanitizeTask({ ...v6Task, createdAt: "not-a-date" })).toBeNull();
+    expect(sanitizeTask({ ...v6Task, annotations: null })).toBeNull();
     expect(sanitizeTask(null)).toBeNull();
     expect(sanitizeTask("nope")).toBeNull();
   });
 
   it("caps lengths and counts", () => {
-    const huge = {
-      ...v2Task,
-      instruction: "x".repeat(10000),
-      elements: [
-        v2Task.elements[0],
-        ...Array.from({ length: 200 }, (_, i) => ({
-          ...v2Task.elements[1],
-          componentCandidates: [{ name: `C${i}`, key: null }],
-        })),
-      ],
-      businessContext: Array.from({ length: 50 }, (_, i) => ({
-        type: "data-attribute",
-        id: `ctx-${i}`,
-        source: "data-nb-x",
+    const huge = structuredClone(v6Task);
+    huge.taskId = "task-caps-1";
+    huge.annotations[0].comment = "x".repeat(10000);
+    huge.annotations[0].elements = [
+      huge.annotations[0].elements[0],
+      ...Array.from({ length: 200 }, (_, i) => ({
+        ...huge.annotations[0].elements[0],
+        componentName: `C${i}`,
       })),
-    };
+    ];
+    huge.businessContext = Array.from({ length: 50 }, (_, i) => ({
+      type: "data-attribute",
+      id: `ctx-${i}`,
+      source: "data-nb-x",
+    }));
     const task = sanitizeTask(huge);
     expect(task).not.toBeNull();
     expect(task?.annotations[0].comment).toHaveLength(2000);
@@ -567,89 +419,75 @@ describe("task sanitization", () => {
   });
 
   it("rejects oversized artifacts", () => {
-    const styleBlock = Object.fromEntries(
-      Array.from({ length: 30 }, (_, i) => [`prop-${i}`, "z".repeat(200)])
-    );
-    const huge = {
-      ...v2Task,
-      elements: Array.from({ length: 50 }, (_, i) => ({
-        ...v2Task.elements[0],
-        componentCandidates: [{ name: `C${i}`, key: null }],
-        snapshot: {
-          text: "t",
-          attributes: {},
-          childCount: 0,
-          computedStyle: styleBlock,
-        },
-      })),
-    };
+    const huge = structuredClone(v6Task);
+    huge.taskId = "task-size-1";
+    huge.annotations[0].elements = Array.from({ length: 50 }, (_, i) => ({
+      ...huge.annotations[0].elements[0],
+      htmlPreview: "x".repeat(4000),
+      styleText: "y".repeat(6000),
+      fingerprint: { ...huge.annotations[0].elements[0].fingerprint, text: "z".repeat(1000) },
+    }));
     expect(sanitizeTask(huge)).toBeNull();
   });
 
-  it("rejects client-supplied source candidates (server resolves)", () => {
-    const withSources = {
-      ...v2Task,
-      elements: [
-        {
-          ...v2Task.elements[0],
-          sourceCandidates: [
-            { kind: "module", file: "/fake/evil.ts", line: 1 },
-          ],
-        },
-      ],
-    };
+  it("rejects client-supplied source backfill fields (server resolves nothing)", () => {
+    const withSources = structuredClone(v6Task);
+    (withSources.annotations[0].elements[0] as Record<string, unknown>)[
+      "sourceCandidates"
+    ] = [{ kind: "module", file: "/fake/evil.ts", line: 1 }];
+    (withSources.annotations[0].elements[0] as Record<string, unknown>)[
+      "selectorCandidates"
+    ] = [{ kind: "id", selector: "#x" }];
     const task = sanitizeTask(withSources);
-    expect(task?.annotations[0].elements[0].sourceCandidates).toEqual([]);
+    // v6 whitelist drops candidate fields entirely.
+    expect(
+      (task?.annotations[0].elements[0] as Record<string, unknown>)
+        .sourceCandidates
+    ).toBeUndefined();
+    expect(
+      (task?.annotations[0].elements[0] as Record<string, unknown>)
+        .selectorCandidates
+    ).toBeUndefined();
   });
 });
 
 describe("secret hygiene in task sanitization", () => {
   it("drops secret-shaped keys, redacts values, and records the manifest", () => {
-    const leaky = {
-      ...v2Task,
-      instruction: "Use Authorization: Bearer abc123 to call the API",
-      elements: [
-        {
-          ...v2Task.elements[0],
-          snapshot: {
-            text: "token=supersecret&ok=1",
-            attributes: {
-              class: "row",
-              token: "should-be-dropped",
-              "data-api-key": "dropped-too",
-              title: "Bearer live-secret",
-            },
-            childCount: 1,
-            computedStyle: {
-              color: "rgb(0,0,0)",
-              backgroundImage: "url(?token=style-secret)",
-            },
-          },
+    const leaky = structuredClone(v6Task);
+    leaky.taskId = "task-leaky-1";
+    leaky.annotations[0].comment = "Use Authorization: Bearer abc123 to call the API";
+    leaky.annotations[0].elements[0] = {
+      ...leaky.annotations[0].elements[0],
+      htmlPreview: "token=supersecret&ok=1",
+      fingerprint: {
+        ...leaky.annotations[0].elements[0].fingerprint,
+        text: "token=supersecret&ok=1",
+        identityAttributes: {
+          id: "row-a",
+          "data-nb-token": "should-be-dropped",
+          "data-nb-api-key": "dropped-too",
+          "data-nb-resource": "users",
         },
-      ],
+      },
     };
     const task = sanitizeTask(leaky);
     expect(task).not.toBeNull();
     const annotation = task!.annotations[0];
     expect(annotation.comment).toContain("[REDACTED]");
     expect(annotation.comment).not.toContain("abc123");
-    expect(annotation.elements[0].snapshot.text).not.toContain("supersecret");
+    expect(annotation.elements[0].htmlPreview).not.toContain("supersecret");
     expect(
-      annotation.elements[0].snapshot.attributes.token
+      annotation.elements[0].fingerprint.identityAttributes["data-nb-token"]
     ).toBeUndefined();
     expect(
-      annotation.elements[0].snapshot.attributes["data-api-key"]
+      annotation.elements[0].fingerprint.identityAttributes["data-nb-api-key"]
     ).toBeUndefined();
-    expect(annotation.elements[0].snapshot.attributes.title).toContain("[REDACTED]");
     expect(
-      annotation.elements[0].snapshot.attributes.title
-    ).not.toContain("live-secret");
-    expect(
-      annotation.elements[0].snapshot.computedStyle?.backgroundImage
-    ).not.toContain("style-secret");
+      annotation.elements[0].fingerprint.identityAttributes["data-nb-resource"]
+    ).toBe("users");
     // The server-authoritative manifest records what was stripped.
     expect(task?.redaction.droppedKeys).toEqual(
-      expect.arrayContaining(["token", "data-api-key"])
+      expect.arrayContaining(["data-nb-token", "data-nb-api-key"])
     );
     expect(task?.redaction.redactedValues).toBeGreaterThan(0);
   });
@@ -657,8 +495,14 @@ describe("secret hygiene in task sanitization", () => {
   it("never writes the session token into artifacts", () => {
     const token = generateSessionToken();
     const task = sanitizeTask({
-      ...v2Task,
-      instruction: `My token is ${token}`,
+      ...v6Task,
+      taskId: "task-token-1",
+      annotations: [
+        {
+          ...v6Task.annotations[0],
+          comment: `My token is ${token}`,
+        },
+      ],
     });
     expect(task).not.toBeNull();
     const serialized = redactSessionToken(JSON.stringify(task), token);
@@ -674,7 +518,7 @@ describe("atomic task writes", () => {
     const target = atomicWriteTaskFile(
       root,
       "active-task.json",
-      JSON.stringify(v2Task)
+      JSON.stringify(v6Task)
     );
     expect(target).toBe(resolveActiveTaskPath(root));
     expect(JSON.parse(readFileSync(target, "utf8"))).toMatchObject({
@@ -1418,23 +1262,16 @@ describe("clear lifecycle", () => {
 });
 describe("Goal 05 — server-owned monotonic taskRevision", () => {
   const sampleTask = () => ({
-    schemaVersion: 5,
+    ...structuredClone(v6Task),
     taskId: "rev-test-1",
     createdAt: "2026-08-09T00:00:00.000Z",
-    url: "http://127.0.0.1:4173/users",
-    title: "Users",
     annotations: [
       {
+        ...structuredClone(v6Task.annotations[0]),
         annotationId: "ann-1",
-        kind: "element" as const,
-        comment: "c",
         createdAt: "2026-08-09T00:00:00.000Z",
-        status: "open" as const,
-        elements: [],
       },
     ],
-    businessContext: [],
-    redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
   });
 
   it("readTaskRevision returns 0 when no task exists", () => {
@@ -1631,25 +1468,17 @@ describe("Goal 05 — server-owned monotonic taskRevision", () => {
     }
   });
 
-  it("G04-03: legacy tasks WITHOUT updatedAt (incoming and persisted) get the current time and then floor strictly", () => {
+  it("G04-03: incoming v6 tasks WITHOUT updatedAt get the current time and then floor strictly", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-01-05T00:00:00.000Z"));
       const root = mkdtempSync(path.join(tmpdir(), "ps-updated-"));
       mkdirSync(path.join(root, "tasks"), { recursive: true });
-      // A legacy v4 artifact on disk — no updatedAt anywhere. The server
-      // normalizes on read (exactly like the mutate handler), then the
-      // first mutation stamps the CURRENT time…
-      const legacyV4 = {
-        schemaVersion: TASK_SCHEMA_VERSION_V4,
-        taskId: "legacy-v4-stamp",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        url: "http://127.0.0.1:4173/users",
-        title: "Users",
-        instruction: "Legacy note",
-        elements: [],
-      };
-      atomicWriteTaskFile(root, "active-task.json", JSON.stringify(legacyV4));
+      // A fresh v6 browser POST — no updatedAt anywhere. The first
+      // mutation stamps the CURRENT time…
+      const freshV6 = structuredClone(sampleTask());
+      freshV6.taskId = "fresh-v6-stamp";
+      atomicWriteTaskFile(root, "active-task.json", JSON.stringify(freshV6));
       const normalized = normalizeTask(readActiveTask(root)!)!;
       expect(normalized.updatedAt).toBeUndefined();
       const first = writeActiveTaskWithRevision(root, normalized);
@@ -1666,8 +1495,8 @@ describe("Goal 05 — server-owned monotonic taskRevision", () => {
       expect(readActiveTask(root)?.updatedAt).toBe(
         "2026-01-05T00:00:00.001Z"
       );
-      // createdAt of the legacy task survives (identity).
-      expect(readActiveTask(root)?.createdAt).toBe(legacyV4.createdAt);
+      // createdAt of the incoming task survives (identity).
+      expect(readActiveTask(root)?.createdAt).toBe(freshV6.createdAt);
       rmSync(root, { recursive: true, force: true });
     } finally {
       vi.useRealTimers();

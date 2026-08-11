@@ -1,13 +1,13 @@
 /**
  * Portal Studio — marker target resolution (client side).
  *
- * Goal 02 (D-033 #8/#9): numbered markers persist across reload/routes and
- * FOLLOW their targets — each element capture carries selector candidates
- * (id / data-ai-page-element / role / bounded path); on render and on
- * route/scroll/resize the first matching candidate re-resolves to the live
- * DOM. Unresolved targets are RETAINED (the list entry stays, marked
- * unresolved; no page anchor is drawn). Region annotations are viewport
- * rects and always render.
+ * Goal 03 (React Grab migration): numbered markers persist across
+ * reload/routes and FOLLOW their targets — each v6 element capture carries
+ * ONE React Grab selector; on render and on route/scroll/resize the
+ * selector resolves through the strict Goal 02 locator and the captured
+ * fingerprint is validated exactly. Unresolved targets are RETAINED (the
+ * list entry stays, marked unresolved; no page anchor is drawn). Region
+ * annotations are document-relative rects and always render.
  *
  * Mounting rule (D-034 #3): the marker overlay renders INSIDE the Studio
  * shadow host, so markers can never pollute evidence screenshots (shadow
@@ -16,6 +16,7 @@
  */
 
 import { resolveAnchoredPlacement } from "./placement";
+import { resolveSelector } from "./inspection";
 import type { Annotation, ElementCapture } from "./types";
 
 /** Resolve the live DOM target of an annotation, or null when unresolved. */
@@ -48,22 +49,19 @@ export function resolveAnnotationTargets(
   return targets;
 }
 
-/** First selector candidate that matches something in the live document. */
+/**
+ * Resolve the ONE persisted React Grab selector through the Goal 02 locator
+ * and validate the captured fingerprint exactly (shared contract §6). Any
+ * missing/ambiguous/boundary/fingerprint-mismatch result is unresolved —
+ * the first vague match is NEVER chosen, and no alternate selector is ever
+ * generated.
+ */
 export function resolveElementTarget(
   element: ElementCapture
 ): Element | null {
-  // Defense in depth: legacy pre-v5 element records (no selectorCandidates)
-  // normalize on read, but a malformed record must never crash the marker
-  // layer — treat it as unresolved instead.
-  for (const candidate of element.selectorCandidates ?? []) {
-    try {
-      const found = document.querySelector(candidate.selector);
-      if (found) return found;
-    } catch {
-      // Invalid selector: try the next candidate.
-    }
-  }
-  return null;
+  if (!element.selector) return null;
+  const result = resolveSelector(element.selector, element.fingerprint);
+  return result.status === "resolved" ? result.element : null;
 }
 
 /** True when the annotation has no resolvable page target. */
@@ -106,7 +104,7 @@ export function resolveMarkerEditorPosition(
 ): MarkerEditorPosition {
   // Goal 03 E: the marker editor uses the SAME viewport-aware anchored
   // placement path as every other surface (tooltips, Help, List,
-  // composer, Copy fallback) — resolveAnchoredPlacement owns the
+  // composer, Copy surface) — resolveAnchoredPlacement owns the
   // right-align/flip/clamp math. The trigger is built so the preferred
   // placement is right-aligned with the marker's right edge and below it.
   const placement = resolveAnchoredPlacement({
@@ -131,7 +129,7 @@ export function resolveMarkerEditorPosition(
 // ---------------------------------------------------------------------------
 // Goal 05 follow-up (manual-test finding): marker collision resolution.
 // Two annotations can legitimately resolve to targets whose anchors overlap
-// (adjacent small cells, or legacy captures with ambiguous selectors that
+// (adjacent small cells, or older captures with ambiguous selectors that
 // collapse onto one element). The markers must never cover each other: the
 // later marker is nudged along a diagonal until its footprint is free, while
 // the FIRST annotation keeps its exact anchor.

@@ -6,14 +6,17 @@
  * toolbar owns the only instance); every transition is a pure function.
  */
 
-import { isStudioElement } from "./capture";
+import { isStudioElement } from "./inspection";
 import type { Region } from "./types";
+
+/** Viewport-space marquee rect carried by the live selection state. */
+export type ViewportRect = { x: number; y: number; width: number; height: number };
 
 export const MAX_SELECTED_ELEMENTS = 50;
 
 export type SelectionState = {
   elements: Element[];
-  region?: Region;
+  region?: ViewportRect;
 };
 
 export const EMPTY_SELECTION: SelectionState = { elements: [] };
@@ -49,11 +52,11 @@ export function setRegion(
   return { ...state, region };
 }
 
-/** Normalize a raw marquee rect into a bounded viewport-aligned region. */
+/** Normalize a raw marquee rect into a bounded viewport-aligned rect. */
 export function normalizeRegion(
   raw: { x: number; y: number; width: number; height: number },
   viewport: { width: number; height: number }
-): Region {
+): { x: number; y: number; width: number; height: number } {
   const clamp = (value: number) => Math.max(0, Math.round(value));
   const x = clamp(raw.x);
   const y = clamp(raw.y);
@@ -66,6 +69,37 @@ export function normalizeRegion(
     Math.max(0, viewport.height - y)
   );
   return { x, y, width, height };
+}
+
+/**
+ * Convert a viewport-aligned marquee rect into the v6 document-relative
+ * region (shared contract §5: region coordinates are document-relative so
+ * scrolling never moves the saved region).
+ */
+export function toDocumentRegion(
+  rect: { x: number; y: number; width: number; height: number },
+  scroll: { x: number; y: number }
+): Region {
+  return {
+    coordinateSpace: "document",
+    x: Math.round(rect.x + scroll.x),
+    y: Math.round(rect.y + scroll.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+/** Convert a document-relative v6 region back to viewport coordinates. */
+export function toViewportRegion(
+  region: Region,
+  scroll: { x: number; y: number }
+): { x: number; y: number; width: number; height: number } {
+  return {
+    x: Math.round(region.x - scroll.x),
+    y: Math.round(region.y - scroll.y),
+    width: Math.round(region.width),
+    height: Math.round(region.height),
+  };
 }
 
 const intersects = (rect: DOMRect, region: Region) =>
