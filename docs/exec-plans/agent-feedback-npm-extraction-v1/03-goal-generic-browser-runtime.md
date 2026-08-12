@@ -103,8 +103,11 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
   transport.
 - [x] Completed the blank React/Vite playground and focused tests.
 - [x] Ran package, external-tarball, and real-browser acceptance gates.
-- [x] Recorded final evidence and criterion results; focused repository
-  commits are the final delivery step.
+- [x] Independently re-reviewed the full Goal 02..Goal 03 diffs and fixed four
+  reproducible Goal 03 defects in package commit
+  `5be82326cbb5c8b932e9ad1ea98c3806762fb373`.
+- [x] Re-ran focused, package, browser, and external frozen-offline consumer
+  gates against the post-fix packed artifact.
 
 ### Surprises & Discoveries
 
@@ -121,6 +124,14 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
 - A packed consumer is only valid after the tarball leaves the package repo:
   the final fixture used external artifact `agent-feedback-g03.tgz`, then a
   clean `--frozen-lockfile --offline` reinstall before build and E2E.
+- Dock coordinates previously lived only on the current DOM node, so any
+  render reset the drag. Capture listeners also allowed composed Shadow-host
+  events to reach perception, and unmount left scheduled frames plus async
+  continuations live. Focused browser/unit regressions reproduced each issue.
+- Goal 03 requires a diagnostics client but does not require Goal 04/06/07
+  network capture, evidence persistence, or reliability work. The minimal
+  implementation captures and redacts `console.error`, window errors, and
+  unhandled rejections in the existing bounded client snapshot.
 
 ### Decision Log
 
@@ -136,6 +147,18 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
 - Use React Grab's selector as persisted marker identity and only ordinary
   `document.querySelector` resolution in this Goal; cross-boundary marker
   reliability remains owned by Goal 07.
+- Preserve the runtime's native Shadow DOM renderer. Host removal is its root
+  cleanup; adding a React root solely to satisfy generic wording would add an
+  unused renderer and lifecycle.
+- Store the two dock coordinates as runtime state, reject capture events at
+  the shared `composedPath()` boundary, and use the existing browser timers
+  and animation frames through one tracked lifecycle set. Async transport,
+  inspection/enrichment, export, and clipboard continuations check unmount
+  before changing runtime state.
+- Rejected as out of scope after contract review: fetch/XHR diagnostics,
+  screenshots/evidence transport, observers, freeze, source canonicalization,
+  cross-realm marker recovery, and Region reliability changes. These belong
+  to Goals 04, 06, or 07 and were not implemented.
 
 ### Outcomes & Retrospective
 
@@ -146,17 +169,30 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
 - Delivered a blank React/Vite playground with ordinary, SVG, mapped, memo,
   forwardRef, Portal, Shadow Root, canvas, and long-scroll fixtures plus real
   Playwright closed-loop acceptance.
-- Fresh mandatory gates all PASS: `pnpm typecheck`; `pnpm test -- client
-  inspection components` (10 files, 28 tests); playground E2E (3 tests);
-  `pnpm build`; `pnpm pack --json`; all three source audits. `pnpm
-  check:package` also passed.
+- Fresh post-fix mandatory gates all PASS: focused runtime/accessibility tests
+  (2 files, 6 tests); `pnpm typecheck`; `pnpm test -- client inspection
+  components` (10 files, 31 tests); `pnpm build`; playground E2E (3 tests);
+  `pnpm pack --json`; all three source audits; `git diff --check`. `pnpm
+  check:package` also passed (publint plus ESM-only attw).
 - Packed boundary PASS: external tarball SHA-256
-  `ebb9b04863db945412a6db3ff666a8b3d6f6a12a45b89828dabfea4f1165af54`;
-  `/tmp/agent-feedback-g03-consumer.QLKpWB` reinstalled it with
+  `3eb252c392f14348f81491ae177f79c51b73af08d1d47e8d9e946a002d8771ea`;
+  the initial clean consumer
+  `/root/work/agent-feedback-workspace-artifacts/g03-independent-review.RBMMwn/final-consumer.KgRvRS`
+  moved its seeded `node_modules` outside the consumer, reinstalled with
   `--frozen-lockfile --offline`, then passed Vite build and all 3 E2E tests.
-- Evidence root: `/root/work/agent-feedback-workspace-artifacts/g03/`; traces
-  are under `playwright-results/`, browser screenshots are named by state, and
-  mandatory command logs are under `commands/`.
+  A second clean post-commit consumer at
+  `/root/work/agent-feedback-workspace-artifacts/g03-independent-review.RBMMwn/postcommit-consumer.VSWQOC`
+  repeated the frozen offline install, Vite build, and focused real-browser
+  closed loop against the byte-identical post-commit tarball.
+- Evidence root:
+  `/root/work/agent-feedback-workspace-artifacts/g03-independent-review.RBMMwn/`;
+  post-fix screenshots/traces are under `browser-post-audit/`, packed-consumer
+  evidence is under `final-consumer-browser/`, and command logs are under
+  `commands/`. The verified tarball is
+  `pack/agent-feedback-g03-independent-final.tgz`; the byte-identical
+  post-commit pack is
+  `committed-pack.DhU9MD/gchust-agent-feedback-0.1.0-alpha.0.tgz`, and its
+  focused consumer trace is under `postcommit-consumer-browser/`.
 - G03-001 PASS — public root exports mount and returned unmount/API.
 - G03-002 PASS — playground has no `@nocobase/*`; source audit is empty.
 - G03-003 PASS — Pick browser flow persists exactly one target.
@@ -168,12 +204,14 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
 - G03-009 PASS — host ignore attribute exists before capture/inspection.
 - G03-010 PASS — runtime vocabulary audit has zero matches.
 - G03-011 PASS — exactly one primitives import; forbidden-engine audit empty.
-- G03-012 PASS — idempotent unmount removes listeners/timers/root; remount passes.
+- G03-012 PASS — idempotent unmount removes listeners, tracked timers/frames,
+  diagnostics wrapper, and native DOM root; guarded async completion and
+  remount regressions pass. No React root is used by this native DOM runtime.
 - G03-013 PASS — required screenshots and Playwright traces saved externally.
 - G03-014 PASS — build, pack, external frozen-offline consumer build/E2E pass.
 - G03-015 PASS — Default Portal integration remains unchanged; only this plan
   changes in the template repository.
-- Known issues within Goal 03: none.
+- Known issues within Goal 03: none after the four focused fixes above.
 - Not started: Goals 04, 05, 06, 07, 08, 09, and 10.
 
 ## 最终报告格式
