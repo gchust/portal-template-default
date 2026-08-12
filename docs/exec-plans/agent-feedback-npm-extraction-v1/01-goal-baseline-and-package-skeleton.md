@@ -110,6 +110,7 @@ git diff --stat
 - [x] 2026-08-12T11:01Z 模板 typecheck/build 通过；并行 focused suite 的两个 5s timeout 已以 15s focused rerun 证实 2 files / 11 tests PASS，原始失败仍如实写入 baseline。
 - [x] 2026-08-12T11:05Z 逐项记录 G01-001–G01-012 的最终新鲜证据。
 - [x] 2026-08-12T11:08Z standalone package checkpoint commit：`3ac5528aeed1fdc87bf574892523ce758cc15c1a`。
+- [x] 2026-08-12T11:09Z Default Portal plan/baseline checkpoint commit：`3d8dedd0e090fd321cf06da0cac00d97f39c7e58`；production source 未进入 commit。
 
 ### Surprises & Discoveries
 
@@ -142,7 +143,7 @@ git diff --stat
 #### 本地 checkpoint commits
 
 - agent-feedback: `3ac5528aeed1fdc87bf574892523ce758cc15c1a` (`chore: establish Agent Feedback package skeleton`)
-- portal-template-default: 在本 Goal 文档 checkpoint commit 后记录最终 SHA。
+- portal-template-default: `3d8dedd0e090fd321cf06da0cac00d97f39c7e58` (`docs: add Agent Feedback extraction plan`)
 
 #### 运行过的命令及结果
 
