@@ -138,8 +138,8 @@ git diff --stat
 #### 实际交付
 
 - `/root/work/agent-feedback` 是独立 Git repo，包含冻结 package metadata、pnpm lockfile、ESM-only tsdown 五入口 build、四个公开 exports、CLI、最小 Vitest、React/Vite import Playground、README、MIT LICENSE 和 `MIGRATION-BASELINE.md`。
-- 发布边界经 `publint`、ATTW ESM-only profile 和 fresh `pnpm pack --json` 验证；复核 tarball 为 `/tmp/agent-feedback-g01-review.YS8HtZ/agent-feedback.tgz`（SHA-256 `240cfc6e20e9d8bd90326d86b24ab59f8349ebb5f14a5589da1b899f5c14f014`）。
-- clean Fixture `/tmp/agent-feedback-g01-review.YS8HtZ/fixture` 只携带 tarball、fixture files 和 lockfile，在 `--offline --frozen-lockfile` 下安装成功并通过测试、四入口动态 import 和 CLI help。
+- 发布边界经 `publint`、ATTW ESM-only profile 和 fresh `pnpm pack --json` 验证；最终复核 tarball 为 `/tmp/agent-feedback-g01-final-review.SYgDv8/agent-feedback.tgz`（SHA-256 `240cfc6e20e9d8bd90326d86b24ab59f8349ebb5f14a5589da1b899f5c14f014`）。
+- clean Fixture `/tmp/agent-feedback-g01-final-review.SYgDv8/fixture` 只携带 tarball、fixture files 和 lockfile，在 `--offline --frozen-lockfile` 下安装成功并通过测试、四入口动态 import 和 CLI help。
 - Default Portal production source 未改变；`pnpm typecheck` 和 `pnpm build` 新鲜通过。
 
 #### 未交付
@@ -164,7 +164,7 @@ git diff --stat
 - package `pnpm build` → PASS：tsdown 生成 18 个 dist 文件，四公开子路径和 CLI 均有 JS/声明（CLI 有声明和可执行 JS），exit 0。
 - package `pnpm check:package` → PASS：publint `All good!`；ATTW ESM-only 的 Node ESM/bundler 全绿，exit 0。
 - Playground `pnpm --dir playgrounds/react-vite install --frozen-lockfile && ... build` → PASS：27 modules transformed，exit 0。
-- review `pnpm pack --json --out /tmp/agent-feedback-g01-review.YS8HtZ/agent-feedback.tgz` → PASS：21 files，仅 dist、LICENSE、package.json、README.md；无 Playground、tests、temporary、baseline 或 Default Portal files。
+- review `pnpm pack --json --out /tmp/agent-feedback-g01-final-review.SYgDv8/agent-feedback.tgz` → PASS：21 files，仅 dist、LICENSE、package.json、README.md；无 Playground、tests、temporary、baseline 或 Default Portal files。
 - review clean Fixture `pnpm install --frozen-lockfile --offline && pnpm test` → PASS：50 packages reused / 0 downloaded；`packed fixture ok`。
 - clean Fixture 四入口 `node -e "Promise.all([...imports])"` → PASS：`imports ok`。
 - clean Fixture `pnpm exec agent-feedback --help` → PASS：打印版本、Usage、描述，exit 0。
