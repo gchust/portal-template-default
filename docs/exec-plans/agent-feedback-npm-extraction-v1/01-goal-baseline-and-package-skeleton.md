@@ -120,7 +120,7 @@ git diff --stat
 - 当前模板工作树在 Goal 01 开始前已经包含未提交的 `AGENTS.md` 与完整 ExecPlan 目录；两者属于本迁移计划输入，当前 production source diff 仍为零。
 - `tsdown` build 与 `publint` 并行启动时，`publint` 恰逢 clean 后、输出完成前而报告 dist 缺失；改为合同要求的串行 build → package validation 后通过，未改代码绕过。
 - focused Studio suite 与 package/Portal build 并行运行时有 2 个进程型测试超过默认 5s；相同两个文件以 15s timeout 隔离重跑，11/11 通过。Baseline 同时保留首次 FAIL 和重跑 PASS。
-- 独立复核发现最终 tarball 实际为 22 files，包含 Portal-specific `MIGRATION-BASELINE.md`；这与 Progress 中“仅 dist、LICENSE、README、package.json”的声明矛盾，也扩大了公共包边界。该报告现仅留在 repository，fresh tarball 为 21 files。
+- 独立复核发现 11:00 的早期 tarball（当时 baseline 尚未写入）确实仅含 dist、LICENSE、README、package.json；但 11:05 的最终 tarball 实际为 22 files，并新增 Portal-specific `MIGRATION-BASELINE.md`，扩大了公共包边界。该报告现仅留在 repository，fresh tarball 为 21 files。
 - `23340b7baf2f2d8f5f25b6a0e9907aa12866e354` 写入的两个 checkpoint SHA 均不存在；真正修正它们的是后续 `6fb030a64dead5af67b384c516e34838f3e55d4a`，不是该记录 commit 本身。
 
 ### Decision Log
