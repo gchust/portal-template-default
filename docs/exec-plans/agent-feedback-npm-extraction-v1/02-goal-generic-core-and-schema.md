@@ -90,7 +90,7 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 - [x] 2026-08-12T12:04Z 逐 commit 审查两仓完整 Goal 01 history；确认 package skeleton、发布边界 follow-up、baseline follow-up 与 Portal 独立复核记录均已落在当前 HEAD。
 - [x] 2026-08-12T12:07Z 追踪 embedded `types/task-model/mutation/format/redact/selection/annotation-selectors/task-id/placement/hotkeys` 的全部 source/test callers；确认 formatter/mutation 被 browser、Vite、CLI/MCP 共用，而 selection/redaction/hotkey 的旧实现含 DOM 或 NocoBase/browser coupling。
 - [x] 2026-08-12T12:08Z 在 standalone package 的 `src/core/`、`src/types/` 建立全新 v1 task create/validate/mutate/format/redact 与 plain-data selection/placement/hotkey contracts；未修改 Portal runtime。
-- [x] 2026-08-12T12:09Z 首轮 `pnpm typecheck` PASS；首轮 `pnpm test -- core` 15/16，唯一 FAIL 为 generic text redactor 漏掉 `input_value=`，在同一通用 regex 根因修正后 6 files / 16 tests PASS。
+- [x] 2026-08-12T12:09Z 首轮 `pnpm typecheck` PASS；首轮 `pnpm test -- core` 15/16，唯一 FAIL 为 generic text redactor 漏掉 `input_value=`，在同一通用 regex 根因修正后 package suite（5 个 core test files + 既有 exports smoke）6 files / 16 tests PASS。
 - [x] 2026-08-12T12:14Z `pnpm build` PASS（18 dist files）；core/root/types build graph scan 无 React、Vite、Node built-in 或 NocoBase imports，禁止模式 scan 无结果。
 - [x] 2026-08-12T12:15Z `pnpm exec publint` PASS；合同原样 `pnpm exec attw --pack .` 首次因 strict profile 将 frozen ESM-only package 的预期 Node10/CJS 不支持计为 FAIL，新增 repository-level `.attw.json` 固定 `esm-only` profile 后原命令 PASS（Node ESM/bundler 全绿）。
 - [x] 2026-08-12T12:16Z fresh `pnpm pack --json` PASS：21 files，仅 dist、LICENSE、README、package.json；tarball `/tmp/agent-feedback-g02-final-pack.dPO0t2/agent-feedback.tgz`，SHA-256 `01dc7990c71054c968cad1cb6add449fdf5a1b0b8c4830418aca4271e2ad0194`。
@@ -99,7 +99,7 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 - [x] 2026-08-12T12:18Z standalone implementation checkpoint `3ffd140b0b2870765503623816aa345a43853935`（`feat: add host-neutral feedback core`）。
 - [x] 2026-08-12T12:22Z review 补充准确 public API README，checkpoint `d0969283a3aada8bad426d4de14830b435909f53`（`docs: describe public core API`）。
 - [x] 2026-08-12T12:24Z final review 将 Authorization redaction 覆盖到任意 scheme（含 Basic），并将 test helper 从 `fixtures.ts` 改名避免 Goal 必须命令的 fixture exclusion 歧义；checkpoint `b6f3b6c126d8b4a475133f90a961eb8f63ad5d52`（`fix: harden generic authorization redaction`）。
-- [x] 2026-08-12T12:27Z 补齐 task/annotation ID 和 extension namespace-count focused checks；checkpoint `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`（`test: cover core ids and namespace limits`）；final focused suite 6 files / 21 tests PASS。
+- [x] 2026-08-12T12:27Z 补齐 task/annotation ID 和 extension namespace-count focused checks；checkpoint `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`（`test: cover core ids and namespace limits`）；required package suite 6 files / 21 tests PASS。
 - [x] 2026-08-12T12:28Z 针对 final package HEAD 重跑全部 required gates，并生成 final tarball `/tmp/agent-feedback-g02-final2-pack.eGCyxc/agent-feedback.tgz`（SHA-256 `6502b294a648a592c99bf472744fd26de5a0dea5e6452d7cf3865daf4615a03c`）及 clean offline/frozen consumer `/tmp/agent-feedback-g02-final2-offline.r53eQi`；全部 PASS。
 - [x] 2026-08-12T12:31Z 写完 criterion-by-criterion outcomes；Portal Goal 02 evidence checkpoint `d1338acb6d9546a2bf21474478afd1f5a9a6feda`（`docs: record Agent Feedback Goal 02`）。
 - [x] 2026-08-12T12:34Z final audit 将 extension byte-limit test 与 8 KiB string limit 解耦，checkpoint `1565ab5aaa89471340117bab928dcb4ed85fac84`（`test: isolate extension byte limit`）；重跑 required gates 和 clean tarball consumer 全部 PASS。
@@ -109,7 +109,7 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 - 当前未发现 handoff 与实际 HEAD/cleanliness 不一致；继续记录实现与验证中的实际差异。
 - embedded `selection.ts` 虽标注 pure，但状态持有 live `Element`、调用 `getBoundingClientRect()` 并依赖 `isStudioElement`；新 core 只保留泛型 plain-data selection 与 region geometry，DOM candidate collection 留给 Goal 03。
 - embedded `redact.ts` 直接 import NocoBase error redactor；新 core 使用 package-owned generic credential patterns 和按 namespace 调用的纯 extension redactor contract。
-- `pnpm test -- core` 的 Vitest 参数按 substring 过滤，准确运行新增 `tests/core/**`；首轮暴露并修正 `input_value=` pattern 漏项。
+- package script 展开后为 `vitest run -- core`；Vitest 在当前版本运行完整 package suite，而非只过滤 `tests/core/**`，因此报告的 6 files 包含 5 个 core test files 和既有 `tests/exports.test.ts`。首轮仍准确暴露并修正 `input_value=` pattern 漏项。
 - `attw@0.18.5` 默认 strict profile 会检查 Node10 和 CommonJS resolution，与冻结的 ESM-only architecture 冲突；Goal 01 曾通过显式 `--profile esm-only`。为让 Goal 02 合同原样命令可重复，新增 `.attw.json` 固定同一 profile，不改变 package exports。
 - 最终 pack 输出仍为 Goal 01 相同的 21-file public shape；core 被 bundle 到既有 root entry，没有新增非合同 subpath export。
 - code review 未发现 Must Fix；review follow-up 修正 README 的过时 skeleton 描述，并将 Authorization 规则从 Bearer-only 泛化到任意 auth scheme。
