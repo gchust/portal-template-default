@@ -136,6 +136,7 @@ rg -n "agent-feedback-root|/__agent-feedback|x-agent-feedback-token|Pick element
 - **G04-001 PASS** — browser exports + `vite/client` Node-builtins scan empty；Node-only `/vite` resolves from packed install。
 - **G04-002 PASS** — fixture `src/main.tsx` 只渲染 React app；Playwright 看见自动注入的 `#agent-feedback-root`。
 - **G04-003 PASS** — packed browser process 断言 `session.json` mode `0600`、64 hex token、reload token stable；store test 验证 only-own-token clean shutdown。
+- **G04-003 follow-up evidence** — final packed process Ctrl-C probe confirmed `session.json` removal (`/tmp/agent-feedback-g04-evidence/shutdown-lifecycle.log`); package follow-up commit records the process-signal cleanup without rewriting the verified implementation commit.
 - **G04-004 PASS** — concurrent store test 一次成功、一次 `revision_conflict`，最终 revision 1；CLI/browser packed loop 达 revision 3；atomic temp+rename 和跨进程 lock 共用同一 store boundary。
 - **G04-005 PASS** — built/packed public binary global help 与六个 command `--help` process tests 全部成功。
 - **G04-006 PASS** — process tests 和 packed fixture 实跑 list/complete/reopen/print/verify，completion/reopen 分别被 browser poll 同步。
