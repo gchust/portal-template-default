@@ -112,7 +112,7 @@ git diff --stat
 - [x] 2026-08-12T11:08Z standalone package checkpoint commit：`3ac5528ecc0c7b67380782b6adcd66c021c98f01`。
 - [x] 2026-08-12T11:09Z Default Portal plan/baseline checkpoint commit：`3d8dedd4eb13dac9cb048559db217d31364c6f02`；production source 未进入 commit；`23340b7baf2f2d8f5f25b6a0e9907aa12866e354` 首次记录了错误 SHA，修正 commit 为 `6fb030a64dead5af67b384c516e34838f3e55d4a`。
 - [x] 2026-08-12T11:22Z 独立复核重读合同并审查两仓完整 Goal 01 history/diff；发现发布清单泄漏仓库迁移基线以及 living plan 错标 SHA 修正 commit。
-- [x] 2026-08-12T11:27Z follow-up commit `7630205d5a6514ce4ce0f2cf66fb31420d5235b9` 将 `MIGRATION-BASELINE.md` 保留为仓库证据但从 tarball 排除；fresh 21-file tarball、offline frozen Fixture、四入口、CLI、package/Portal build gates 全部通过。
+- [x] 2026-08-12T11:27Z follow-up commits `7630205d5a6514ce4ce0f2cf66fb31420d5235b9`、`0933efc6c9dbff24a3ecfd82b4dc59872fd4fa18` 将 `MIGRATION-BASELINE.md` 保留为仓库证据但从 tarball 排除，并补记 NocoBase error-redactor direct coupling；fresh 21-file tarball、offline frozen Fixture、四入口、CLI、package/Portal build gates 全部通过。
 
 ### Surprises & Discoveries
 
@@ -149,6 +149,7 @@ git diff --stat
 
 - agent-feedback: `3ac5528ecc0c7b67380782b6adcd66c021c98f01` (`chore: establish Agent Feedback package skeleton`)
 - agent-feedback follow-up: `7630205d5a6514ce4ce0f2cf66fb31420d5235b9` (`fix: keep migration evidence out of package`)
+- agent-feedback baseline follow-up: `0933efc6c9dbff24a3ecfd82b4dc59872fd4fa18` (`docs: complete migration coupling baseline`)
 - portal-template-default: `3d8dedd4eb13dac9cb048559db217d31364c6f02` (`docs: add Agent Feedback extraction plan`), `23340b7baf2f2d8f5f25b6a0e9907aa12866e354` (`docs: record Goal 01 checkpoint SHAs`, contains invalid SHAs), and `6fb030a64dead5af67b384c516e34838f3e55d4a` (`docs: correct Goal 01 checkpoint SHAs`)
 
 #### 运行过的命令及结果
