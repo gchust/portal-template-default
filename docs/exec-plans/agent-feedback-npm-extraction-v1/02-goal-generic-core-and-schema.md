@@ -102,6 +102,7 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 - [x] 2026-08-12T12:27Z 补齐 task/annotation ID 和 extension namespace-count focused checks；checkpoint `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`（`test: cover core ids and namespace limits`）；final focused suite 6 files / 21 tests PASS。
 - [x] 2026-08-12T12:28Z 针对 final package HEAD 重跑全部 required gates，并生成 final tarball `/tmp/agent-feedback-g02-final2-pack.eGCyxc/agent-feedback.tgz`（SHA-256 `6502b294a648a592c99bf472744fd26de5a0dea5e6452d7cf3865daf4615a03c`）及 clean offline/frozen consumer `/tmp/agent-feedback-g02-final2-offline.r53eQi`；全部 PASS。
 - [x] 2026-08-12T12:31Z 写完 criterion-by-criterion outcomes；Portal Goal 02 evidence checkpoint `d1338acb6d9546a2bf21474478afd1f5a9a6feda`（`docs: record Agent Feedback Goal 02`）。
+- [x] 2026-08-12T12:34Z final audit 将 extension byte-limit test 与 8 KiB string limit 解耦，checkpoint `1565ab5aaa89471340117bab928dcb4ed85fac84`（`test: isolate extension byte limit`）；重跑 required gates 和 clean tarball consumer 全部 PASS。
 
 ### Surprises & Discoveries
 
@@ -139,13 +140,13 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 - `pnpm typecheck` → PASS，exit 0。
 - `pnpm test -- core` → PASS：6 files / 21 tests，exit 0（首次 15/16 FAIL 的 `input_value=` 已在通用 redactor 根因修复）。
 - `pnpm build` → PASS：tsdown 输出 18 files，root/types 纯 core build，exit 0。
-- `pnpm pack --json --out /tmp/agent-feedback-g02-final2-pack.eGCyxc/agent-feedback.tgz` → PASS：21 files，仅 dist、LICENSE、README、package.json；SHA-256 `6502b294a648a592c99bf472744fd26de5a0dea5e6452d7cf3865daf4615a03c`。
+- `pnpm pack --json --out /tmp/agent-feedback-g02-final3-pack.lQQkyq/agent-feedback.tgz` → PASS：21 files，仅 dist、LICENSE、README、package.json；SHA-256 `6502b294a648a592c99bf472744fd26de5a0dea5e6452d7cf3865daf4615a03c`。
 - `pnpm exec publint` → PASS：`All good!`。
 - `pnpm exec attw --pack .` → PASS：repository `.attw.json` 采用冻结 ESM-only profile；Node ESM/bundler 全绿。
 - `rg -n "PortalStudio|portal-studio|schemaVersion:\\s*[2-9]|@nocobase|data-nb-|NOCOBASE_" src dist` → PASS：无结果。
 - core build import scan（React/ReactDOM/Vite/Node built-ins/NocoBase）→ PASS：无结果。
-- tarball-only `/types` consumer TypeScript compile → PASS：`/tmp/agent-feedback-g02-final2-consumer.Ake41v`。
-- clean second Fixture `pnpm install --frozen-lockfile --offline` + typecheck + runtime smoke → PASS：`/tmp/agent-feedback-g02-final2-offline.r53eQi`，打印 `packed schema/mutation/formatter ok`。
+- tarball-only `/types` consumer TypeScript compile → PASS：`/tmp/agent-feedback-g02-final3-consumer.VZTtSa`。
+- clean second Fixture `pnpm install --frozen-lockfile --offline` + typecheck + runtime smoke → PASS：`/tmp/agent-feedback-g02-final3-offline.AWrLtf`，打印 `packed schema/mutation/formatter ok`。
 - Portal production diff scan `git diff --name-only a1c7591 -- src scripts vite.config.ts package.json pnpm-lock.yaml` → PASS：无结果。
 
 #### Acceptance criteria
@@ -165,7 +166,7 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 
 #### 本地 checkpoint commits
 
-- agent-feedback: `3ffd140b0b2870765503623816aa345a43853935`, `d0969283a3aada8bad426d4de14830b435909f53`, `b6f3b6c126d8b4a475133f90a961eb8f63ad5d52`, `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`。
+- agent-feedback: `3ffd140b0b2870765503623816aa345a43853935`, `d0969283a3aada8bad426d4de14830b435909f53`, `b6f3b6c126d8b4a475133f90a961eb8f63ad5d52`, `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`, `1565ab5aaa89471340117bab928dcb4ed85fac84`。
 - portal-template-default: `d1338acb6d9546a2bf21474478afd1f5a9a6feda`；本 SHA 记录 follow-up commit 见最终报告。
 
 #### 下一 Goal 的可靠起点
