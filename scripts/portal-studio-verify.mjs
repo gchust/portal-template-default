@@ -30,7 +30,10 @@ function parseArguments(argv) {
   for (let index = 0; index < cleanArgs.length; index += 1) {
     const argument = cleanArgs[index];
     if (argument === "--timeout-ms") {
-      const value = Number(argv[index + 1]);
+      // Read from cleanArgs: with `pnpm studio:verify -- --timeout-ms 5000`
+      // the leading "--" separator is stripped first (G06 CLI smoke found
+      // the value was read from the RAW argv, hitting the separator itself).
+      const value = Number(cleanArgs[index + 1]);
       if (!Number.isFinite(value) || value < 1000) {
         throw new Error("--timeout-ms must be a number >= 1000");
       }

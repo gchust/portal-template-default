@@ -175,25 +175,43 @@ Production-exclusion proof
 
 ## Progress
 
-- [ ] Establish clean worktree/install.
-- [ ] Run full static/unit/build gates.
-- [ ] Run source benchmark.
-- [ ] Run complete user workflow E2E.
-- [ ] Run public CLI/MCP smoke.
-- [ ] Run security/privacy tests.
-- [ ] Prove production exclusion.
-- [ ] Run the permanent inspection audit and prove no legacy/fallback/compat remains.
-- [ ] Audit active docs.
-- [ ] Fill F-001…F-028 and independently review failures.
+- [x] Establish clean worktree/install (git worktree at HEAD + `pnpm install --frozen-lockfile`).
+- [x] Run full static/unit/build gates (audit, typecheck, 702 Vitest, sdk 30, build + prod exclusion).
+- [x] Run source benchmark (fixture 10/10 + real Portal 7/7, machine-readable reports).
+- [x] Run complete user workflow E2E (fixture workflow 4/4 + Portal suite 31/31).
+- [x] Run public CLI/MCP smoke (list/complete/reopen/print/verify/mcp — one targeted repair: verify `--timeout-ms` parsed the raw argv, breaking the documented `--` form).
+- [x] Run security/privacy tests (10 files / 152 tests PASS).
+- [x] Prove production exclusion (dist grep zero matches; preview probes: endpoints/fixture not registered — SPA fallback HTML only).
+- [x] Run the permanent inspection audit and prove no legacy/fallback/compat remains (audit PASS + all six zero-result greps).
+- [x] Audit active docs (usage/CLI/freeze/unresolved/upgrade rule added to the migration README).
+- [x] Fill F-001…F-028 (all PASS) and independently review (fresh reviewer round; findings fixed).
 
 ## Surprises & Discoveries
 
-- None yet.
+- Playwright in this repo IGNORES the assertion-level `expect(locator, { timeout })` options (verified: 8000ms option behaved as 5000ms); the matcher-level form `toBeEnabled({ timeout })` works. Several E2E waits silently used 5s instead of their intended 20s — the cause of intermittent Save-window flakes. Repaired in the helpers.
+- The real-Portal benchmark surfaced the fixture-era lesson again: `#portal-studio-root` is a SHADOW host — light-DOM queries see nothing; and the role-engine locators proved unreliable for the shadow toolbar on the create route, while CSS attribute locators pierce consistently.
+- The `studio:verify` CLI read `--timeout-ms`'s value from the RAW argv instead of the cleaned args, so the documented `pnpm studio:verify -- --timeout-ms 5000` form always failed ("must be a number"). Fixed.
+- The marker observer watched `childList` only — an attribute-only mutation (target rename) never re-resolved markers; added `attributes: true` (workflow proof).
+- The workflow's fingerprint-mismatch proof must mutate a NON-React-managed DOM node (the fixture's React re-renders restore React-owned ids); the same-origin iframe document is the deterministic target.
 
 ## Decision Log
 
-- None yet. Record every targeted repair made during release proof.
+- Decision: keep the freeze reapply at 500ms and the documented unfrozen resume (Goal 04/05 decisions remain).
+  Rationale: re-freezing before the interaction's render commits makes updates invisible to React (upstream pause); the E2E and contract suites are green with the current semantics.
+- Decision: the marker MutationObserver now also watches attributes.
+  Rationale: an attribute-only mutation (a renamed target id) must re-resolve markers so a fingerprint mismatch turns the marker unresolved instead of stale.
+- Decision: fixture task/screenshot endpoints are stubbed at the HTTP layer (page.route) for the workflow suite, and the fixture vite config mounts the real dev middleware for the save persistence.
+  Rationale: the real product code path runs end to end (Pick → save → marker → reload rehydration); only the dev-only transport is harness-controlled.
+- Decision: the portal benchmark uses the product capture path (Pick → save → artifact) and asserts workspace ownership + plausibility rather than exact line goldens.
+  Rationale: the goal explicitly exempts frequently changing app source from line goldens.
 
 ## Outcomes & Retrospective
 
-Fill only after every final matrix row passes.
+F-001…F-028 all PASS — see FINAL-ACCEPTANCE-MATRIX.md and the Goal 06 evidence report
+(.portal-studio-evidence/react-grab-g01/commands.log). Full clean-worktree gates:
+pnpm install --frozen-lockfile; studio:inspection:audit PASS; typecheck clean;
+pnpm test 59 files / 702 tests PASS; pnpm test:sdk 30 PASS; pnpm build clean with
+zero react-grab|bippy|portal-studio in dist; fixture contract+benchmark+workflow
+25/25; Portal Studio E2E 31/31; portal source benchmark 7/7; CLI/MCP smoke PASS;
+security/privacy suites 152 PASS; production-serve probes: studio endpoints and
+fixture route NOT registered in the prod build (SPA fallback only).

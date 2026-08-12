@@ -1375,6 +1375,10 @@ export function StudioToolbar({
     observer.observe(document.body, {
       childList: true,
       subtree: true,
+      // Goal 06 workflow: an attribute-only mutation (e.g. a renamed
+      // target id) must also re-resolve markers so a fingerprint mismatch
+      // turns the marker unresolved instead of stale.
+      attributes: true,
     });
     return () => {
       if (timer) clearTimeout(timer);

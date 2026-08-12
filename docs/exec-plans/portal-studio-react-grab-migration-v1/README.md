@@ -49,3 +49,67 @@ A completion claim requires concrete code/test/build/browser/grep artifacts. Eve
 - `launchers.md` — copy-ready Codex/Pi prompts.
 - `COPY-READY-GOAL-01.md` — shared contract plus Goal 01 in one file.
 - `AGENTS-snippet.md` — concise repository guidance.
+
+## Released usage & maintenance (Goal 06)
+
+This section is the ACTIVE usage reference; the archived plan sets under
+`docs/exec-plans/portal-studio/` and `portal-studio-annotation-first/` are
+historical only.
+
+### User workflow
+
+The horizontal toolbar (collapsible, draggable) offers Pick, Multi-select,
+Select region, Copy, Marker visibility, Shortcut help and Annotation list.
+Picking captures ONE normalized v6 element (one React Grab selector,
+document-relative region for Area, fingerprint + page context); Multi
+captures N targets in one annotation; Area samples a bounded point grid
+(max 69 points, 50 targets). Markers rehydrate through the strict locator
+(shadow/iframe boundaries supported); a fingerprint mismatch makes a marker
+UNRESOLVED — it is never reattached to a wrong target, and unresolved items
+stay listed for Agent completion. Source context is workspace-relative;
+elements outside React or without resolvable source report source-null
+explicitly — never a guessed file.
+
+### Freeze behavior
+
+During a capture session the page is frozen (pointer events, CSS/rAF
+animations, React updates). Studio controls stay interactive; the freeze is
+released on every exit path (interaction flush window, save/inspection
+completion and errors, route navigation, pagehide/visibility, unmount/HMR).
+The freeze re-applies after each interaction while the capture stays active.
+
+### Old tasks
+
+Artifacts with `schemaVersion !== 6` are rejected — never migrated. The
+browser, endpoints, print/verify CLI and MCP return one typed
+`unsupported_schema` result with the actual/expected versions and the
+dev-only clear instruction (`tasks/active-task.json`).
+
+### CLI and MCP commands (run exactly as documented)
+
+```bash
+pnpm studio:list
+pnpm studio:complete -- <annotation-id> --verified --summary "<why>"
+pnpm studio:reopen -- <annotation-id>
+pnpm studio:print -- --json            # machine-readable v6 task (Codex/Pi handoff)
+pnpm studio:print -- --markdown
+pnpm studio:verify -- --timeout-ms <ms>   # PORTAL_STUDIO_ORIGIN overrides the origin
+pnpm studio:mcp                        # stdio JSON-RPC; print_task, list/complete/reopen
+pnpm studio:inspection:audit           # permanent architecture guard
+```
+
+### React Grab upgrade rule
+
+`react-grab` is pinned EXACTLY at 0.1.50 and imported only through
+`react-grab/primitives`. A version upgrade MUST be a dedicated change that:
+
+1. bumps the exact version in `package.json` (no range specifiers) and
+   regenerates `pnpm-lock.yaml` with a frozen install;
+2. re-runs the Goal 01 contract suite (`e2e/react-grab-g01/react-grab.contract.ts`);
+3. re-runs the Goal 06 source benchmarks
+   (`source-benchmark.spec.ts`, `portal-studio-source-benchmark.spec.ts`);
+4. re-runs `pnpm studio:inspection:audit`, `pnpm typecheck`, `pnpm test`
+   and the Portal Studio E2E before merging.
+
+No casual range update; `react-grab/dist/*`, `react-grab/src/*` and the
+full `react-grab` UI import remain forbidden.

@@ -4,7 +4,7 @@ const fixtureURL = "http://127.0.0.1:4174/e2e/react-grab-g01/";
 
 export default defineConfig({
   testDir: ".",
-  testMatch: "react-grab.contract.ts",
+  testMatch: ["react-grab.contract.ts", "source-benchmark.spec.ts", "user-workflow.spec.ts"],
   fullyParallel: false,
   workers: 1,
   reporter: "list",

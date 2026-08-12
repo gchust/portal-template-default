@@ -264,14 +264,14 @@ const startPicking = async (page: import("@playwright/test").Page) => {
     hasText: "Hover an element",
   });
   try {
-    await expect(hint, { timeout: 10000 }).toBeVisible();
+    await expect(hint).toBeVisible({ timeout: 10000 });
   } catch {
     // The pick click can race the toolbar expansion right after sign-in;
     // a single bounded retry restores the picking session.
     if ((await pick.getAttribute("aria-pressed")) !== "true") {
       await pick.click();
     }
-    await expect(hint, { timeout: 10000 }).toBeVisible();
+    await expect(hint).toBeVisible({ timeout: 10000 });
   }
 };
 
@@ -284,9 +284,8 @@ const saveWithCtrlEnter = async (page: import("@playwright/test").Page) => {
   await expect(
     page
       .locator("#portal-studio-root")
-      .getByRole("button", { name: /Save|保存|Inspecting|Saving/ }),
-    { timeout: 20000 }
-  ).toBeEnabled();
+      .getByRole("button", { name: /Save|保存|Inspecting|Saving/ })
+  ).toBeEnabled({ timeout: 20000 });
   await page.keyboard.press("Control+Enter");
 };
 
@@ -302,7 +301,7 @@ const saveTask = async (
   // runs — wait for the capture to finish before clicking. The button
   // label is "Inspecting target…" while the pipeline runs, so the regex
   // matches all three states and toBeEnabled resolves once enabled.
-  await expect(saveButton, { timeout: 20000 }).toBeEnabled();
+  await expect(saveButton).toBeEnabled({ timeout: 20000 });
   await saveButton.click();
   // Goal 02: the compact toast replaces the technical Saved panel. The
   // save POST + screenshot merge can exceed 5s on a cold /dev page (Vite
@@ -311,9 +310,8 @@ const saveTask = async (
   await expect(
     page.locator("#portal-studio-root .ps-save-toast", {
       hasText: /Annotation saved|批注已保存/,
-    }),
-    { timeout: 20000 }
-  ).toBeVisible();
+    })
+  ).toBeVisible({ timeout: 20000 });
   await expect
     .poll(() => readActiveTask().annotations.at(-1)?.comment)
     .toBe(instruction);
