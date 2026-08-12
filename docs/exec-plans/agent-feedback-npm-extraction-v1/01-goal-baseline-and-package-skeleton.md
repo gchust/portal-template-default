@@ -150,7 +150,7 @@ git diff --stat
 - agent-feedback: `3ac5528ecc0c7b67380782b6adcd66c021c98f01` (`chore: establish Agent Feedback package skeleton`)
 - agent-feedback follow-up: `7630205d5a6514ce4ce0f2cf66fb31420d5235b9` (`fix: keep migration evidence out of package`)
 - agent-feedback baseline follow-up: `0933efc6c9dbff24a3ecfd82b4dc59872fd4fa18` (`docs: complete migration coupling baseline`)
-- portal-template-default: `3d8dedd4eb13dac9cb048559db217d31364c6f02` (`docs: add Agent Feedback extraction plan`), `23340b7baf2f2d8f5f25b6a0e9907aa12866e354` (`docs: record Goal 01 checkpoint SHAs`, contains invalid SHAs), and `6fb030a64dead5af67b384c516e34838f3e55d4a` (`docs: correct Goal 01 checkpoint SHAs`)
+- portal-template-default: `3d8dedd4eb13dac9cb048559db217d31364c6f02` (`docs: add Agent Feedback extraction plan`), `23340b7baf2f2d8f5f25b6a0e9907aa12866e354` (`docs: record Goal 01 checkpoint SHAs`, contains invalid SHAs), `6fb030a64dead5af67b384c516e34838f3e55d4a` (`docs: correct Goal 01 checkpoint SHAs`), `c10b6c4d9dab0291c3703911abfc3173a0ef17ee` and `e37f7958c9cca0ea73f0c7980cfe21368c1291bb` (independent review evidence)
 
 #### 运行过的命令及结果
 
