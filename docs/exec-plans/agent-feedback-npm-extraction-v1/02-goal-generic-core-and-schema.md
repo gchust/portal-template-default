@@ -101,7 +101,7 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 - [x] 2026-08-12T12:24Z final review 将 Authorization redaction 覆盖到任意 scheme（含 Basic），并将 test helper 从 `fixtures.ts` 改名避免 Goal 必须命令的 fixture exclusion 歧义；checkpoint `b6f3b6c126d8b4a475133f90a961eb8f63ad5d52`（`fix: harden generic authorization redaction`）。
 - [x] 2026-08-12T12:27Z 补齐 task/annotation ID 和 extension namespace-count focused checks；checkpoint `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`（`test: cover core ids and namespace limits`）；final focused suite 6 files / 21 tests PASS。
 - [x] 2026-08-12T12:28Z 针对 final package HEAD 重跑全部 required gates，并生成 final tarball `/tmp/agent-feedback-g02-final2-pack.eGCyxc/agent-feedback.tgz`（SHA-256 `6502b294a648a592c99bf472744fd26de5a0dea5e6452d7cf3865daf4615a03c`）及 clean offline/frozen consumer `/tmp/agent-feedback-g02-final2-offline.r53eQi`；全部 PASS。
-- [ ] 写完 criterion-by-criterion outcomes，提交 Portal Goal 02 living plan，并复核两仓 clean。
+- [x] 2026-08-12T12:31Z 写完 criterion-by-criterion outcomes；Portal Goal 02 evidence checkpoint `d1338acb6d9546a2bf21474478afd1f5a9a6feda`（`docs: record Agent Feedback Goal 02`）。
 
 ### Surprises & Discoveries
 
@@ -166,7 +166,7 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 #### 本地 checkpoint commits
 
 - agent-feedback: `3ffd140b0b2870765503623816aa345a43853935`, `d0969283a3aada8bad426d4de14830b435909f53`, `b6f3b6c126d8b4a475133f90a961eb8f63ad5d52`, `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`。
-- portal-template-default: 本文件 final evidence commit 见本 Goal 的最终 Progress/报告。
+- portal-template-default: `d1338acb6d9546a2bf21474478afd1f5a9a6feda`；本 SHA 记录 follow-up commit 见最终报告。
 
 #### 下一 Goal 的可靠起点
 
