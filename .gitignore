@@ -42,3 +42,6 @@ _.ntvs_
 _.njsproj
 _.sln
 \*.sw?
+
+# Goal 04: contract-suite generated evidence output (fixture runs).
+e2e/react-grab-g01/.portal-studio-evidence/

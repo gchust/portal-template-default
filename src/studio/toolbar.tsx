@@ -43,6 +43,7 @@ import {
   currentRouteKey,
 } from "./route-context";
 import { postMutation } from "./task-client";
+import { useCaptureFreeze } from "./useCaptureFreeze";
 
 import {
   clampDockPosition,
@@ -421,6 +422,16 @@ export function StudioToolbar({
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  // Goal 04: every owned timer is cleared on unmount (HMR/reload safety).
+  useEffect(() => {
+    return () => {
+      if (saveToastTimerRef.current) clearTimeout(saveToastTimerRef.current);
+      if (copyFeedbackTimerRef.current) {
+        clearTimeout(copyFeedbackTimerRef.current);
+      }
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+    };
+  }, []);
   // Round-3 finding 4: the manual-Copy fallback is anchored to the REAL
   // Copy button through the shared viewport-aware placement utility
   // (flip above/below + horizontal clamping), recomputed on dock moves.
@@ -481,6 +492,24 @@ export function StudioToolbar({
           )
         );
       }
+      // G04 finding: re-expanding the toolbar WHILE a capture session is
+      // active re-freezes the page in the same commit, and the upstream
+      // freeze defers the setDockWidth/setDockPosition renders above — the
+      // dock then keeps the CHIP-sized anchor and the wider bar overflows
+      // the viewport (its rightmost buttons become unreachable). Apply the
+      // measured-size clamp NATIVELY (same pattern as the frozen outline)
+      // so the bar always stays inside; the state updates reconcile on the
+      // next unfrozen render.
+      const current = viewportOf(window);
+      const clamped = clampDockPosition(
+        dockPositionRef.current ??
+          defaultDockPosition(current, measuredWidth, measuredHeight),
+        current,
+        measuredWidth,
+        measuredHeight
+      );
+      element.style.left = `${clamped.x}px`;
+      element.style.top = `${clamped.y}px`;
     }
     // Goal 01 v5: the dock size changes between the collapsed chip and
     // the expanded bar — re-measure + re-clamp whenever the state flips so
@@ -955,6 +984,9 @@ export function StudioToolbar({
       ).then((result) => {
         if (captureSessionRef.current !== session) return;
         if (!result.ok) {
+          // Async exit: the inspection failed while the page was frozen —
+          // unfreeze so the error and retry surface render.
+          unfreezeNowRef.current();
           setMode({
             kind: "draft",
             capture: null,
@@ -966,6 +998,10 @@ export function StudioToolbar({
           });
           return;
         }
+        // Async exit: the inspection succeeded while the page was frozen —
+        // unfreeze so the draft state and the enabled Save flush instead of
+        // being deferred behind the frozen React scheduler.
+        unfreezeNowRef.current();
         setMode({
           kind: "draft",
           capture: {
@@ -985,6 +1021,9 @@ export function StudioToolbar({
         refreshSelectionRects();
       });
     },
+    // Note: unfreezeNowRef is deliberately NOT a dependency — the ref is
+    // declared later in the component body (TDZ); the .then callback reads
+    // ref.current at runtime, long after the declaration.
     [refreshSelectionRects]
   );
 
@@ -1042,6 +1081,7 @@ export function StudioToolbar({
       if (!stack.length) return;
       setMode({ kind: "picking", stack, index: 0 });
       updateOutline(target);
+      updateOutlineNative(target);
     };
     const handleScroll = () => {
       const current = modeRef.current;
@@ -1156,11 +1196,13 @@ export function StudioToolbar({
       if (current.kind !== "marquee") return;
       event.preventDefault();
       event.stopPropagation();
-      setMode({
-        kind: "marquee",
+      const next = {
+        kind: "marquee" as const,
         start: current.start,
         current: { x: event.clientX, y: event.clientY },
-      });
+      };
+      setMode(next);
+      updateRegionNative(toRegion(next));
     };
     const handlePointerUp = (event: PointerEvent) => {
       const current = modeRef.current;
@@ -1216,10 +1258,103 @@ export function StudioToolbar({
     open
   );
 
+  /**
+   * Route navigation is a documented freeze exit: cancel the active
+   * capture session (draft/selection/comment) so the freeze follows and no
+   * stale target anchors to a different page.
+   */
+  const cancelCaptureForRouteChange = useCallback(() => {
+    captureSessionRef.current += 1;
+    selectionRef.current = EMPTY_SELECTION;
+    setSelectionRects([]);
+    setSelectionCount(0);
+    setDraftComment("");
+    setComposerError(null);
+    lastDraftCaptureRef.current = null;
+    setMode({ kind: "idle" });
+  }, []);
+
+  // Goal 04: the ONE freeze lifecycle owner. The page is frozen while a
+  // capture flow is active (after the mode activates) and unfreezes on
+  // every documented exit path; failures surface as a bounded notice.
+  // The capture pipeline runs earlier in the component body than the
+  // freeze hook; route its unfreeze call through a ref to avoid the TDZ.
+  const unfreezeNowRef = useRef<() => void>(() => undefined);
+  const { freezeError, unfreezeNow, isFrozenRef } = useCaptureFreeze({
+    // G04 finding: an OPEN auxiliary panel suspends every capture handler
+    // (pick/marquee/multi are gated on auxPanel === "none"), so freezing
+    // then only defers the Studio's own React updates (the upstream freeze
+    // buffers setState until the next unfreeze). Thawing while a panel is
+    // open makes list mutations and their async flushes render live.
+    captureActive:
+      open &&
+      !unsupported &&
+      auxPanel === "none" &&
+      (mode.kind === "picking" ||
+        mode.kind === "multi" ||
+        mode.kind === "marquee" ||
+        mode.kind === "saving" ||
+        (mode.kind === "draft" && !mode.captureError && !composerError)),
+    onRouteChange: cancelCaptureForRouteChange,
+  });
+  unfreezeNowRef.current = unfreezeNow;
+
+  // Goal 04: while the page is frozen the app's React updates are deferred,
+  // so the hover outline / marquee rect are driven natively (DOM style
+  // writes) so the capture UX stays live.
+  const updateOutlineNative = useCallback((element: Element | undefined) => {
+    if (!isFrozenRef.current) return;
+    const node = rootRef.current?.querySelector<HTMLElement>(".ps-outline");
+    if (!node) return;
+    const rect = element?.getBoundingClientRect();
+    if (!rect) {
+      node.style.display = "none";
+      return;
+    }
+    node.style.display = "block";
+    node.style.left = `${rect.left}px`;
+    node.style.top = `${rect.top}px`;
+    node.style.width = `${rect.width}px`;
+    node.style.height = `${rect.height}px`;
+  }, [isFrozenRef]);
+
+  const updateRegionNative = useCallback(
+    (rect: { x: number; y: number; width: number; height: number } | undefined) => {
+      if (!isFrozenRef.current) return;
+      const node = rootRef.current?.querySelector<HTMLElement>(
+        ".ps-outline.ps-region"
+      );
+      if (!node) return;
+      if (!rect) {
+        node.style.display = "none";
+        return;
+      }
+      node.style.display = "block";
+      node.style.left = `${rect.x}px`;
+      node.style.top = `${rect.y}px`;
+      node.style.width = `${rect.width}px`;
+      node.style.height = `${rect.height}px`;
+    },
+    [isFrozenRef]
+  );
+
   // Marker re-resolution (D-033 #8): re-query the live DOM on route
   // changes (body child mutations), scroll, and resize — markers follow
   // their targets; unresolved ones stay retained in the list.
+  // Goal 04 invariant: the observer/listeners are active ONLY while
+  // something needs them — visible annotations (markers), the marker
+  // editor, or an active capture flow (composer anchoring). With no such
+  // surface, the DOM is not tracked.
+  const needsDomTracking =
+    annotations.some((annotation) => annotation.hidden !== true) ||
+    editorAnnotationId != null ||
+    mode.kind === "picking" ||
+    mode.kind === "multi" ||
+    mode.kind === "marquee" ||
+    mode.kind === "draft" ||
+    mode.kind === "saving";
   useEffect(() => {
+    if (!needsDomTracking) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => {
       if (timer) clearTimeout(timer);
@@ -1247,7 +1382,7 @@ export function StudioToolbar({
       window.removeEventListener("resize", refresh);
       observer.disconnect();
     };
-  }, []);
+  }, [needsDomTracking]);
 
   // Refresh selection rects on scroll/resize while the panel is open.
   useEffect(() => {
@@ -1368,6 +1503,7 @@ export function StudioToolbar({
           : current
       );
       updateOutline(target);
+      updateOutlineNative(target);
     };
     const handleScroll = () => {
       const current = modeRef.current;
@@ -1525,6 +1661,11 @@ export function StudioToolbar({
           { keepalive: options.keepalive === true }
         );
         if (result.ok) {
+          // G04 finding: the authoritative mutation result is a documented
+          // freeze exit — release the freeze so buffered React updates
+          // (optimistic list state, editor close) replay and the refresh
+          // below renders live instead of staying deferred while frozen.
+          unfreezeNowRef.current();
           taskRef.current = result.task;
           lastTaskRevisionRef.current = result.taskRevision;
           // Re-sync after the mutation settles (server artifact is
@@ -1540,16 +1681,21 @@ export function StudioToolbar({
           }
           // 409: adopt the server's current task + revision and retry the
           // still-valid operation once against it.
+          unfreezeNowRef.current();
           taskRef.current = result.conflict.task;
           lastTaskRevisionRef.current = result.conflict.taskRevision;
           setAnnotations(result.conflict.task.annotations);
           expected = result.conflict.taskRevision;
           continue;
         }
+        // G04 finding: a failed flush must surface while the page may be
+        // frozen — release the freeze so the error mode renders.
+        unfreezeNowRef.current();
         setMode({ kind: "error", message: result.error ?? "mutation failed" });
         return false;
       }
       // Both attempts conflicted: explicit conflict feedback.
+      unfreezeNowRef.current();
       setMode({
         kind: "error",
         message: t(
@@ -1850,6 +1996,9 @@ export function StudioToolbar({
         { taskId: base.taskId, expectedTaskRevision: expected, operations }
       );
       if (result.ok) {
+        // G04 finding: same as the list flush — the authoritative result
+        // is a freeze exit so the editor close + list update replay.
+        unfreezeNowRef.current();
         taskRef.current = result.task;
         lastTaskRevisionRef.current = result.taskRevision;
         setAnnotations(result.task.annotations);
@@ -1859,12 +2008,14 @@ export function StudioToolbar({
         return;
       }
       if (result.conflict) {
+        unfreezeNowRef.current();
         taskRef.current = result.conflict.task;
         lastTaskRevisionRef.current = result.conflict.taskRevision;
         setAnnotations(result.conflict.task.annotations);
         expected = result.conflict.taskRevision;
         continue;
       }
+      unfreezeNowRef.current();
       setEditorError(
         result.error ?? t("studio.saveError", "Unable to save — try again.")
       );
@@ -1873,6 +2024,7 @@ export function StudioToolbar({
     }
     // Both attempts conflicted — explicit conflict feedback; the draft is
     // preserved in editorDraft for a manual retry.
+    unfreezeNowRef.current();
     setEditorError(
       t(
         "studio.conflict",
@@ -1989,11 +2141,19 @@ export function StudioToolbar({
    */
   const resumeAfterSave = useCallback(
     (kind: "element" | "multi" | "region") => {
+      // Async exit: the save finished while the page was frozen — unfreeze
+      // synchronously so the resume updates flush. G04 finding: the
+      // resumed Pick/Multi session deliberately runs UNFROZEN (documented
+      // behavior) — re-freezing mid-flush is unreliable in the upstream
+      // React-pause machinery (a re-freeze can swallow the interaction's
+      // own dispatches, leaving the Studio stuck), and the freeze re-engages
+      // on the next explicit capture-mode entry (a fresh session).
       // Strict serial saving: capture-mode actions and hotkeys are ignored
       // while a save is pending, so the mode is still "saving" here and
       // this reset always belongs to THIS save. The continuous loop then
       // resumes per the documented rule — element → fresh Pick session,
       // multi → empty group, region → idle. No Done click.
+      unfreezeNow();
       selectionRef.current = EMPTY_SELECTION;
       setSelectionRects([]);
       setSelectionCount(0);
@@ -2177,6 +2337,7 @@ export function StudioToolbar({
         // Second conflict — a genuine concurrent writer. Never silently
         // overwrite: explicit conflict feedback INLINE in the composer;
         // the draft and target stay preserved for a manual retry.
+        unfreezeNow();
         setMode({
           kind: "draft",
           capture: draftCapture,
@@ -2194,6 +2355,7 @@ export function StudioToolbar({
       if (!response.ok || !payload.ok || !payload.taskId) {
         // Goal 02 E: POST failure preserves the draft and target — the
         // composer stays open with the inline error.
+        unfreezeNow();
         setMode({
           kind: "draft",
           capture: draftCapture,
@@ -2301,6 +2463,7 @@ export function StudioToolbar({
       finishSave(kind);
     } catch (error) {
       // Goal 02 E: failure preserves the draft and target.
+      unfreezeNow();
       setMode({
         kind: "draft",
         capture: draftCapture,
@@ -2778,6 +2941,12 @@ export function StudioToolbar({
               {unsupported.clearInstruction}
             </p>
           </div>
+        </div>
+      ) : null}
+
+      {freezeError && open ? (
+        <div className="ps-freeze-notice" style={layout.panel} role="status">
+          <p className="ps-error">{freezeError}</p>
         </div>
       ) : null}
 

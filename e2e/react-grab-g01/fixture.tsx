@@ -1,12 +1,17 @@
 import {
+  getInspectionStats,
   inspectionEngine,
+  resetInspectionStats,
   resolveUsefulTarget,
+  sampleRegionTargets,
+  sampleRegionPoints,
 } from "@/studio/inspection";
 import type {
   InspectedElement,
   PromotionReason,
   ViewportRect,
 } from "@/studio/inspection";
+import { StudioToolbar } from "@/studio/toolbar";
 
 import {
   forwardRef,
@@ -61,6 +66,27 @@ export type ReactGrabG01Api = {
   hitShadow: (hideOverlay?: boolean) => HitProof;
   inspectIframe: () => Promise<ElementProof>;
   hitIframe: (hideOverlay?: boolean) => HitProof;
+  setOverlayVisible: (visible: boolean) => void;
+  startCaptureMode: (mode: "pick" | "multi" | "area") => Promise<void>;
+  cancelCapture: () => void;
+  collapseToolbar: () => void;
+  expandToolbar: () => void;
+  isFrozen: () => boolean;
+  hoverState: () => { popoverVisible: boolean };
+  cssAnimationState: () => { opacity: number };
+  jsAnimationState: () => { x: number };
+  inspectionStats: () => number;
+  resetInspectionStats: () => void;
+  clickTargetAt: (id: string) => void;
+  mouseMoveTo: (id: string) => { x: number; y: number };
+  sampleRegion: (rect: { x: number; y: number; width: number; height: number }) => {
+    points: number;
+    targets: number;
+    ids: string[];
+    centerStack: string[];
+    nativeCenter: string | null;
+    point: { x: number; y: number };
+  };
   freezeCycle: () => {
     before: boolean;
     during: boolean;
@@ -147,6 +173,52 @@ button{width:150px;height:44px}
 <button id="fixture-iframe-button">Same-origin iframe button</button>
 </body></html>`;
 
+/** Goal 04: rAF-driven JS animation (frozen by the upstream rAF hold). */
+function HoverPopover() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="hover-target" id="fixture-hover-target">
+      <button
+        id="fixture-hover-trigger"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+      >
+        Hover trigger
+      </button>
+      <div
+        className="hover-popover"
+        id="fixture-hover-popover"
+        style={{ display: open ? "block" : "none" }}
+      >
+        Hover-only popover content
+      </div>
+    </div>
+  );
+}
+
+function JsAnimation() {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    let frame = 0;
+    let raf = 0;
+    const tick = () => {
+      frame += 1;
+      const element = ref.current;
+      if (element) {
+        element.style.transform = `translateX(${(frame % 120) * 2}px)`;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <div id="fixture-js-animation" ref={ref}>
+      JS animated
+    </div>
+  );
+}
+
 function FixtureApp() {
   return (
     <main id="fixture-ready">
@@ -163,6 +235,23 @@ function FixtureApp() {
         #fixture-shadow-host { display: block; }
         iframe { width: 260px; height: 120px; border: 3px solid #737373; }
         #fixture-portal-root { position: fixed; right: 24px; bottom: 24px; z-index: 3; }
+        /* Goal 04 freeze/region fixtures */
+        .hover-target { position: relative; }
+        .hover-popover { position: absolute; left: 0; top: 100%; background: white; border: 1px solid #d4d4d4; padding: 8px; min-width: 140px; }
+        @keyframes fixture-pulse { from { opacity: 0.4; } to { opacity: 1; } }
+        #fixture-css-animation { animation: fixture-pulse 1s linear infinite alternate; }
+        .fixture-region-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .fixture-card { min-height: 88px; padding: 8px; border: 1px solid #d4d4d4; border-radius: 8px; }
+        .fixture-card-title { font-weight: 600; }
+        .fixture-card-body { font-size: 12px; }
+        .fixture-cell { border: 1px solid #d4d4d4; padding: 6px 10px; }
+        .fixture-region-nested { padding: 0; }
+        #fixture-nested-1 { min-height: 170px; padding: 10px; }
+        #fixture-nested-2 { min-height: 130px; padding: 10px; }
+        #fixture-nested-3 { min-height: 90px; padding: 10px; }
+        #fixture-nested-button { min-width: 170px; min-height: 44px; }
+        .fixture-region-dashboard > div { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+        .fixture-tile { height: 30px; border: 1px solid #e5e5e5; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; }
       `}</style>
 
       <section>
@@ -238,6 +327,66 @@ function FixtureApp() {
 
       <section>
         <Button id="fixture-shadcn-button">Template shadcn button</Button>
+      </section>
+
+      <section>
+        <HoverPopover />
+      </section>
+
+      <section>
+        <div id="fixture-css-animation">CSS animated</div>
+        <JsAnimation />
+      </section>
+
+      <section className="fixture-region-cards">
+        {[1, 2, 3, 4].map((index) => (
+          <div className="fixture-card" key={index} id={`fixture-card-${index}`}>
+            <div className="fixture-card-title">Card {index}</div>
+            <div className="fixture-card-body">Detail {index}</div>
+            <button id={`fixture-card-${index}-action`}>Open {index}</button>
+          </div>
+        ))}
+      </section>
+
+      <section className="fixture-region-table">
+        <table>
+          <tbody>
+            {[1, 2, 3].map((row) => (
+              <tr key={row}>
+                {[1, 2, 3].map((column) => (
+                  <td
+                    className="fixture-cell"
+                    key={column}
+                    id={`fixture-cell-${row}-${column}`}
+                  >
+                    R{row}C{column}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="fixture-region-nested" id="fixture-nested-section">
+        <div id="fixture-nested-1">
+          <div id="fixture-nested-2">
+            <div id="fixture-nested-3">
+              <button id="fixture-nested-button">Deep button</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="fixture-region-dashboard" id="fixture-dashboard">
+        <h3>Dashboard</h3>
+        <div>
+          {Array.from({ length: 24 }, (_, index) => (
+            <span className="fixture-tile" key={index} id={`fixture-tile-${index}`}>
+              {index + 1}
+            </span>
+          ))}
+        </div>
       </section>
 
       <PortalDialogAction />
@@ -337,7 +486,26 @@ const mountedUiAttributes = () => {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing fixture root");
-createRoot(root).render(<FixtureApp />);
+
+function FixtureWithStudio() {
+  return (
+    <>
+      <FixtureApp />
+      {/* Goal 04: the real toolbar drives the freeze lifecycle; its host is
+          excluded from perception (data-portal-studio-root). */}
+      <StudioToolbar
+        config={{
+          token: "fixture-token",
+          endpoint: "/__portal-studio/tasks",
+          screenshotsEndpoint: "/__portal-studio/screenshots",
+          mutateEndpoint: "/__portal-studio/mutate",
+        }}
+      />
+    </>
+  );
+}
+
+createRoot(root).render(<FixtureWithStudio />);
 
 window.__REACT_GRAB_G01__ = {
   engineSurface: {
@@ -356,6 +524,105 @@ window.__REACT_GRAB_G01__ = {
   hitShadow: (hideOverlay) => hitElement(getShadowButton(), hideOverlay),
   inspectIframe: () => inspectElement(getIframeButton()),
   hitIframe: (hideOverlay) => hitElement(getIframeButton(), hideOverlay),
+  setOverlayVisible: (visible: boolean) => {
+    (getElement("fixture-overlay") as HTMLElement).style.display = visible
+      ? ""
+      : "none";
+  },
+  startCaptureMode: async (mode: "pick" | "multi" | "area") => {
+    const chip = document.querySelector(
+      "[data-portal-studio-root] button[aria-label='Annotation tools']"
+    ) as HTMLButtonElement | null;
+    if (chip) chip.click();
+    // The expanded bar renders after the open-state update; poll for the
+    // mode button instead of relying on a fixed delay.
+    const label =
+      mode === "pick"
+        ? "Pick element"
+        : mode === "multi"
+          ? "Multi-select"
+          : "Select region";
+    let button: HTMLButtonElement | null = null;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      button = document.querySelector(
+        `[data-portal-studio-root] button[aria-label="${label}"]`
+      ) as HTMLButtonElement | null;
+      if (button) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!button) throw new Error(`missing toolbar button ${label}`);
+    button.click();
+  },
+  collapseToolbar: () => {
+    const collapse = document.querySelector(
+      "[data-portal-studio-root] button[aria-label='Collapse toolbar']"
+    ) as HTMLButtonElement | null;
+    if (collapse) collapse.click();
+  },
+  expandToolbar: () => {
+    const chip = document.querySelector(
+      "[data-portal-studio-root] button[aria-label='Annotation tools']"
+    ) as HTMLButtonElement | null;
+    if (!chip) throw new Error("missing toolbar chip");
+    chip.click();
+  },
+  cancelCapture: () => {
+    // Document-level capture listeners need a document-path event.
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+  },
+  isFrozen: () => inspectionEngine.isFrozen(),
+  hoverState: () => ({
+    popoverVisible:
+      getElement("fixture-hover-popover").getBoundingClientRect().height > 0,
+  }),
+  cssAnimationState: () => ({
+    opacity: Number.parseFloat(
+      getComputedStyle(getElement("fixture-css-animation")).opacity
+    ),
+  }),
+  jsAnimationState: () => {
+    const transform = getComputedStyle(getElement("fixture-js-animation")).transform;
+    const match = transform.match(/matrix\(1, 0, 0, 1, ([\d.]+),/);
+    return { x: match ? Number.parseFloat(match[1]) : 0 };
+  },
+  inspectionStats: () => getInspectionStats().inspectCalls,
+  resetInspectionStats: () => {
+    resetInspectionStats();
+  },
+  clickTargetAt: (id: string) => {
+    const element = getElement(id);
+    const rect = element.getBoundingClientRect();
+    // Dispatch on the element so the event target is the page element (the
+    // toolbar commits picks only for Element targets, like a real click).
+    element.dispatchEvent(
+      new MouseEvent("click", {
+        clientX: rect.x + rect.width / 2,
+        clientY: rect.y + rect.height / 2,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+  },
+  mouseMoveTo: (id: string) => {
+    const element = getElement(id);
+    const rect = element.getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  },
+  sampleRegion: (rect: { x: number; y: number; width: number; height: number }) => {
+    const points = sampleRegionPoints(rect);
+    const targets = sampleRegionTargets(rect);
+    return {
+      points: points.length,
+      targets: targets.length,
+      ids: targets.map((element) => element.id || element.tagName),
+    };
+  },
   freezeCycle: () => {
     const bootstrap = window.__REACT_GRAB_G01_BOOTSTRAP__!;
     const errorCount = bootstrap.consoleErrors.length;

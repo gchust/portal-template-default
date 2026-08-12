@@ -3867,8 +3867,11 @@ describe("StudioToolbar", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: /open editor/ })).not.toBeInTheDocument();
     });
-    // Navigate to /users → the marker appears.
+    // Navigate to /users → the marker appears. Real SPA navigation fires
+    // popstate (and mutates the body); jsdom pushState alone fires neither,
+    // so dispatch the event exactly like a browser navigation would.
     window.history.pushState({}, "", "/users");
+    window.dispatchEvent(new PopStateEvent("popstate"));
     await waitFor(() => {
       expect(
         screen.getByRole("button", { name: "Annotation 1: open editor" })

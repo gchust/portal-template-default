@@ -245,7 +245,7 @@ export function installDiagnosticsCapture(
     );
   };
 
-  const patchXhr = () => {
+  const patchXhr = (): (() => void) => {
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.open = function patchedOpen(
@@ -290,13 +290,18 @@ export function installDiagnosticsCapture(
       request.addEventListener("abort", handleFailure);
       return originalSend.apply(request, args);
     };
+    // Goal 04: the disposer restores the XHR prototype exactly.
+    return () => {
+      XMLHttpRequest.prototype.open = originalOpen;
+      XMLHttpRequest.prototype.send = originalSend;
+    };
   };
 
   console.error = handleConsoleError as typeof console.error;
   window.addEventListener("error", handleWindowError);
   window.addEventListener("unhandledrejection", handleUnhandledRejection);
   window.fetch = handleFetch;
-  patchXhr();
+  const restoreXhr = patchXhr();
 
   (window as unknown as Record<string, unknown>)[CAPTURE_INSTALLED_FLAG] = true;
   return () => {
@@ -305,5 +310,6 @@ export function installDiagnosticsCapture(
     window.removeEventListener("error", handleWindowError);
     window.removeEventListener("unhandledrejection", handleUnhandledRejection);
     window.fetch = originalFetch;
+    restoreXhr();
   };
 }

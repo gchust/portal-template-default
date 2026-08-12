@@ -16,6 +16,7 @@
  */
 
 import {
+  disposeBaselineStyles,
   freeze,
   getElementAtPoint,
   getElementBounds,
@@ -171,6 +172,24 @@ export function resolveUsefulTarget(
   };
 }
 
+/**
+ * Goal 04 — deterministic inspection call-count stats. `getElementContext`
+ * is the expensive perception call and is budgeted: it may run only when a
+ * target/group is committed or a detail preview explicitly requests it —
+ * NEVER on pointermove. Tests reset the counter and assert exact budgets.
+ */
+export type InspectionStats = { inspectCalls: number };
+
+let inspectCalls = 0;
+
+export function resetInspectionStats(): void {
+  inspectCalls = 0;
+}
+
+export function getInspectionStats(): InspectionStats {
+  return { inspectCalls };
+}
+
 const toViewportRect = (bounds: {
   x: number;
   y: number;
@@ -217,6 +236,7 @@ export function createInspectionEngine(): InspectionEngine {
           "inspect requires a DOM Element"
         );
       }
+      inspectCalls += 1;
       let context: Awaited<ReturnType<typeof getElementContext>>;
       let selector: string | null;
       let bounds: ReturnType<typeof getElementBounds>;
@@ -273,6 +293,14 @@ export function createInspectionEngine(): InspectionEngine {
       }
     },
     isFrozen: () => isFreezeActive(),
+    /**
+     * Goal 04 teardown: releases the upstream baseline-style machinery.
+     * Safe to call at any time (idempotent); used by the toolbar on
+     * unmount/HMR disposal.
+     */
+    dispose: () => {
+      disposeBaselineStyles();
+    },
   };
 }
 

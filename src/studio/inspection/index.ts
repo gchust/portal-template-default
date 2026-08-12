@@ -9,13 +9,16 @@
 export {
   createInspectionEngine,
   ensureStudioHostIgnored,
+  getInspectionStats,
   inspectionEngine,
   isInspectionCandidate,
   isInteractiveControl,
   isStudioElement,
   isSvgGeometry,
+  resetInspectionStats,
   resolveUsefulTarget,
 } from "./react-grab-engine";
+export type { InspectionStats } from "./react-grab-engine";
 
 export {
   buildCaptureDraft,
@@ -27,10 +30,13 @@ export {
 export {
   MAX_REGION_SAMPLE_POINTS,
   MAX_REGION_TARGETS,
+  preferRegionTarget,
   pruneRegionTargets,
   sampleRegionPoints,
   sampleRegionTargets,
   semanticTargetScore,
+  targetSignal,
+  type RegionTargetSignal,
 } from "./region";
 
 export {

@@ -30,6 +30,20 @@ const callApi = async <T>(
     { method, args }
   ) as Promise<Awaited<T>>;
 
+const waitFrozen = async (
+  page: import("@playwright/test").Page,
+  expected: boolean,
+  label: string
+) => {
+  let last: boolean | null = null;
+  for (let i = 0; i < 50; i += 1) {
+    last = await callApi<boolean>(page, "isFrozen");
+    if (last === expected) return;
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`${label}: expected frozen=${expected} but stayed ${last}`);
+};
+
 const openFixture = async (page: import("@playwright/test").Page) => {
   await page.goto("./");
   await expect(page.locator("#fixture-ready")).toBeVisible();
@@ -339,4 +353,329 @@ test("freezes, unfreezes and stays clean through the adapter", async ({ page }) 
     path: path.join(screenshotsRoot, "react-grab-g01-fixture.png"),
     fullPage: true,
   });
+});
+
+// ===========================================================================
+// Goal 04 — freeze lifecycle, hover/animation stability, region quality,
+// and deterministic call-count budgets (real Chromium fixture).
+// ===========================================================================
+
+test("G04: capture modes freeze the page and every exit path unfreezes", async ({
+  page,
+}) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  await callApi(page, "resetInspectionStats");
+
+  // Entering Pick freezes AFTER the mode activates.
+  await callApi(page, "startCaptureMode", ["pick"]);
+  await waitFrozen(page, true, "pick entry");
+
+  // Esc exits and unfreezes exactly.
+  await callApi(page, "cancelCapture");
+  await waitFrozen(page, false, "esc exit");
+
+  // Re-entering after an exit works.
+  await callApi(page, "startCaptureMode", ["pick"]);
+  await waitFrozen(page, true, "pick re-entry");
+
+  // A mode switch within capture keeps the freeze (still capturing).
+  await callApi(page, "startCaptureMode", ["multi"]);
+  await waitFrozen(page, true, "mode switch");
+  await callApi(page, "cancelCapture");
+  await waitFrozen(page, false, "esc exit 2");
+
+  // Toolbar collapse unfreezes (listeners pause, no invisible freeze).
+  await callApi(page, "startCaptureMode", ["pick"]);
+  await waitFrozen(page, true, "pick entry 3");
+  await callApi(page, "collapseToolbar");
+  await waitFrozen(page, false, "collapse exit");
+  // Re-expanding the toolbar resumes the PENDING pick session (AC5 pause
+  // semantics, not a mode reset) — the freeze follows the resumed flow.
+  await callApi(page, "expandToolbar");
+  await waitFrozen(page, true, "re-expand resumes pick");
+  await callApi(page, "cancelCapture");
+  await waitFrozen(page, false, "cancel exits resumed pick");
+
+  // Browser exit (pagehide) unfreezes.
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  await waitFrozen(page, false, "pagehide exit");
+  await callApi(page, "cancelCapture");
+});
+
+test("G04: Studio controls remain interactive while the page is frozen", async ({
+  page,
+}) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  await callApi(page, "startCaptureMode", ["pick"]);
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(true);
+  // The Studio host regains pointer events during freeze: opening the
+  // shortcut-help panel from the toolbar must work.
+  await page
+    .locator("[data-portal-studio-root] button[aria-label='Keyboard shortcuts']")
+    .click();
+  await expect(
+    page.locator("[data-portal-studio-root] #ps-shortcut-help")
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await callApi(page, "cancelCapture");
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(false);
+});
+
+test("G04: hover-only popover remains visible and annotatable during Pick", async ({
+  page,
+}) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  const triggerCenter = await callApi<{ x: number; y: number }>(
+    page,
+    "mouseMoveTo",
+    ["fixture-hover-trigger"]
+  );
+  await page.mouse.move(triggerCenter.x, triggerCenter.y);
+  await expect
+    .poll(() => callApi(page, "hoverState").then((state) => state.popoverVisible))
+    .toBe(true);
+
+  await callApi(page, "startCaptureMode", ["pick"]);
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(true);
+  // The hover-only menu stays open while the page is frozen.
+  const popover = await callApi<
+    { popoverVisible: boolean }
+  >(page, "hoverState");
+  expect(popover.popoverVisible).toBe(true);
+  // The trigger itself is annotatable: engine hit testing still resolves it.
+  const hit = await callApi(page, "hit", ["fixture-hover-trigger", true]);
+  expect(hit.selectedTarget?.id).toBe("fixture-hover-trigger");
+  await callApi(page, "cancelCapture");
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(false);
+});
+
+test("G04: CSS/JS animation targets stay stable during capture and resume", async ({
+  page,
+}) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  const readCss = async () =>
+    (await callApi<{ opacity: number }>(page, "cssAnimationState")).opacity;
+  const readJs = async () =>
+    (await callApi<{ x: number }>(page, "jsAnimationState")).x;
+
+  await callApi(page, "startCaptureMode", ["pick"]);
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(true);
+  const styleState = await page.evaluate(() => {
+    const style = document.getElementById("portal-studio-freeze-safe");
+    const pause = style
+      ? style.textContent?.includes("animation-play-state") ?? false
+      : false;
+    const anim = getComputedStyle(
+      document.getElementById("fixture-css-animation")!
+    ).animationPlayState;
+    return { pauseRule: pause, playState: anim };
+  });
+  expect(styleState.pauseRule).toBe(true);
+  expect(styleState.playState).toBe("paused");
+
+  // Stability within the frozen window: the animation may legitimately move
+  // between the pre-freeze read and the freeze moment, but once frozen the
+  // value must not change while the capture mode is active.
+  const cssFrozen1 = await readCss();
+  const jsFrozen1 = await readJs();
+  await page.waitForTimeout(700);
+  expect(await readCss()).toBe(cssFrozen1);
+  expect(await readJs()).toBe(jsFrozen1);
+
+  await callApi(page, "cancelCapture");
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(false);
+  await page.waitForTimeout(700);
+  // Resumed: both animations move again.
+  expect(await readJs()).not.toBe(jsFrozen1);
+  expect(await readCss()).not.toBe(cssFrozen1);
+});
+
+test("G04: pointermove performs zero source-context inspections", async ({
+  page,
+}) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  await callApi(page, "resetInspectionStats");
+  await callApi(page, "startCaptureMode", ["pick"]);
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(true);
+  // Move across several fixture targets while picking.
+  for (const selector of [
+    "#fixture-plain-button",
+    "#fixture-memo-button",
+    "#fixture-svg-button",
+    "#fixture-hover-trigger",
+  ]) {
+    const box = await page.locator(selector).boundingBox();
+    if (!box) throw new Error(`missing ${selector}`);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(60);
+  }
+  const calls = await callApi<number>(page, "inspectionStats");
+  expect(calls).toBe(0);
+  await callApi(page, "cancelCapture");
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(false);
+});
+
+test("G04: one Pick commit performs exactly one inspection", async ({
+  page,
+}) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  await callApi(page, "resetInspectionStats");
+  await callApi(page, "startCaptureMode", ["pick"]);
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(true);
+  const button = page.locator("#fixture-plain-button");
+  const center = await callApi<{ x: number; y: number }>(
+    page,
+    "mouseMoveTo",
+    ["fixture-plain-button"]
+  );
+  await page.mouse.move(center.x, center.y);
+  await callApi(page, "clickTargetAt", ["fixture-plain-button"]);
+  await expect(
+    page
+      .locator("[data-portal-studio-root]")
+      .getByRole("dialog", { name: "Annotation" })
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .locator("[data-portal-studio-root]")
+        .getByRole("button", { name: "Save", exact: true })
+        .isEnabled()
+    )
+    .toBe(true);
+  expect(await callApi<number>(page, "inspectionStats")).toBe(1);
+  await callApi(page, "cancelCapture");
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(false);
+});
+
+test("G04: one Multi commit performs one inspection per distinct target", async ({
+  page,
+}) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  await callApi(page, "resetInspectionStats");
+  await callApi(page, "startCaptureMode", ["multi"]);
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(true);
+  const firstCenter = await callApi<{ x: number; y: number }>(
+    page,
+    "mouseMoveTo",
+    ["fixture-plain-button"]
+  );
+  await page.mouse.move(firstCenter.x, firstCenter.y);
+  await callApi(page, "clickTargetAt", ["fixture-plain-button"]);
+  const secondCenter = await callApi<{ x: number; y: number }>(
+    page,
+    "mouseMoveTo",
+    ["fixture-memo-button"]
+  );
+  await page.mouse.move(secondCenter.x, secondCenter.y);
+  await callApi(page, "clickTargetAt", ["fixture-memo-button"]);
+  await page.keyboard.press("Enter");
+  await expect(
+    page
+      .locator("[data-portal-studio-root]")
+      .getByRole("dialog", { name: "Annotation" })
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .locator("[data-portal-studio-root]")
+        .getByRole("button", { name: "Save", exact: true })
+        .isEnabled()
+    )
+    .toBe(true);
+  expect(await callApi<number>(page, "inspectionStats")).toBe(2);
+  await callApi(page, "cancelCapture");
+  await expect.poll(() => callApi(page, "isFrozen")).toBe(false);
+});
+
+test("G04: Area sampling respects the 69-point and 50-target caps", async ({
+  page,
+}) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  await page.locator("#fixture-dashboard").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200);
+  const dashboard = await page.locator("#fixture-dashboard").boundingBox();
+  expect(dashboard).not.toBeNull();
+  const sampled = await callApi<{
+    points: number;
+    targets: number;
+    ids: string[];
+  }>(page, "sampleRegion", [
+    {
+      x: dashboard!.x,
+      y: dashboard!.y,
+      width: dashboard!.width,
+      height: dashboard!.height,
+    },
+  ]);
+  expect(sampled.points).toBeLessThanOrEqual(69);
+  expect(sampled.targets).toBeLessThanOrEqual(50);
+  // No duplicates in the result; the dashboard tiles are the semantic
+  // targets (the deterministic grid samples the region, so the tile count
+  // is layout-aligned — the hard gates are the caps above).
+  const unique = new Set(sampled.ids);
+  expect(unique.size).toBe(sampled.ids.length);
+  expect(
+    sampled.ids.filter((id) => id.startsWith("fixture-tile-")).length
+  ).toBeGreaterThanOrEqual(1);
+});
+
+test("G04: nested-card fixtures produce semantic targets, not wrapper explosion", async ({
+  page,
+}) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  await page.locator(".fixture-region-cards").scrollIntoViewIfNeeded();
+  await page.locator("#fixture-nested-section").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200);
+  const cards = await page.locator(".fixture-region-cards").boundingBox();
+  const nested = await page.locator("#fixture-nested-section").boundingBox();
+  expect(cards).not.toBeNull();
+  expect(nested).not.toBeNull();
+
+  const cardSample = await callApi<{ ids: string[] }>(page, "sampleRegion", [
+    { x: cards!.x, y: cards!.y, width: cards!.width, height: cards!.height },
+  ]);
+  // The semantic cards (or their actions) are the sampled targets — the
+  // layout-only page/root wrappers never dominate the region output.
+  const cardIds = cardSample.ids.filter((id) => id.startsWith("fixture-card-"));
+  expect(cardIds.length).toBeGreaterThanOrEqual(2);
+  expect(new Set(cardIds).size).toBe(cardIds.length);
+
+  const nestedSample = await callApi<
+    { ids: string[]; centerStack: string[]; nativeCenter: string | null }
+  >(page, "sampleRegion", [
+    { x: nested!.x, y: nested!.y, width: nested!.width, height: nested!.height },
+  ]);
+  console.log("nested rect:", JSON.stringify(nested));
+  console.log("nested center:", JSON.stringify({ stack: nestedSample.centerStack, native: nestedSample.nativeCenter }));
+  // Identical-text wrappers are pruned; the deep button survives.
+  expect(nestedSample.ids).toContain("fixture-nested-button");
+  expect(nestedSample.ids).not.toContain("fixture-nested-1");
+  expect(nestedSample.ids).not.toContain("fixture-nested-2");
+  expect(nestedSample.ids).not.toContain("fixture-nested-3");
+});
+
+test("G04: adjacent table cells remain distinct", async ({ page }) => {
+  await openFixture(page);
+  await callApi(page, "setOverlayVisible", [false]);
+  await page.locator(".fixture-region-table").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200);
+  const table = await page.locator(".fixture-region-table").boundingBox();
+  expect(table).not.toBeNull();
+  const sampled = await callApi<{ ids: string[] }>(page, "sampleRegion", [
+    { x: table!.x, y: table!.y, width: table!.width, height: table!.height },
+  ]);
+  const cellIds = sampled.ids.filter((id) => id.startsWith("fixture-cell-"));
+  const unique = new Set(cellIds);
+  expect(unique.size).toBe(cellIds.length);
+  expect(cellIds.length).toBeGreaterThanOrEqual(3);
 });

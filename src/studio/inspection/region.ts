@@ -1,151 +1,302 @@
 /**
- * Portal Studio — bounded region target sampling (Goal 03 Area cutover).
+ * Portal Studio — bounded region target sampling (Goal 03/04 Area cutover).
  *
  * Replaces the old full-DOM `document.body.querySelectorAll("*")`
  * collector with React Grab point-stack sampling across the marquee
- * region: corners, center and a bounded adaptive grid. Sampled targets
- * are deduplicated by live identity, pruned with a documented semantic
- * ancestor/descendant score, and capped at the safe selection limit.
- * There is NO full-DOM scan path.
+ * region. Goal 04 formalizes the collector:
  *
- * The region itself is preserved as a document-relative v6 `Region`
- * regardless of how many element targets were found.
+ * - deterministic sample points for the same rectangle/viewport:
+ *   `columns = clamp(ceil(width / 120), 2, 8)`,
+ *   `rows = clamp(ceil(height / 120), 2, 8)`;
+ *   each cell center, plus the rectangle center and four inset corners;
+ *   rounded coordinates are deduplicated; maximum 69 points;
+ * - target cap remains 50 and inspection concurrency remains exactly 4;
+ * - there is NO full-DOM scan path.
+ *
+ * Target scoring (documented priority order):
+ *   1. `data-ai-page-element` and meaningful `data-nb-*` business markers;
+ *   2. interactive/ARIA elements;
+ *   3. user-owned source component frame — the deterministic live proxy is
+ *      a stable identity (`id`), the same signal the v6 capture persists
+ *      as a strong identity fingerprint;
+ *   4. meaningful text / accessibility name (textContent, aria-label,
+ *      alt, title);
+ *   5. specificity: smaller semantic target over layout-only ancestor
+ *      (smaller bounding area, then deeper composed DOM).
+ *
+ * Pruning: exact duplicates are removed (live identity); ancestors that
+ * add no unique business/text context are removed; distinct sibling
+ * cards/cells are kept; selection order is preserved deterministically.
  */
 
 import { inspectionEngine, isInteractiveControl } from "./react-grab-engine";
 import type { Region } from "../types";
 
-export const MAX_REGION_SAMPLE_POINTS = 200;
+export const MAX_REGION_SAMPLE_POINTS = 69;
 export const MAX_REGION_TARGETS = 50;
-export const REGION_GRID_STRIDE = 48;
+export const REGION_GRID_DIVISOR = 120;
+export const REGION_GRID_MIN = 2;
+export const REGION_GRID_MAX = 8;
 
-/** Viewport-space sampling points: corners, center, bounded grid. */
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max);
+
+const normalizedText = (element: Element): string =>
+  (element.textContent ?? "").replace(/\s+/g, " ").trim();
+
+const hasBusinessAttribute = (element: Element): boolean => {
+  if (element.hasAttribute("data-ai-page-element")) return true;
+  for (const attribute of Array.from(element.attributes)) {
+    if (attribute.name.startsWith("data-nb-") && attribute.value.trim()) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const hasAccessibleName = (element: Element): boolean =>
+  ["aria-label", "aria-labelledby", "alt", "title"].some((name) => {
+    const value = element.getAttribute(name);
+    return !!value && value.trim().length > 0;
+  });
+
+/** Deterministic live-element signals in the documented priority order. */
+export type RegionTargetSignal = {
+  /** data-ai-page-element / meaningful data-nb-* */
+  business: boolean;
+  /** interactive control or explicit ARIA role/attributes */
+  interactive: boolean;
+  /** stable id (source-adjacent identity the v6 capture persists) */
+  identity: boolean;
+  /** meaningful text or accessibility name */
+  content: boolean;
+};
+
+export function targetSignal(element: Element): RegionTargetSignal {
+  const interactive =
+    isInteractiveControl(element) ||
+    element.hasAttribute("role") ||
+    element.hasAttribute("aria-label") ||
+    element.hasAttribute("aria-labelledby");
+  return {
+    business: hasBusinessAttribute(element),
+    interactive,
+    identity: !!element.id,
+    content: normalizedText(element).length > 0 || hasAccessibleName(element),
+  };
+}
+
+const signalArray = (signal: RegionTargetSignal): number[] => [
+  signal.business ? 1 : 0,
+  signal.interactive ? 1 : 0,
+  signal.identity ? 1 : 0,
+  signal.content ? 1 : 0,
+];
+
+const areaOf = (element: Element): number => {
+  const rect = element.getBoundingClientRect();
+  return rect.width * rect.height;
+};
+
+const composedDepth = (element: Element): number => {
+  let depth = 0;
+  for (let current: Element | null = element; current; current = composedParentOf(current)) {
+    depth += 1;
+  }
+  return depth;
+};
+
+const composedParentOf = (element: Element): Element | null => {
+  if (element.parentElement) return element.parentElement;
+  const root = element.getRootNode();
+  return root instanceof ShadowRoot ? root.host : null;
+};
+
+/**
+ * Deterministic preference between two ancestor/descendant targets:
+ * lexicographic over the documented signal tiers, then smaller area, then
+ * deeper composed DOM, then stable (first-seen) order.
+ */
+export function preferRegionTarget(a: Element, b: Element): Element {
+  const signalsA = signalArray(targetSignal(a));
+  const signalsB = signalArray(targetSignal(b));
+  for (let index = 0; index < signalsA.length; index += 1) {
+    if (signalsA[index] !== signalsB[index]) {
+      return signalsA[index] > signalsB[index] ? a : b;
+    }
+  }
+  const areaA = areaOf(a);
+  const areaB = areaOf(b);
+  if (areaA !== areaB) return areaA < areaB ? a : b;
+  const depthA = composedDepth(a);
+  const depthB = composedDepth(b);
+  if (depthA !== depthB) return depthA > depthB ? a : b;
+  return a;
+}
+
+/**
+ * Weighted integer score (kept for diagnostics and back-compat; the prune
+ * uses `preferRegionTarget`'s tiered comparison). Business +6, interactive
+ * +3, content +2, id +1.
+ */
+export function semanticTargetScore(element: Element): number {
+  const signal = targetSignal(element);
+  return (
+    (signal.business ? 6 : 0) +
+    (signal.interactive ? 3 : 0) +
+    (signal.content ? 2 : 0) +
+    (signal.identity ? 1 : 0)
+  );
+}
+
+const isComposedAncestorOf = (ancestor: Element, descendant: Element): boolean => {
+  let current: Element | null = composedParentOf(descendant);
+  while (current) {
+    if (current === ancestor) return true;
+    current = composedParentOf(current);
+  }
+  return false;
+};
+
+/** True when the ancestor carries business/text context the descendant lacks. */
+const hasUniqueContext = (ancestor: Element, descendant: Element): boolean => {
+  if (hasBusinessAttribute(ancestor) && !hasBusinessAttribute(descendant)) {
+    return true;
+  }
+  const ancestorText = normalizedText(ancestor);
+  const descendantText = normalizedText(descendant);
+  return ancestorText.length > 0 && ancestorText !== descendantText;
+};
+
+/**
+ * Prune sampled targets (Goal 04, deterministic):
+ * - exact duplicates are already removed by live identity at sampling;
+ * - an ancestor/descendant pair keeps the PREFERRED element (tiered
+ *   signals, then specificity);
+ * - an ancestor that adds no unique business/text context is removed when
+ *   the descendant is preferred;
+ * - an ancestor WITH unique business/text context is kept alongside the
+ *   preferred descendant (the context is not lost);
+ * - distinct sibling cards/cells are never merged;
+ * - first-seen order is preserved.
+ */
+export function pruneRegionTargets(targets: Element[]): Element[] {
+  const kept: Element[] = [];
+  for (const target of targets) {
+    const ancestorIndex = kept.findIndex((other) =>
+      isComposedAncestorOf(other, target)
+    );
+    if (ancestorIndex >= 0) {
+      const ancestor = kept[ancestorIndex];
+      const preferred = preferRegionTarget(target, ancestor);
+      if (preferred === target) {
+        if (hasUniqueContext(ancestor, target)) {
+          kept.push(target); // ancestor context is unique: keep both
+        } else {
+          kept.splice(ancestorIndex, 1); // context-free ancestor removed
+          kept.push(target);
+        }
+      }
+      continue;
+    }
+    const descendantIndex = kept.findIndex((other) =>
+      isComposedAncestorOf(target, other)
+    );
+    if (descendantIndex >= 0) {
+      const descendant = kept[descendantIndex];
+      const preferred = preferRegionTarget(target, descendant);
+      if (preferred === target) {
+        kept.splice(descendantIndex, 1); // preferred ancestor replaces it
+        kept.push(target);
+      } else if (hasUniqueContext(target, descendant)) {
+        kept.push(target); // ancestor context is unique: keep both
+      }
+      continue;
+    }
+    kept.push(target);
+  }
+  // Final deterministic pass: multi-level chains can arrive in any point
+  // order; remove any kept ancestor that adds no unique business/text
+  // context relative to a kept descendant (fixpoint, bounded by the cap).
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let index = 0; index < kept.length; index += 1) {
+      const candidate = kept[index];
+      const descendant = kept.find(
+        (other) =>
+          other !== candidate && isComposedAncestorOf(candidate, other)
+      );
+      if (descendant && !hasUniqueContext(candidate, descendant)) {
+        kept.splice(index, 1);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return kept;
+}
+
+/** Viewport-space sampling points: inset corners, center, cell centers. */
 export function sampleRegionPoints(rect: {
   x: number;
   y: number;
   width: number;
   height: number;
 }): Array<{ x: number; y: number }> {
-  const points: Array<{ x: number; y: number }> = [];
   const left = rect.x;
   const top = rect.y;
   const right = rect.x + rect.width;
   const bottom = rect.y + rect.height;
   const centerX = left + rect.width / 2;
   const centerY = top + rect.height / 2;
-  // Always include the four corners and the center.
-  points.push(
-    { x: left, y: top },
-    { x: right - 1, y: top },
-    { x: left, y: bottom - 1 },
-    { x: right - 1, y: bottom - 1 },
-    { x: centerX, y: centerY }
+  const inset = Math.min(
+    4,
+    Math.max(1, Math.floor(Math.min(rect.width, rect.height) / 8))
   );
-  if (rect.width < 2 || rect.height < 2) return points;
-  // Bounded adaptive grid: sample every REGION_GRID_STRIDE px, capped.
-  const columns = Math.min(
-    Math.max(1, Math.ceil(rect.width / REGION_GRID_STRIDE)),
-    24
-  );
-  const rows = Math.min(
-    Math.max(1, Math.ceil(rect.height / REGION_GRID_STRIDE)),
-    24
-  );
-  for (let row = 0; row < rows; row += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      if (points.length >= MAX_REGION_SAMPLE_POINTS) return points;
-      points.push({
-        x: left + ((column + 0.5) * rect.width) / columns,
-        y: top + ((row + 0.5) * rect.height) / rows,
-      });
-    }
-  }
-  return points;
-}
-
-/**
- * Documented semantic score for ancestor/descendant pruning (Goal 03):
- * NocoBase business elements (+3), interactive controls (+2), and
- * user-defined source components (+1) are preferred; ties keep the
- * deeper (more specific) element.
- */
-export function semanticTargetScore(element: Element): number {
-  let score = 0;
-  if (
-    element.hasAttribute("data-ai-page-element") ||
-    Array.from(element.attributes).some((attribute) =>
-      attribute.name.startsWith("data-nb-")
-    )
-  ) {
-    score += 3;
-  }
-  if (isInteractiveControl(element)) score += 2;
-  if (element.id) score += 1;
-  return score;
-}
-
-const isComposedAncestorOf = (ancestor: Element, descendant: Element): boolean => {
-  let current: Element | null = descendant.parentElement;
-  while (current) {
-    if (current === ancestor) return true;
-    current = current.parentElement;
-  }
-  const root = descendant.getRootNode();
-  if (root instanceof ShadowRoot) {
-    let host: Element | null = root.host;
-    while (host) {
-      if (host === ancestor) return true;
-      host = host.parentElement;
-    }
-  }
-  return false;
-};
-
-/**
- * Prune sampled targets: when one target is a composed ancestor of
- * another, keep the one with the higher semantic score. Ties keep the
- * descendant (the more specific element). Deterministic and bounded.
- */
-export function pruneRegionTargets(targets: Element[]): Element[] {
-  const kept: Element[] = [];
-  for (const target of targets) {
-    // A kept element is a composed ancestor of the new target: keep the
-    // descendant unless the ancestor scores STRICTLY higher.
-    const ancestorIndex = kept.findIndex((other) =>
-      isComposedAncestorOf(other, target)
+  // Inset corners, clamped inside the rectangle (tiny regions).
+  const corner = (x: number, y: number) => ({
+    x: Math.min(Math.max(x, left), Math.max(left, right - 1)),
+    y: Math.min(Math.max(y, top), Math.max(top, bottom - 1)),
+  });
+  const points: Array<{ x: number; y: number }> = [
+    corner(left + inset, top + inset),
+    corner(right - inset, top + inset),
+    corner(left + inset, bottom - inset),
+    corner(right - inset, bottom - inset),
+    { x: centerX, y: centerY },
+  ];
+  if (rect.width >= 2 && rect.height >= 2) {
+    const columns = clamp(
+      Math.ceil(rect.width / REGION_GRID_DIVISOR),
+      REGION_GRID_MIN,
+      REGION_GRID_MAX
     );
-    if (ancestorIndex >= 0) {
-      // The new target is a descendant of a kept ancestor: keep the
-      // descendant when it scores at least as high (ties keep the
-      // descendant).
-      if (
-        semanticTargetScore(target) >=
-        semanticTargetScore(kept[ancestorIndex])
-      ) {
-        kept.splice(ancestorIndex, 1);
-        kept.push(target);
-      }
-      continue;
-    }
-    // The new target is a composed ancestor of a kept element: replace the
-    // descendant only when the ancestor scores strictly higher (ties keep
-    // the descendant).
-    const descendantIndex = kept.findIndex((other) =>
-      isComposedAncestorOf(target, other)
+    const rows = clamp(
+      Math.ceil(rect.height / REGION_GRID_DIVISOR),
+      REGION_GRID_MIN,
+      REGION_GRID_MAX
     );
-    if (descendantIndex >= 0) {
-      if (
-        semanticTargetScore(target) >
-        semanticTargetScore(kept[descendantIndex])
-      ) {
-        kept.splice(descendantIndex, 1);
-        kept.push(target);
+    for (let row = 0; row < rows; row += 1) {
+      for (let column = 0; column < columns; column += 1) {
+        points.push({
+          x: left + ((column + 0.5) * rect.width) / columns,
+          y: top + ((row + 0.5) * rect.height) / rows,
+        });
       }
-      continue;
     }
-    kept.push(target);
   }
-  return kept;
+  // Deduplicate rounded coordinates; bounded at 69 points.
+  const seen = new Set<string>();
+  const unique: Array<{ x: number; y: number }> = [];
+  for (const point of points) {
+    const key = `${Math.round(point.x)},${Math.round(point.y)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(point);
+    if (unique.length >= MAX_REGION_SAMPLE_POINTS) break;
+  }
+  return unique;
 }
 
 /**
@@ -171,3 +322,4 @@ export function sampleRegionTargets(
   return pruneRegionTargets(targets).slice(0, MAX_REGION_TARGETS);
 }
 
+export type { Region };

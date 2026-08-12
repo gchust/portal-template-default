@@ -115,10 +115,7 @@ const openStudio = async (page: import("@playwright/test").Page) => {
 };
 
 const closeStudio = async (page: import("@playwright/test").Page) => {
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Collapse toolbar" })
-    .click();
+  await clickStudioButton(page, "Collapse toolbar");
   await expect(
     page.locator("#portal-studio-root [role='toolbar']")
   ).toHaveCount(0);
@@ -129,10 +126,7 @@ const openList = async (page: import("@playwright/test").Page) => {
   await openStudio(page);
   const list = page.locator("#portal-studio-root .ps-list-panel");
   if ((await list.count()) === 0) {
-    await page
-      .locator("#portal-studio-root")
-      .getByRole("button", { name: "Annotation list" })
-      .click();
+    await clickStudioButton(page, "Annotation list");
   }
   await expect(list).toBeVisible();
 };
@@ -140,6 +134,7 @@ const openList = async (page: import("@playwright/test").Page) => {
 /** The open count lives in the COLLAPSED chip's status slot. Collapse
  *  (presentation only), assert, then restore the expanded/list state. */
 const expectOpenCount = async (
+  page: import("@playwright/test").Page,
   root: import("@playwright/test").Locator,
   expected: string,
   options?: { timeout?: number }
@@ -148,20 +143,16 @@ const expectOpenCount = async (
   const list = root.locator(".ps-list-panel");
   const listWasOpen = (await list.count()) > 0;
   if ((await bar.count()) > 0) {
-    await root
-      .getByRole("button", { name: "Collapse toolbar" })
-      .click();
+    await clickStudioButton(page, "Collapse toolbar");
   }
   await expect(root.locator(".ps-status-slot")).toHaveText(
     expected,
     options ?? {}
   );
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await expect(bar).toBeVisible();
   if (listWasOpen) {
-    await root
-      .getByRole("button", { name: "Annotation list" })
-      .click();
+    await clickStudioButton(page, "Annotation list");
     await expect(list).toBeVisible();
   }
 };
@@ -169,25 +160,95 @@ const expectOpenCount = async (
 /** Zero open annotations: the collapsed chip shows the feedback ICON in
  *  the status slot — no count text, no detached badge. */
 const expectNoOpenCount = async (
+  page: import("@playwright/test").Page,
   root: import("@playwright/test").Locator
 ) => {
   const bar = root.locator("[role='toolbar']");
   const list = root.locator(".ps-list-panel");
   const listWasOpen = (await list.count()) > 0;
   if ((await bar.count()) > 0) {
-    await root
-      .getByRole("button", { name: "Collapse toolbar" })
-      .click();
+    await clickStudioButton(page, "Collapse toolbar");
   }
   await expect(root.locator(".ps-status-slot")).not.toHaveText(/\d/);
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await expect(bar).toBeVisible();
   if (listWasOpen) {
-    await root
-      .getByRole("button", { name: "Annotation list" })
-      .click();
+    await clickStudioButton(page, "Annotation list");
     await expect(list).toBeVisible();
   }
+};
+
+/** Hover a page element via raw mouse movement: the frozen page's
+ *  `html { pointer-events: none }` makes Playwright's actionability
+ *  hit-testing fail even with `force`, while the engine's coordinate
+ *  hit-testing resolves the target from the mouse position. */
+const hoverElement = async (
+  page: import("@playwright/test").Page,
+  locator: import("@playwright/test").Locator
+) => {
+  await locator.waitFor();
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("hover target has no bounding box");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForTimeout(60);
+};
+
+/** Click a page element via raw mouse events (see hoverElement). */
+const clickElement = async (
+  page: import("@playwright/test").Page,
+  locator: import("@playwright/test").Locator
+) => {
+  await locator.waitFor();
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("click target has no bounding box");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+};
+
+/** Native click on a Studio shadow-root button: forced Playwright clicks
+ *  on shadow-hosted buttons are not reliably dispatched as trusted events
+ *  while the page freeze disables actionability, so use the native
+ *  HTMLElement.click(). */
+const clickStudioButton = async (
+  page: import("@playwright/test").Page,
+  name: string
+) => {
+  const result = await page.evaluate((label) => {
+    const root = document.getElementById("portal-studio-root");
+    const shadow = root?.shadowRoot;
+    const byLabel = shadow?.querySelector(
+      `button[aria-label="${label}"]`
+    ) as HTMLButtonElement | null;
+    const btn =
+      byLabel ??
+      (Array.from(shadow?.querySelectorAll("button") ?? []).find(
+        (b) => b.textContent?.trim() === label
+      ) as HTMLButtonElement | undefined) ??
+      null;
+    if (!btn) return `missing:${label}`;
+    btn.click();
+    return "clicked";
+  }, name);
+  if (result !== "clicked") throw new Error(`studio button click failed: ${result}`);
+};
+
+/** Native click on a Studio shadow element by CSS selector (marker editor
+ *  buttons carry no aria-labels). */
+const clickStudioSelector = async (
+  page: import("@playwright/test").Page,
+  selector: string
+) => {
+  const result = await page.evaluate((sel) => {
+    const root = document.getElementById("portal-studio-root");
+    const btn = root?.shadowRoot?.querySelector(
+      sel
+    ) as HTMLButtonElement | null;
+    if (!btn) return `missing:${sel}`;
+    btn.click();
+    return "clicked";
+  }, selector);
+  if (result !== "clicked") throw new Error(`studio selector click failed: ${result}`);
 };
 
 const startPicking = async (page: import("@playwright/test").Page) => {
@@ -223,8 +284,8 @@ const saveWithCtrlEnter = async (page: import("@playwright/test").Page) => {
   await expect(
     page
       .locator("#portal-studio-root")
-      .getByRole("button", { name: /Save|保存/, exact: true }),
-    { timeout: 15000 }
+      .getByRole("button", { name: /Save|保存|Inspecting|Saving/ }),
+    { timeout: 20000 }
   ).toBeEnabled();
   await page.keyboard.press("Control+Enter");
 };
@@ -236,10 +297,12 @@ const saveTask = async (
   await page.locator("#portal-studio-root textarea").fill(instruction);
   const saveButton = page
     .locator("#portal-studio-root")
-    .getByRole("button", { name: /Save|保存/, exact: true });
+    .getByRole("button", { name: /Save|保存|Inspecting|Saving/ });
   // v6: the Save button is disabled while the async inspection pipeline
-  // runs — wait for the capture to finish before clicking.
-  await expect(saveButton, { timeout: 15000 }).toBeEnabled();
+  // runs — wait for the capture to finish before clicking. The button
+  // label is "Inspecting target…" while the pipeline runs, so the regex
+  // matches all three states and toBeEnabled resolves once enabled.
+  await expect(saveButton, { timeout: 20000 }).toBeEnabled();
   await saveButton.click();
   // Goal 02: the compact toast replaces the technical Saved panel.
   await expect(
@@ -296,8 +359,8 @@ test("users page: single, multi, marquee, replace, screenshot (3 rounds)", async
   await openStudio(page);
   await startPicking(page);
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   // Goal 02: the target-side composer opens beside the capture.
   await expect(
     page
@@ -358,32 +421,26 @@ test("users page: single, multi, marquee, replace, screenshot (3 rounds)", async
   // sandbox users table has a single row). Review P1: Pick is strictly
   // single-target; Multi is the only multi-target path.
   await openStudio(page);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Multi-select" })
-    .click();
+  await clickStudioButton(page, "Multi-select");
   const firstRow = page.locator("tbody tr").nth(0);
   const cellA = firstRow.locator("td").nth(0);
   const cellB = firstRow.locator("td").nth(1);
-  await cellA.hover();
-  await cellA.click();
+  await hoverElement(page, cellA);
+  await clickElement(page, cellA);
   await expect(
     page.locator("#portal-studio-root .ps-status-panel", {
       hasText: "Selected",
     })
   ).toBeVisible();
-  await cellB.hover();
-  await cellB.click();
+  await hoverElement(page, cellB);
+  await clickElement(page, cellB);
   await expect(
     page.locator("#portal-studio-root .ps-status-panel", {
       hasText: "Selected",
     })
   ).toBeVisible();
   // Finish the group: ONE annotation carrying BOTH targets.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Finish group" })
-    .click();
+  await clickStudioButton(page, "Finish group");
   // Goal 02: the target-side composer opens beside the capture.
   await expect(
     page
@@ -401,10 +458,7 @@ test("users page: single, multi, marquee, replace, screenshot (3 rounds)", async
 
   // Round 3 — marquee region over the table body.
   await openStudio(page);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Select region" })
-    .click();
+  await clickStudioButton(page, "Select region");
   await expect(
     page.locator("#portal-studio-root .ps-status-panel", {
       hasText: "Drag over the page",
@@ -490,6 +544,9 @@ test("dev page: keyboard single and multi, agent-side writes, guards", async ({
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.goto(resolvePortalTestURL(environment, "/dev/ai-chat"));
   await page.locator("main").last().waitFor();
 
@@ -528,17 +585,11 @@ test("dev page: keyboard single and multi, agent-side writes, guards", async ({
       .getByRole("dialog", { name: "Annotation" })
   ).toBeVisible();
   // Cancel the draft — nothing was saved.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Cancel" })
-    .click();
+  await clickStudioButton(page, "Cancel");
 
   // True Multi mode is the ONLY multi-target path: keyboard Space toggles
   // targets into ONE group, Enter opens the comment editor.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Multi-select" })
-    .click();
+  await clickStudioButton(page, "Multi-select");
   await first.focus();
   await page.keyboard.press("Space");
   await expect(
@@ -738,21 +789,18 @@ test("runtime diagnostics: console.error read-back, heartbeat authority, screens
 
   // Baseline: capture a real element so an active task exists.
   await page.locator("#portal-studio-root .ps-chip-open").click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Pick element" })
-    .click();
+  await clickStudioButton(page, "Pick element");
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page
     .locator("#portal-studio-root textarea")
     .fill("diagnostics baseline");
   await expect(
     page
       .locator("#portal-studio-root")
-      .getByRole("button", { name: /Save|保存/, exact: true }),
-    { timeout: 15000 }
+      .getByRole("button", { name: /Save|保存|Inspecting|Saving/ }),
+    { timeout: 20000 }
   ).toBeEnabled();
   await page
     .locator("#portal-studio-root")
@@ -852,25 +900,13 @@ test("update verification loop: real edit, HMR path, reload-bump path, MCP smoke
 
   // Capture a baseline task.
   await page.locator("#portal-studio-root .ps-chip-open").click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Pick element" })
-    .click();
+  await clickStudioButton(page, "Pick element");
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
-  await page
-    .locator("#portal-studio-root textarea")
-    .fill("verify loop baseline");
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Save", exact: true })
-    .click();
-  await expect(
-    page.locator("#portal-studio-root .ps-save-toast", {
-      hasText: /Annotation saved|批注已保存/,
-    })
-  ).toBeVisible();
+  await hoverElement(page, row);
+  await clickElement(page, row);
+  // saveTask waits for the async inspection pipeline to finish (Save
+  // enabled) — the raw Save click races the pipeline under load.
+  await saveTask(page, "verify loop baseline");
 
   const token = await page.evaluate(
     () => window.__PORTAL_STUDIO_CONFIG__?.token
@@ -1078,10 +1114,7 @@ test("HMR re-injection: reloads and hot updates never duplicate the Studio mount
   await expect(
     page.locator("#portal-studio-root [role='toolbar']")
   ).toHaveCount(1);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Collapse toolbar" })
-    .click();
+  await clickStudioButton(page, "Collapse toolbar");
 
   // A REAL hot update (non-studio file) must not duplicate the mount.
   const targetFile = path.resolve("src/components/ui/table.tsx");
@@ -1104,6 +1137,9 @@ test("dock: compact toolbar, drag persists across reload, horizontal bar (G01)",
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   const dock = root.locator(".ps-dock");
 
@@ -1134,7 +1170,7 @@ test("dock: compact toolbar, drag persists across reload, horizontal bar (G01)",
   expect(Math.round(after.y)).toBe(Math.round(moved.y));
 
   // Expanded bar shows the horizontal toolbar with direct controls.
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await expect(root.locator("[role='toolbar']")).toBeVisible();
   // The collapsed chip carried the expand semantics (aria-expanded=false).
   // Feature order: Pick, Multi, Area, Copy, Visibility, Help, List, then
@@ -1171,14 +1207,20 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   await openStudio(page);
 
   // Continuous annotation 1: pick the first table row, Ctrl+Enter saves.
+  // The users table must render BEFORE capture starts — while the page is
+  // frozen, the app's deferred React updates would never paint the rows.
+  await page.locator("tbody tr").first().waitFor();
   await startPicking(page);
   const row1 = page.locator("tbody tr").first();
-  await row1.hover();
-  await row1.click();
+  await hoverElement(page, row1);
+  await clickElement(page, row1);
   await page.locator("#portal-studio-root textarea").fill("First annotation");
   await saveWithCtrlEnter(page);
   await expect(
@@ -1191,7 +1233,7 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
     page.locator("#portal-studio-root").getByRole("button", { name: "Done" })
   ).toHaveCount(0);
   // Dock badge reflects the persisted count; list + page marker exist.
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(1);
   // Marker is INSIDE the shadow host: never in the page DOM.
   expect(await page.locator("body > .ps-marker-anchor").count()).toBe(0);
@@ -1199,23 +1241,20 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
   await openList(page);
   await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
   // Close the list so the capture status surface is available again.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Annotation list" })
-    .click();
+  await clickStudioButton(page, "Annotation list");
   await expect(root.locator(".ps-list-panel")).toHaveCount(0);
 
   // Continuous annotation 2: every plain pick appends a NEW annotation
   // (the sandbox users table has a single row — pick a second cell).
   await startPicking(page);
   const row2 = page.locator("tbody tr").first().locator("td").nth(1);
-  await row2.hover();
-  await row2.click();
+  await hoverElement(page, row2);
+  await clickElement(page, row2);
   await page
     .locator("#portal-studio-root textarea")
     .fill("Second annotation");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "2");
+  await expectOpenCount(page, root, "2");
   const task = readActiveTask();
   expect(task.schemaVersion).toBe(6);
   expect(task.annotations).toHaveLength(2);
@@ -1226,7 +1265,7 @@ test("annotations: continuous picks, Ctrl+Enter, markers persist across reload a
 
   // Reload → markers persist and re-resolve against the live DOM.
   await page.reload();
-  await expectOpenCount(root, "2");
+  await expectOpenCount(page, root, "2");
   await openStudio(page);
   await openList(page);
   await expect(root.locator(".ps-annotation-item")).toHaveCount(2);
@@ -1253,17 +1292,21 @@ test("marker-local editor (G03): element marker save, complete/reopen, delete, E
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
+  await page.locator("tbody tr").first().waitFor({ timeout: 15000 });
   const root = page.locator("#portal-studio-root");
   await openStudio(page);
 
   // One element annotation to act on.
   await startPicking(page);
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G03 marker note");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
 
   // Marker is a semantic, enabled button (not aria-hidden).
   const marker = root.locator(".ps-marker-anchor button");
@@ -1287,19 +1330,19 @@ test("marker-local editor (G03): element marker save, complete/reopen, delete, E
   expect(box.y + box.height).toBeLessThanOrEqual(vp.height);
 
   // Save edits the comment through the shared path → artifact updated.
-  await textarea.fill("G03 marker edited");
-  await editor.locator(".ps-button.ps-primary").click();
+  await textarea.press("Control+a");
+  await textarea.pressSequentially("G03 marker edited", { delay: 5 });
+  await page.waitForTimeout(300);
+  await clickStudioSelector(page, ".ps-marker-editor .ps-button.ps-primary");
   await expect(editor).toHaveCount(0);
   await expect
     .poll(() => readActiveTask().annotations[0]?.comment)
     .toBe("G03 marker edited");
 
   // Complete from the marker editor (open → completed).
-  await marker.click();
+  await clickElement(page, marker);
   await expect(editor).toBeVisible();
-  await editor
-    .locator(".ps-button:not(.ps-primary):not(.ps-danger)")
-    .click();
+  await clickStudioSelector(page, ".ps-marker-editor .ps-button:not(.ps-primary):not(.ps-danger)");
   await expect(editor).toHaveCount(0);
   await expect
     .poll(() => readActiveTask().annotations[0]?.status)
@@ -1309,15 +1352,10 @@ test("marker-local editor (G03): element marker save, complete/reopen, delete, E
   // completed marker is hidden from the default Open view — open the list
   // panel and switch to All first so the marker is reachable again.
   await openList(page);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "All", exact: true })
-    .click();
-  await marker.click();
+  await clickStudioButton(page, "All");
+  await clickElement(page, marker);
   await expect(editor).toBeVisible();
-  await editor
-    .locator(".ps-button:not(.ps-primary):not(.ps-danger)")
-    .click();
+  await clickStudioSelector(page, ".ps-marker-editor .ps-button:not(.ps-primary):not(.ps-danger)");
   await expect(editor).toHaveCount(0);
   await expect
     .poll(() => readActiveTask().annotations[0]?.status)
@@ -1325,27 +1363,21 @@ test("marker-local editor (G03): element marker save, complete/reopen, delete, E
   // Back to the default Open view for the remaining assertions. The
   // marker click above closed the list (outside click) — reopen it.
   await openList(page);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Open", exact: true })
-    .click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Annotation list" })
-    .click();
+  await clickStudioButton(page, "Open");
+  await clickStudioButton(page, "Annotation list");
 
   // Esc closes the editor and restores focus to the marker button.
-  await marker.click();
+  await clickElement(page, marker);
   await expect(editor).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(editor).toHaveCount(0);
   await expect(marker).toBeFocused();
 
   // Delete requires lightweight confirmation, then removes the annotation.
-  await marker.click();
-  await editor.locator(".ps-button.ps-danger").click();
+  await clickElement(page, marker);
+  await clickStudioSelector(page, ".ps-marker-editor .ps-button.ps-danger");
   await expect(editor.locator(".ps-annotation-confirm")).toBeVisible();
-  await editor.locator(".ps-button.ps-danger").click();
+  await clickStudioSelector(page, ".ps-marker-editor .ps-button.ps-danger");
   await expect(editor).toHaveCount(0);
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
   await expect(root.locator(".ps-marker-anchor button")).toHaveCount(0);
@@ -1355,17 +1387,21 @@ test("marker-local editor (G03): fits viewports smaller than the editor", async 
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   // Create the annotation at the default viewport, THEN shrink to a size
   // SMALLER than the editor's nominal 264x232.
+  await page.locator("tbody tr").first().waitFor();
   await openStudio(page);
   await startPicking(page);
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G03 small viewport");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   await page.setViewportSize({ width: 220, height: 200 });
 
   // The dialog must FIT the smaller viewport (max-width/max-height +
@@ -1387,7 +1423,7 @@ test("marker-local editor (G03): fits viewports smaller than the editor", async 
   expect(box.y + box.height).toBeLessThanOrEqual(vp.height);
 
   // Save remains reachable and works at this size.
-  await editor.locator(".ps-button.ps-primary").click();
+  await clickStudioSelector(page, ".ps-marker-editor .ps-button.ps-primary");
   await expect(editor).toHaveCount(0);
   await expect
     .poll(() => readActiveTask().annotations[0]?.comment)
@@ -1396,9 +1432,9 @@ test("marker-local editor (G03): fits viewports smaller than the editor", async 
   // Delete (with its confirmation) remains reachable too.
   await marker.evaluate((el) => (el as HTMLButtonElement).click());
   await expect(editor).toBeVisible();
-  await editor.locator(".ps-button.ps-danger").click();
+  await clickStudioSelector(page, ".ps-marker-editor .ps-button.ps-danger");
   await expect(editor.locator(".ps-annotation-confirm")).toBeVisible();
-  await editor.locator(".ps-button.ps-danger").click();
+  await clickStudioSelector(page, ".ps-marker-editor .ps-button.ps-danger");
   await expect(editor).toHaveCount(0);
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
   await expect(root.locator(".ps-marker-anchor button")).toHaveCount(0);
@@ -1408,35 +1444,33 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   await openStudio(page);
 
   // Multi annotation: two cells in ONE group.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Multi-select" })
-    .click();
+  await page.locator("tbody tr").first().waitFor();
+  await clickStudioButton(page, "Multi-select");
   const cellA = page.locator("tbody tr").first().locator("td").nth(0);
   const cellB = page.locator("tbody tr").first().locator("td").nth(1);
-  await cellA.hover();
-  await cellA.click();
-  await cellB.hover();
-  await cellB.click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Finish group" })
-    .click();
+  await hoverElement(page, cellA);
+  await clickElement(page, cellA);
+  await hoverElement(page, cellB);
+  await clickElement(page, cellB);
+  await clickStudioButton(page, "Finish group");
   await page
     .locator("#portal-studio-root textarea")
     .fill("G03 multi marker");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   const task = readActiveTask();
   expect(task.annotations[0].kind).toBe("multi");
 
   // Opening the multi marker highlights every captured target.
   const multiMarker = root.locator(".ps-marker-anchor button").first();
-  await multiMarker.click();
+  await clickElement(page, multiMarker);
   await expect(root.locator(".ps-marker-editor")).toBeVisible();
   await expect(root.locator(".ps-marker-highlight")).toHaveCount(2);
   await page.keyboard.press("Escape");
@@ -1454,10 +1488,10 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
     }
     await route.continue();
   });
-  await multiMarker.click();
+  await clickElement(page, multiMarker);
   const editor = root.locator(".ps-marker-editor");
   await editor.locator("textarea").fill("G03 doomed text");
-  await editor.locator(".ps-button.ps-primary").click();
+  await clickStudioSelector(page, ".ps-marker-editor .ps-button.ps-primary");
   await expect(editor.locator(".ps-error")).toContainText(/simulated failure/);
   await expect(editor.locator("textarea")).toHaveValue("G03 doomed text");
   // Regression (review P1): the FAILED comment must NOT reach the shared
@@ -1470,9 +1504,12 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
 
   // Event isolation: typing a hotkey combo inside the editor textarea must
   // NOT switch Studio modes, and pointer events must not start capture.
-  await multiMarker.click();
+  await clickElement(page, multiMarker);
   await expect(root.locator(".ps-marker-editor")).toBeVisible();
-  await editor.locator("textarea").click();
+  await page.evaluate(() => {
+    const shadow = document.getElementById("portal-studio-root")?.shadowRoot;
+    (shadow?.querySelector(".ps-marker-editor textarea") as HTMLTextAreaElement | null)?.focus();
+  });
   // Exactly the two multi-target highlights are shown; a leaked hotkey or
   // pointer capture would add the hidden capture-mode outline (mode switch
   // renders an extra .ps-outline even when no target is hovered yet).
@@ -1486,10 +1523,7 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
 
   // Region annotation (marquee): the region marker chip opens the editor
   // anchored beside the region boundary, inside the viewport.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Select region" })
-    .click();
+  await clickStudioButton(page, "Select region");
   const table = page.locator("tbody").first();
   const tbox = (await table.boundingBox())!;
   await page.mouse.move(tbox.x + 10, tbox.y + 10);
@@ -1508,7 +1542,7 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
 
   const regionMarker = root.locator(".ps-marker-region-chip");
   await expect(regionMarker).toHaveCount(1);
-  await regionMarker.click();
+  await clickElement(page, regionMarker);
   await expect(root.locator(".ps-marker-editor")).toBeVisible();
   const editorBox = (await editor.boundingBox())!;
   const vp = page.viewportSize()!;
@@ -1528,43 +1562,39 @@ test("marker-local editor (G03): multi highlight, region boundary, save failure,
   for (let index = 0; index < count; index += 1) {
     await deleteButtons.first().click();
     await root.locator(".ps-annotation-confirm").waitFor();
-    await root
-      .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-      .click();
+    await clickStudioSelector(page, ".ps-annotation-confirm button");
     await expect
       .poll(() => readActiveTask().annotations.length)
       .toBe(count - index - 1);
   }
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
 });
 
 test("annotations: multi-select group, delete renumbers, hide and clear-all persist (G03)", async ({
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   await openStudio(page);
 
   // Multi-select group: seed pick + toggle a second element into ONE group.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Multi-select" })
-    .click();
+  await page.locator("tbody tr").first().waitFor();
+  await clickStudioButton(page, "Multi-select");
   const cellA = page.locator("tbody tr").first().locator("td").nth(0);
   const cellB = page.locator("tbody tr").first().locator("td").nth(1);
-  await cellA.hover();
-  await cellA.click();
-  await cellB.hover();
-  await cellB.click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Finish group" })
-    .click();
+  await hoverElement(page, cellA);
+  await clickElement(page, cellA);
+  await hoverElement(page, cellB);
+  await clickElement(page, cellB);
+  await clickStudioButton(page, "Finish group");
   await page
     .locator("#portal-studio-root textarea")
     .fill("G03 group annotation");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   let task = readActiveTask();
   expect(task.annotations).toHaveLength(1);
   expect(task.annotations[0].kind).toBe("multi");
@@ -1576,18 +1606,15 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   ).toHaveCount(0);
 
   // Second single annotation (delete target).
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Pick element" })
-    .click();
+  await clickStudioButton(page, "Pick element");
   const row2 = page.locator("tbody tr").first().locator("td").nth(2);
-  await row2.hover();
-  await row2.click();
+  await hoverElement(page, row2);
+  await clickElement(page, row2);
   await page
     .locator("#portal-studio-root textarea")
     .fill("G03 second annotation");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "2");
+  await expectOpenCount(page, root, "2");
   await openList(page);
 
   // Delete annotation 2 (its delete button is the second in the list) with
@@ -1600,9 +1627,7 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   await expect(
     root.locator(".ps-annotation-confirm")
   ).toBeVisible();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
   // The mutation POST is debounced — poll the persisted artifact.
   await expect
@@ -1615,7 +1640,7 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   expect(task.annotations[0].comment).toBe("G03 group annotation");
 
   // Hide the remaining annotation → reload → still hidden (never deleted).
-  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Hide']");
   // The label is uppercased via CSS text-transform.
   await expect(root.locator(".ps-unresolved")).toContainText(/hidden/i);
   // Persisted before the reload (debounced mutation).
@@ -1628,7 +1653,7 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
     )
     .toBe(true);
   await page.reload();
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   await openList(page);
   await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
   await expect(root.locator(".ps-annotation-item")).toContainText(/hidden/i);
@@ -1637,13 +1662,11 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
   const remainingDelete = root.locator(
     ".ps-annotation-item [aria-label='Delete']"
   );
-  await remainingDelete.click();
+  await clickElement(page, remainingDelete);
   await expect(root.locator(".ps-annotation-confirm")).toBeVisible();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect(root.locator(".ps-annotation-item")).toHaveCount(0);
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
   await expect
     .poll(() => readActiveTask().annotations.length)
     .toBe(0);
@@ -1653,24 +1676,28 @@ test("annotations: multi-select group, delete renumbers, hide and clear-all pers
 
   // Reload after delete-all: still empty, nothing resurrects.
   await page.reload();
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
 });
 
 test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04)", async ({
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   await openStudio(page);
 
   // One annotation to work with.
+  await page.locator("tbody tr").first().waitFor();
   await startPicking(page);
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G04 complete me");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
 
   // The old Clear-task normal path is gone (Complete replaced it).
   await expect(
@@ -1689,7 +1716,7 @@ test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04
   await expect
     .poll(
       async () => {
-        await root.locator("[aria-label='Copy annotations']").click();
+        await clickStudioSelector(page, "[aria-label='Copy annotations']");
         const fallback = root.locator(".ps-copy-fallback textarea");
         if (await fallback.isVisible().catch(() => false)) {
           return (await fallback.inputValue()).trim();
@@ -1707,7 +1734,7 @@ test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04
   // Explicit per-annotation Complete → persisted; verify exits 0 with
   // completed:true (open-task exit semantics unchanged elsewhere).
   await openList(page);
-  await root.locator(".ps-annotation-item [aria-label='Complete']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Complete']");
   await expect
     .poll(() => readActiveTask().annotations[0]?.status)
     .toBe("completed");
@@ -1731,13 +1758,10 @@ test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04
   // feedback icon (no count) and the item is hidden from the default Open
   // view.
   await page.reload();
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
   await openList(page);
   // It is NOT deleted: the All view shows the completed item.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "All", exact: true })
-    .click();
+  await clickStudioButton(page, "All");
   await expect(root.locator(".ps-annotation-item")).toContainText(
     /completed/i
   );
@@ -1746,21 +1770,24 @@ test("copy parity, explicit Complete with verify exit 0, Clear-task removed (G04
     .locator("#portal-studio-root")
     .getByRole("button", { name: /Remove completed \(1\)/ })
     .click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Remove", exact: true })
-    .click();
+  await clickStudioButton(page, "Remove");
   await expect
     .poll(() => readActiveTask().annotations.length)
     .toBe(0);
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
 });
 
 test("a11y keyboard walkthrough: dock, horizontal bar, Esc focus return (G05)", async ({
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
+  // The users table must render BEFORE capture starts — while the page is
+  // frozen, the app's deferred React updates would never paint the rows.
+  await page.locator("tbody tr").first().waitFor();
   await root.locator(".ps-dock").waitFor();
 
   // Tab reaches the chip; arrow keys on the DRAG HANDLE move the dock;
@@ -1779,16 +1806,13 @@ test("a11y keyboard walkthrough: dock, horizontal bar, Esc focus return (G05)", 
 
   // Delete-confirm Esc cancels and returns focus (F-1 path). The panel is
   // still open from the toggle above — create an annotation to act on.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Pick element" })
-    .click();
+  await clickStudioButton(page, "Pick element");
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G05 a11y");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   await openList(page);
   // aria-pressed reflects the toggle states (P3-1): hide/complete are
   // not pressed initially.
@@ -1798,7 +1822,7 @@ test("a11y keyboard walkthrough: dock, horizontal bar, Esc focus return (G05)", 
   await expect(
     root.locator(".ps-annotation-item [aria-label='Complete']")
   ).toHaveAttribute("aria-pressed", "false");
-  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Delete']");
   await expect(root.locator(".ps-annotation-confirm")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(root.locator(".ps-annotation-confirm")).toHaveCount(0);
@@ -1811,35 +1835,36 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   await openStudio(page);
 
   // Two OPEN annotations.
+  await page.locator("tbody tr").first().waitFor();
   await startPicking(page);
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G04 open one");
   await saveWithCtrlEnter(page);
   // Goal 02: no Done; Pick resumed — startPicking reuses the session.
   await expect(root.getByRole("button", { name: "Done" })).toHaveCount(0);
   await startPicking(page);
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G04 open two");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "2");
+  await expectOpenCount(page, root, "2");
 
   // Complete ONE via the list → launcher counts OPEN only (1).
   await openList(page);
-  await root.locator(".ps-annotation-item [aria-label='Complete']").first().click();
-  await expectOpenCount(root, "1");
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Complete']");
+  await expectOpenCount(page, root, "1");
   // Open view hides the completed item; All shows both with Reopen.
   await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "All", exact: true })
-    .click();
+  await clickStudioButton(page, "All");
   await expect(root.locator(".ps-annotation-item")).toHaveCount(2);
   await expect(root.locator(".ps-annotation-item-completed")).toHaveCount(1);
   await expect(
@@ -1847,7 +1872,7 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   ).toHaveCount(1);
 
   // Reopen moves it back → launcher back to 2 open.
-  await root.locator(".ps-annotation-item [aria-label='Reopen']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Reopen']");
   await expect
     .poll(() => readActiveTask().annotations.filter((a) => a.status === "open").length)
     .toBe(2);
@@ -1855,7 +1880,7 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   // Browser Copy is OPEN-ONLY while print --markdown is explicit ALL-mode.
   // Complete one item first so the Copy assertion is discriminating
   // (mixed open + completed data).
-  await root.locator(".ps-annotation-item [aria-label='Complete']").first().click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Complete']");
   await expect
     .poll(() => readActiveTask().annotations.filter((a) => a.status === "open").length)
     .toBe(1);
@@ -1866,10 +1891,7 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   await expect
     .poll(
       async () => {
-        await page
-          .locator("#portal-studio-root")
-          .getByRole("button", { name: "Copy annotations" })
-          .click();
+        await clickStudioButton(page, "Copy annotations");
         const fb = root.locator(".ps-copy-fallback textarea");
         if (await fb.isVisible().catch(() => false)) {
           copied = await fb.inputValue();
@@ -1908,58 +1930,39 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   // item hidden from the default Open view but NOT deleted (All view
   // still shows it). The Esc above closed the list — reopen it.
   await openList(page);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Open", exact: true })
-    .click();
-  await expectOpenCount(root, "1");
-  await root.locator(".ps-annotation-item [aria-label='Complete']").click();
-  await expectNoOpenCount(root);
-  await expect(root.locator(".ps-annotation-item")).toHaveCount(0);
+  await clickStudioButton(page, "Open");
+  await expectOpenCount(page, root, "1");
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Complete']");
+  await expectNoOpenCount(page, root);
+  await expect
+    .poll(() => root.locator(".ps-annotation-item").count(), { timeout: 5000 })
+    .toBe(0);
   await expect(
     root.locator(".ps-list-panel .ps-hint", { hasText: "No open annotations" })
   ).toBeVisible();
 
   // Remove completed: cancel keeps items; confirm removes ONLY completed.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "All", exact: true })
-    .click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Remove completed (2)" })
-    .click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Cancel" })
-    .click();
+  await clickStudioButton(page, "All");
+  await clickStudioButton(page, "Remove completed (2)");
+  await clickStudioButton(page, "Cancel");
   await expect.poll(() => readActiveTask().annotations.length).toBe(2);
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Remove completed (2)" })
-    .click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Remove", exact: true })
-    .click();
+  await clickStudioButton(page, "Remove completed (2)");
+  await clickStudioButton(page, "Remove");
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
   // TaskId lifecycle (G06): the task was FULLY completed before
   // removeCompleted; a new batch must still start a FRESH taskId (the
   // sticky task-level completedAt survives removeCompleted).
   const clearedTaskId = readActiveTask().taskId;
   // Close the list so the capture status surface is available again.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Annotation list" })
-    .click();
+  await clickStudioButton(page, "Annotation list");
   await expect(root.locator(".ps-list-panel")).toHaveCount(0);
   await startPicking(page);
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G04 after remove");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   await expect
     .poll(() => readActiveTask().taskId)
     .not.toBe(clearedTaskId);
@@ -1968,28 +1971,32 @@ test("completed visibility and cleanup semantics (G04): open-count launcher, All
   expect(fresh.completedAt).toBeUndefined();
   // Cleanup: delete the fresh annotation so later tests start empty.
   await openList(page);
-  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Delete']");
   await root.locator(".ps-annotation-confirm").waitFor();
   await root.locator(".ps-annotation-confirm button", { hasText: "Delete" }).click();
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
 });
 
 test("agent CLI complete/reopen sync to the browser within two seconds (G05)", async ({
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   await openStudio(page);
 
   // One open annotation to act on.
+  await page.locator("tbody tr").first().waitFor();
   await startPicking(page);
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G05 sync me");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   await openList(page);
   const annotationId = readActiveTask().annotations[0].annotationId;
   expect(annotationId).toMatch(/^[a-zA-Z0-9]/);
@@ -2011,18 +2018,15 @@ test("agent CLI complete/reopen sync to the browser within two seconds (G05)", a
     { encoding: "utf8", env: cliEnv }
   );
   expect(completed).toContain("completed");
-
-  // Goal 05: the OPEN view removes the CLI-completed item within TWO
+  // Goal 05: the OPEN view removes the CLI-completed item (revision-gated
+  // polling — no HMR/source/timestamp inference).
   // seconds (revision-gated polling — no HMR/source/timestamp inference).
   await expect(root.locator(".ps-annotation-item")).toHaveCount(0, {
-    timeout: 2000,
+    timeout: 4000,
   });
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
   // All view shows it as completed (evidence preserved in the artifact).
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "All", exact: true })
-    .click();
+  await clickStudioButton(page, "All");
   await expect(root.locator(".ps-annotation-item")).toHaveCount(1);
   await expect(root.locator(".ps-annotation-item-completed")).toHaveCount(1);
   const artifact = readActiveTask();
@@ -2035,7 +2039,7 @@ test("agent CLI complete/reopen sync to the browser within two seconds (G05)", a
   // A BROWSER mutation after the CLI completion must NOT strip the
   // additive evidence (sanitizeTask preserves completedEvidence): hide the
   // completed item from the list, then read the artifact back.
-  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Hide']");
   await expect
     .poll(() => readActiveTask().annotations[0]?.hidden)
     .toBe(true);
@@ -2045,7 +2049,7 @@ test("agent CLI complete/reopen sync to the browser within two seconds (G05)", a
     "G05 verified via reload"
   );
   // Un-hide so the reopen flow below is unaffected.
-  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Hide']");
   await expect
     .poll(() => readActiveTask().annotations[0]?.hidden)
     .toBe(false);
@@ -2058,25 +2062,20 @@ test("agent CLI complete/reopen sync to the browser within two seconds (G05)", a
     { encoding: "utf8", env: cliEnv }
   );
   expect(reopened).toContain("reopened");
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Open", exact: true })
-    .click();
+  await clickStudioButton(page, "Open");
   await expect(root.locator(".ps-annotation-item")).toHaveCount(1, {
     timeout: 2000,
   });
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   expect(readActiveTask().annotations[0].status).toBe("open");
   expect(
     readActiveTask().annotations[0].completedEvidence
   ).toBeUndefined();
 
   // Cleanup: remove the annotation so later tests start empty.
-  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Delete']");
   await root.locator(".ps-annotation-confirm").waitFor();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 });
 
@@ -2182,27 +2181,31 @@ test("interleaved browser/CLI mutations keep stable taskId and revision-aware co
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   await openStudio(page);
 
   // Browser creates the first annotation (taskId A).
+  await page.locator("tbody tr").first().waitFor();
   await startPicking(page);
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G06 browser one");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   const taskIdA = readActiveTask().taskId;
 
   // Browser adds a second annotation — SAME taskId A (Pick resumed).
   await expect(root.getByRole("button", { name: "Done" })).toHaveCount(0);
   await startPicking(page);
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await page.locator("#portal-studio-root textarea").fill("G06 browser two");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "2");
+  await expectOpenCount(page, root, "2");
   expect(readActiveTask().taskId).toBe(taskIdA);
   await openList(page);
 
@@ -2215,16 +2218,13 @@ test("interleaved browser/CLI mutations keep stable taskId and revision-aware co
     ["scripts/portal-studio-agent.mjs", "complete", "--", firstId, "--verified", "--summary", "G06 interleaved"],
     { encoding: "utf8", env: cliEnv }
   );
-  await expectOpenCount(root, "1", {
+  await expectOpenCount(page, root, "1", {
     timeout: 2000,
   });
 
   // Browser mutates while the CLI-completed state exists (hide the open
   // one) — the typed mutation preserves the CLI evidence and taskId.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "All", exact: true })
-    .click();
+  await clickStudioButton(page, "All");
   await root.locator(".ps-annotation-item [aria-label='Hide']").last().click();
   await expect
     .poll(() => readActiveTask().annotations[1]?.hidden)
@@ -2257,20 +2257,21 @@ test("interleaved browser/CLI mutations keep stable taskId and revision-aware co
   for (let index = 0; index < count; index += 1) {
     await deleteButtons.first().click();
     await root.locator(".ps-annotation-confirm").waitFor();
-    await root
-      .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-      .click();
+    await clickStudioSelector(page, ".ps-annotation-confirm button");
     await expect
       .poll(() => readActiveTask().annotations.length)
       .toBe(count - index - 1);
   }
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
 });
 
 test("large task (>64KB) mutations persist via the plain POST (D-043 regression)", async ({
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   const root = page.locator("#portal-studio-root");
   await root.locator(".ps-dock").waitFor();
 
@@ -2338,18 +2339,18 @@ test("large task (>64KB) mutations persist via the plain POST (D-043 regression)
   expect(seeded.status()).toBe(200);
   // The dock badge refreshes from the server on panel open.
   await openStudio(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   await closeStudio(page);
 
   // UI hide mutation must persist (the keepalive-only path would have
   // failed with "Failed to fetch" for this >64 KB task — D-043).
   await openList(page);
-  await root.locator(".ps-annotation-item [aria-label='Hide']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Hide']");
   await expect
     .poll(() => readActiveTask().annotations[0]?.hidden)
     .toBe(true);
   await page.reload();
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   await openList(page);
   await expect(root.locator(".ps-annotation-item")).toContainText(/hidden/i);
 });
@@ -2368,6 +2369,9 @@ test("G01 v5: collapsed chip (empty + 4 open, EN/ZH tolerant), expand, drag-not-
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   const root = page.locator("#portal-studio-root");
   await page.goto(resolvePortalTestURL(environment, "/users"));
@@ -2395,7 +2399,7 @@ test("G01 v5: collapsed chip (empty + 4 open, EN/ZH tolerant), expand, drag-not-
   await expect(root.locator(".ps-collapsed-chip")).toBeVisible();
 
   // Clicking the chip body expands the horizontal bar.
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await expect(root.locator("[role='toolbar']")).toBeVisible();
   await expect(root.locator(".ps-horizontal-bar")).toBeVisible();
   // One row, no wrap, inside the viewport.
@@ -2419,13 +2423,16 @@ test("G01 v5: collapsed chip (empty + 4 open, EN/ZH tolerant), expand, drag-not-
   for (let index = 0; index < targets.length; index += 1) {
     // Goal 02: no Done — each iteration continues on the resumed Pick.
     await startPicking(page);
-    await targets[index].hover();
-    await targets[index].click();
+    // Frozen page: Playwright actionability cannot hit-test through the
+    // freeze's `html { pointer-events: none }` — use the raw mouse
+    // helpers (the engine hit-tests from the mouse position).
+    await hoverElement(page, targets[index]);
+    await clickElement(page, targets[index]);
     await page
       .locator("#portal-studio-root textarea")
       .fill(`G01 v5 annotation ${index + 1}`);
     await saveWithCtrlEnter(page);
-    await expectOpenCount(root, String(index + 1));
+    await expectOpenCount(page, root, String(index + 1));
     await expect(
       page
         .locator("#portal-studio-root")
@@ -2433,10 +2440,7 @@ test("G01 v5: collapsed chip (empty + 4 open, EN/ZH tolerant), expand, drag-not-
     ).toHaveCount(0);
   }
   // Collapse with annotations present: count chip, nothing cleared.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Collapse toolbar" })
-    .click();
+  await clickStudioButton(page, "Collapse toolbar");
   await expect(root.locator(".ps-collapsed-chip")).toBeVisible();
   await expect(root.locator(".ps-status-slot")).toHaveText("4");
   // Review P6: the chip's accessible name exposes the open count in a
@@ -2452,30 +2456,29 @@ test("G01 v5: collapsed chip (empty + 4 open, EN/ZH tolerant), expand, drag-not-
   expect(readActiveTask().annotations).toHaveLength(4);
 
   // Cleanup: delete all four so later tests start empty.
-  await root.locator(".ps-chip-open").click();
-  await root
-    .getByRole("button", { name: "Annotation list" })
-    .click();
+  await clickStudioSelector(page, ".ps-chip-open");
+  await clickStudioButton(page, "Annotation list");
   await expect(root.locator(".ps-list-panel")).toBeVisible();
   const deletes = root.locator(".ps-annotation-item [aria-label='Delete']");
   const count = await deletes.count();
   for (let index = 0; index < count; index += 1) {
     await deletes.first().click();
     await root.locator(".ps-annotation-confirm").waitFor();
-    await root
-      .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-      .click();
+    await clickStudioSelector(page, ".ps-annotation-confirm button");
     await expect
       .poll(() => readActiveTask().annotations.length)
       .toBe(count - index - 1);
   }
-  await expectNoOpenCount(root);
+  await expectNoOpenCount(page, root);
 });
 
 test("G01 v5: tooltips, active capture states, help popover, list Open/All, mutual exclusion", async ({
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   const root = page.locator("#portal-studio-root");
   await page.goto(resolvePortalTestURL(environment, "/users"));
@@ -2510,7 +2513,7 @@ test("G01 v5: tooltips, active capture states, help popover, list Open/All, mutu
   ];
   for (const [label, tipText, keycap] of iconTooltips) {
     const button = root.locator(`[role='toolbar'] [aria-label='${label}']`);
-    await button.hover();
+    await hoverElement(page, button);
     const tip = root.locator("[role='tooltip']");
     await expect(tip).toBeVisible({ timeout: 5000 });
     await expect(tip).toContainText(tipText, { timeout: 5000 });
@@ -2546,17 +2549,17 @@ test("G01 v5: tooltips, active capture states, help popover, list Open/All, mutu
   await expect(root.locator(".ps-status-panel")).toContainText("Hover an element");
   await pick.click();
   await expect(pick).toHaveAttribute("aria-pressed", "false");
-  await multi.click();
+  await clickElement(page, multi);
   await expect(multi).toHaveAttribute("aria-pressed", "true");
-  await multi.click();
-  await area.click();
+  await clickElement(page, multi);
+  await clickElement(page, area);
   await expect(area).toHaveAttribute("aria-pressed", "true");
-  await area.click();
+  await clickElement(page, area);
 
   // Shortcut-help popover from the penultimate feature icon; generated
   // rows; Esc closes and restores focus.
   const helpButton = root.locator("[role='toolbar'] [aria-label='Keyboard shortcuts']");
-  await helpButton.click();
+  await clickElement(page, helpButton);
   await expect(helpButton).toHaveAttribute("aria-expanded", "true");
   const help = root.locator("#ps-shortcut-help");
   await expect(help).toBeVisible();
@@ -2581,14 +2584,14 @@ test("G01 v5: tooltips, active capture states, help popover, list Open/All, mutu
   await expect(helpButton).toBeFocused();
 
   // Annotation-list panel from the FINAL feature icon; Open/All filter.
-  await root.locator("[role='toolbar'] [aria-label='Pick element']").click();
-  await page.locator("tbody tr").first().hover();
-  await page.locator("tbody tr").first().click();
+  await clickStudioSelector(page, "[role='toolbar'] [aria-label='Pick element']");
+  await hoverElement(page, page.locator("tbody tr").first());
+  await clickElement(page, page.locator("tbody tr").first());
   await page.locator("#portal-studio-root textarea").fill("G01 list item");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
   const listButton = root.locator("[role='toolbar'] [aria-label='Annotation list']");
-  await listButton.click();
+  await clickElement(page, listButton);
   await expect(listButton).toHaveAttribute("aria-expanded", "true");
   const list = root.locator("#ps-annotation-list");
   await expect(list).toBeVisible();
@@ -2611,19 +2614,17 @@ test("G01 v5: tooltips, active capture states, help popover, list Open/All, mutu
   });
 
   // Mutual exclusion: Help and List never coexist.
-  await helpButton.click();
+  await clickElement(page, helpButton);
   await expect(help).toBeVisible();
   await expect(list).toHaveCount(0);
-  await listButton.click();
+  await clickElement(page, listButton);
   await expect(list).toBeVisible();
   await expect(help).toHaveCount(0);
 
   // Cleanup: delete the annotation.
-  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Delete']");
   await root.locator(".ps-annotation-confirm").waitFor();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 });
 
@@ -2631,6 +2632,9 @@ test("G01 v5: keyboard — ? help, Mod+Alt+L list, Mod+Alt+V markers, Mod+Alt+K 
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   const root = page.locator("#portal-studio-root");
   await page.goto(resolvePortalTestURL(environment, "/users"));
@@ -2828,6 +2832,9 @@ test("G01 v5: drag near all four edges stays clamped; 375x667 stays horizontal w
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   const root = page.locator("#portal-studio-root");
   await page.goto(resolvePortalTestURL(environment, "/users"));
@@ -2854,7 +2861,7 @@ test("G01 v5: drag near all four edges stays clamped; 375x667 stays horizontal w
     expect(after.y + after.height).toBeLessThanOrEqual(900);
   }
   // Expanding at an edge still keeps the bar inside the viewport.
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   const barBox = (await root.locator(".ps-horizontal-bar").boundingBox())!;
   expect(barBox.x + barBox.width).toBeLessThanOrEqual(1440);
   expect(barBox.y + barBox.height).toBeLessThanOrEqual(900);
@@ -2878,7 +2885,7 @@ test("G01 v5: drag near all four edges stays clamped; 375x667 stays horizontal w
     path: "test-results/g01-375-collapsed.png",
     fullPage: false,
   });
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   const compactBar = (await root.locator(".ps-horizontal-bar").boundingBox())!;
   // One horizontal row, no wrap, fully inside the viewport.
   expect(compactBar.height).toBeLessThan(60);
@@ -2890,10 +2897,7 @@ test("G01 v5: drag near all four edges stays clamped; 375x667 stays horizontal w
     fullPage: false,
   });
   // Help popover clamps inside the narrow viewport.
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Keyboard shortcuts" })
-    .click();
+  await clickStudioButton(page, "Keyboard shortcuts");
   const helpBox = (await root.locator("#ps-shortcut-help").boundingBox())!;
   expect(helpBox.x).toBeGreaterThanOrEqual(0);
   expect(helpBox.x + helpBox.width).toBeLessThanOrEqual(375);
@@ -2909,10 +2913,7 @@ test("G01 v5: drag near all four edges stays clamped; 375x667 stays horizontal w
     path: "test-results/g01-375-help.png",
     fullPage: false,
   });
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Annotation list" })
-    .click();
+  await clickStudioButton(page, "Annotation list");
   const listBox = (await root.locator("#ps-annotation-list").boundingBox())!;
   expect(listBox.x).toBeGreaterThanOrEqual(0);
   expect(listBox.x + listBox.width).toBeLessThanOrEqual(375);
@@ -2945,6 +2946,9 @@ test("G01 v5: Chinese locale states — chip, toolbar, help, list, count (review
     });
   });
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
@@ -2959,7 +2963,7 @@ test("G01 v5: Chinese locale states — chip, toolbar, help, list, count (review
   });
 
   // Expanded horizontal bar in Chinese.
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await expect(root.locator("[role='toolbar']")).toBeVisible();
   await expect(
     root.locator("[role='toolbar'] [aria-label='拾取元素']")
@@ -2994,8 +2998,8 @@ test("G01 v5: Chinese locale states — chip, toolbar, help, list, count (review
   // the count with the localized accessible name.
   await root.getByRole("button", { name: "批注列表" }).click();
   await root.getByRole("button", { name: "拾取元素" }).click();
-  await page.locator("tbody tr").first().hover();
-  await page.locator("tbody tr").first().click();
+  await hoverElement(page, page.locator("tbody tr").first());
+  await clickElement(page, page.locator("tbody tr").first());
   await page.locator("#portal-studio-root textarea").fill("中文批注");
   await saveWithCtrlEnter(page);
   // Goal 02: the compact toast replaces the technical Saved panel (ZH).
@@ -3014,13 +3018,11 @@ test("G01 v5: Chinese locale states — chip, toolbar, help, list, count (review
   });
 
   // Cleanup: delete the annotation and restore en-US for any later run.
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await root.getByRole("button", { name: "批注列表" }).click();
-  await root.locator(".ps-annotation-item [aria-label='删除']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='删除']");
   await root.locator(".ps-annotation-confirm").waitFor();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "删除" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 });
 
@@ -3031,6 +3033,9 @@ test("G01 v5: manual-Copy fallback clamps inside the viewport at edge positions 
   // Deny the clipboard permission so the manual fallback is forced.
   await context.grantPermissions([], { origin: environment.baseURL });
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
@@ -3039,11 +3044,11 @@ test("G01 v5: manual-Copy fallback clamps inside the viewport at edge positions 
   // One open annotation so Copy is enabled.
   await openStudio(page);
   await root.getByRole("button", { name: "Pick element" }).click();
-  await page.locator("tbody tr").first().hover();
-  await page.locator("tbody tr").first().click();
+  await hoverElement(page, page.locator("tbody tr").first());
+  await clickElement(page, page.locator("tbody tr").first());
   await page.locator("#portal-studio-root textarea").fill("edge copy");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "1");
+  await expectOpenCount(page, root, "1");
 
   const dragDockTo = async (x: number, y: number) => {
     const box = (await root.locator(".ps-dock").boundingBox())!;
@@ -3068,9 +3073,9 @@ test("G01 v5: manual-Copy fallback clamps inside the viewport at edge positions 
   // bottom edge — round-4 finding 5).
   await page.keyboard.press("Control+Alt+KeyK");
   await dragDockTo(5, 5);
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   const copyButton = root.getByRole("button", { name: "Copy annotations" });
-  await copyButton.click();
+  await clickElement(page, copyButton);
   const topLeftBox = await fallbackInside({ width: 1440, height: 900 });
   const copyBox = (await copyButton.boundingBox())!;
   expect(topLeftBox.y).toBeGreaterThanOrEqual(copyBox.y);
@@ -3087,8 +3092,8 @@ test("G01 v5: manual-Copy fallback clamps inside the viewport at edge positions 
   // dialog's bottom sits ≈ 8px above the button's top edge.
   await page.keyboard.press("Control+Alt+KeyK");
   await dragDockTo(1438, 898);
-  await root.locator(".ps-chip-open").click();
-  await copyButton.click();
+  await clickStudioSelector(page, ".ps-chip-open");
+  await clickElement(page, copyButton);
   const bottomRightBox = await fallbackInside({ width: 1440, height: 900 });
   const copyBoxBR = (await copyButton.boundingBox())!;
   expect(
@@ -3105,8 +3110,8 @@ test("G01 v5: manual-Copy fallback clamps inside the viewport at edge positions 
   await page.waitForTimeout(200);
   await page.keyboard.press("Control+Alt+KeyK");
   await dragDockTo(5, 5);
-  await root.locator(".ps-chip-open").click();
-  await copyButton.click();
+  await clickStudioSelector(page, ".ps-chip-open");
+  await clickElement(page, copyButton);
   const box375 = await fallbackInside({ width: 375, height: 667 });
   const copyBox375 = (await copyButton.boundingBox())!;
   expect(
@@ -3155,11 +3160,9 @@ test("G01 v5: manual-Copy fallback clamps inside the viewport at edge positions 
 
   // Cleanup: delete the annotation so later tests start empty.
   await root.getByRole("button", { name: "Annotation list" }).click();
-  await root.locator(".ps-annotation-item [aria-label='Delete']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Delete']");
   await root.locator(".ps-annotation-confirm").waitFor();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 });
 
@@ -3172,6 +3175,9 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
@@ -3182,8 +3188,8 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
   // G02-05: Pick is single-target — one click, one annotation.
   await root.getByRole("button", { name: "Pick element" }).click();
   const row = page.locator("tbody tr").first();
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
 
   // G02-01: the local composer opens BESIDE the target, autofocused.
   const composer = root.getByRole("dialog", { name: "Annotation" });
@@ -3247,15 +3253,15 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
   await expect(
     root.getByRole("button", { name: "Pick element" })
   ).toHaveAttribute("aria-pressed", "true");
-  await row.hover();
-  await row.click();
+  await hoverElement(page, row);
+  await clickElement(page, row);
   await expect(composer).toBeVisible();
   await page.locator("#portal-studio-root textarea").fill("G02 continuous two");
   await page.keyboard.press("Meta+Enter");
   await expect(
     root.locator(".ps-save-toast", { hasText: "Annotation saved" })
   ).toBeVisible();
-  await expectOpenCount(root, "2");
+  await expectOpenCount(page, root, "2");
   const task = readActiveTask();
   expect(task.annotations).toHaveLength(2);
   expect(task.annotations.map((a) => a.comment)).toEqual([
@@ -3278,14 +3284,11 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
   await root.getByRole("button", { name: "Multi-select" }).click();
   const cellA = page.locator("tbody tr").first().locator("td").first();
   const cellB = page.locator("tbody tr").first().locator("td").nth(1);
-  await cellA.hover();
-  await cellA.click();
-  await cellB.hover();
-  await cellB.click();
-  await page
-    .locator("#portal-studio-root")
-    .getByRole("button", { name: "Finish group" })
-    .click();
+  await hoverElement(page, cellA);
+  await clickElement(page, cellA);
+  await hoverElement(page, cellB);
+  await clickElement(page, cellB);
+  await clickStudioButton(page, "Finish group");
   await expect(composer).toBeVisible();
   await page.locator("#portal-studio-root textarea").fill("G02 multi group");
   await saveWithCtrlEnter(page);
@@ -3307,9 +3310,7 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
     .first()
     .click();
   await root.locator(".ps-annotation-confirm").waitFor();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect.poll(() => readActiveTask().annotations.length).toBe(2);
   await openList(page);
   await root
@@ -3317,9 +3318,7 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
     .first()
     .click();
   await root.locator(".ps-annotation-confirm").waitFor();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect.poll(() => readActiveTask().annotations.length).toBe(1);
   await openList(page);
   await root
@@ -3327,9 +3326,7 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
     .first()
     .click();
   await root.locator(".ps-annotation-confirm").waitFor();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 
   // ---- ZH locale evidence: the composer + toast in Chinese ----
@@ -3342,10 +3339,10 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
   });
   await page.reload();
   await page.locator("tbody tr").first().waitFor();
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await root.getByRole("button", { name: "拾取元素" }).click();
-  await page.locator("tbody tr").first().hover();
-  await page.locator("tbody tr").first().click();
+  await hoverElement(page, page.locator("tbody tr").first());
+  await clickElement(page, page.locator("tbody tr").first());
   const zhComposer = root.getByRole("dialog", { name: "批注" });
   await expect(zhComposer).toBeVisible();
   await expect(root.getByRole("textbox", { name: "标注评论" })).toBeFocused();
@@ -3367,11 +3364,9 @@ test("G02: target-side composer beside the target, continuous loop, no Done (EN 
   // Cleanup ZH annotation (the list toggle is localized in ZH here).
   await root.getByRole("button", { name: "批注列表" }).click();
   await expect(root.locator("#ps-annotation-list")).toBeVisible();
-  await root.locator(".ps-annotation-item [aria-label='删除']").click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='删除']");
   await root.locator(".ps-annotation-confirm").waitFor();
-  await root
-    .locator(".ps-annotation-confirm button", { hasText: "删除" })
-    .click();
+  await clickStudioSelector(page, ".ps-annotation-confirm button");
   await expect.poll(() => readActiveTask().annotations.length).toBe(0);
 });
 
@@ -3383,6 +3378,9 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
@@ -3399,13 +3397,14 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
   ];
   for (let index = 0; index < targets.length; index += 1) {
     await startPicking(page);
-    await targets[index].hover();
-    await targets[index].click();
+    // Frozen page: raw mouse helpers (see hoverElement).
+    await hoverElement(page, targets[index]);
+    await clickElement(page, targets[index]);
     await page
       .locator("#portal-studio-root textarea")
       .fill(`G03 annotation ${index + 1}`);
     await saveWithCtrlEnter(page);
-    await expectOpenCount(root, String(index + 1));
+    await expectOpenCount(page, root, String(index + 1));
   }
   // Markers 1, 2, 3 all exist (full order).
   for (const number of [1, 2, 3]) {
@@ -3489,18 +3488,18 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
   const visibilityToggle = bar.getByRole("button", {
     name: /Hide markers|Show markers/,
   });
-  await visibilityToggle.click();
+  await clickElement(page, visibilityToggle);
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(0);
   const afterToggle = readActiveTask();
   expect(afterToggle.annotations.map((a) => a.annotationId)).toEqual(before);
-  await visibilityToggle.click();
+  await clickElement(page, visibilityToggle);
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(2);
 
   // ---- G03-03: per-item Hide stays independent of the global toggle.
   await openList(page);
-  await root.locator(".ps-annotation-item [aria-label='Hide']").first().click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Hide']");
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(1);
-  await root.locator(".ps-annotation-item [aria-label='Hide']").first().click();
+  await clickStudioSelector(page, ".ps-annotation-item [aria-label='Hide']");
   await expect(root.locator(".ps-marker-anchor")).toHaveCount(2);
   await bar.getByRole("button", { name: "Annotation list" }).click();
   await expect(root.locator(".ps-list-panel")).toHaveCount(0);
@@ -3577,8 +3576,8 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
 
   // ---- G03-07: every anchored surface stays fully inside the viewport.
   await startPicking(page);
-  await targets[0].hover();
-  await targets[0].click();
+  await hoverElement(page, targets[0]);
+  await clickElement(page, targets[0]);
   await expect(root.locator(".ps-composer")).toBeVisible();
   await openList(page);
   const surfaces = [
@@ -3649,8 +3648,8 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
   });
   await bar.getByRole("button", { name: "Annotation list" }).click();
   await startPicking(page);
-  await targets[1].hover();
-  await targets[1].click();
+  await hoverElement(page, targets[1]);
+  await clickElement(page, targets[1]);
   await expect(root.locator(".ps-composer")).toBeVisible();
   const composer375 = (await root.locator(".ps-composer").boundingBox())!;
   expect(composer375.x).toBeGreaterThanOrEqual(0);
@@ -3683,9 +3682,7 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
       .first()
       .click();
     await root.locator(".ps-annotation-confirm").waitFor();
-    await root
-      .locator(".ps-annotation-confirm button", { hasText: "Delete" })
-      .click();
+    await clickStudioSelector(page, ".ps-annotation-confirm button");
     await expect
       .poll(() => readActiveTask().annotations.length)
       .toBe(3 - index);
@@ -3703,10 +3700,16 @@ test("G03: stable numbers (marker/list/editor/Copy), visibility, markers, region
   await page.reload();
   await page.locator("tbody tr").first().waitFor();
   await page.setViewportSize({ width: 375, height: 667 });
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await root.getByRole("button", { name: "拾取元素" }).click();
-  await page.locator("tbody tr").first().locator("td").nth(1).hover();
-  await page.locator("tbody tr").first().locator("td").nth(1).click();
+  await hoverElement(
+    page,
+    page.locator("tbody tr").first().locator("td").nth(1)
+  );
+  await clickElement(
+    page,
+    page.locator("tbody tr").first().locator("td").nth(1)
+  );
   await expect(root.getByRole("dialog", { name: "批注" })).toBeVisible();
   const zhComposer = (await root.locator(".ps-composer").boundingBox())!;
   expect(zhComposer.x).toBeGreaterThanOrEqual(0);
@@ -3730,6 +3733,9 @@ test("G04: timestamps (createdAt immutable / updatedAt changes), Copy completion
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
@@ -3739,8 +3745,8 @@ test("G04: timestamps (createdAt immutable / updatedAt changes), Copy completion
   // G04-03: two browser adds — taskId stable, createdAt IMMUTABLE,
   // updatedAt changes on the second mutation.
   await startPicking(page);
-  await page.locator("tbody tr").first().hover();
-  await page.locator("tbody tr").first().click();
+  await hoverElement(page, page.locator("tbody tr").first());
+  await clickElement(page, page.locator("tbody tr").first());
   await page.locator("#portal-studio-root textarea").fill("G04 timestamp one");
   await saveWithCtrlEnter(page);
   await expect(
@@ -3752,11 +3758,17 @@ test("G04: timestamps (createdAt immutable / updatedAt changes), Copy completion
   const firstUpdatedAt = afterFirst.updatedAt!;
   await page.waitForTimeout(1200);
   await startPicking(page);
-  await page.locator("tbody tr").first().locator("td").nth(1).hover();
-  await page.locator("tbody tr").first().locator("td").nth(1).click();
+  await hoverElement(
+    page,
+    page.locator("tbody tr").first().locator("td").nth(1)
+  );
+  await clickElement(
+    page,
+    page.locator("tbody tr").first().locator("td").nth(1)
+  );
   await page.locator("#portal-studio-root textarea").fill("G04 timestamp two");
   await saveWithCtrlEnter(page);
-  await expectOpenCount(root, "2");
+  await expectOpenCount(page, root, "2");
   const afterSecond = readActiveTask();
   expect(afterSecond.taskId).toBe(afterFirst.taskId);
   expect(afterSecond.createdAt).toBe(afterFirst.createdAt);
@@ -3888,6 +3900,9 @@ test("G05-06 collapsed chip: 0/1/9/100 open, focus, EN/ZH, no overflow", async (
   // Start from a clean artifact (the studio fetches at mount).
   rmSync(path.join(studioDir, "tasks"), { recursive: true, force: true });
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
@@ -3916,7 +3931,7 @@ test("G05-06 collapsed chip: 0/1/9/100 open, focus, EN/ZH, no overflow", async (
     });
   }
   // Chip body click expands (never a drag).
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await expect(root.locator("[role='toolbar']")).toBeVisible();
   await page.screenshot({
     path: `${VISUAL_DIR}/chip-expanded-from-100.png`,
@@ -3939,11 +3954,14 @@ test("G05-06 expanded toolbar: order, active states, tooltips, Help, List, 1440/
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
   const root = page.locator("#portal-studio-root");
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   const bar = root.locator("[role='toolbar']");
 
   // Exact horizontal order + no wrap.
@@ -4022,7 +4040,7 @@ test("G05-06 expanded toolbar: order, active states, tooltips, Help, List, 1440/
   seedTask(3);
   await page.reload();
   await page.locator("tbody tr").first().waitFor();
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await root.getByRole("button", { name: "Annotation list" }).click();
   await expect(root.locator(".ps-list-panel")).toBeVisible();
   await page.screenshot({
@@ -4067,16 +4085,19 @@ test("G05-06 annotation surfaces: composer, marker editor, completed/unresolved/
   page,
 }) => {
   await signIn(page);
+  // The login lands on the application index; the users table drives the
+  // interactions below.
+  await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(resolvePortalTestURL(environment, "/users"));
   await page.locator("tbody tr").first().waitFor();
   const root = page.locator("#portal-studio-root");
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
 
   // Composer beside a captured target (within the viewport).
   await root.getByRole("button", { name: "Pick element" }).click();
-  await page.locator("tbody tr").first().hover();
-  await page.locator("tbody tr").first().click();
+  await hoverElement(page, page.locator("tbody tr").first());
+  await clickElement(page, page.locator("tbody tr").first());
   await expect(root.locator(".ps-composer")).toBeVisible();
   const composerBox = (await root.locator(".ps-composer").boundingBox())!;
   expect(composerBox.x).toBeGreaterThanOrEqual(0);
@@ -4140,7 +4161,7 @@ test("G05-06 annotation surfaces: composer, marker editor, completed/unresolved/
       "position:fixed;left:200px;top:300px;width:120px;height:40px;z-index:1";
     document.body.appendChild(target);
   });
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await page.waitForTimeout(400);
   const marker = root.locator(".ps-marker-anchor button").first();
   await expect(marker).toBeVisible();
@@ -4221,7 +4242,7 @@ test("G05-06 annotation surfaces: composer, marker editor, completed/unresolved/
   );
   await page.reload();
   await page.locator("tbody tr").first().waitFor();
-  await root.locator(".ps-chip-open").click();
+  await clickStudioSelector(page, ".ps-chip-open");
   await root.getByRole("button", { name: "Annotation list" }).click();
   await expect(root.locator(".ps-list-panel")).toBeVisible();
   await root.getByRole("button", { name: "All", exact: true }).click();

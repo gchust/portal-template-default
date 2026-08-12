@@ -128,25 +128,52 @@ Review every `.inspect()` call. Pointermove handlers must not call it.
 
 ## Progress
 
-- [ ] Map capture/freeze exit paths.
-- [ ] Implement one freeze lifecycle owner.
-- [ ] Add hover/popover/animation fixture tests.
-- [ ] Formalize region sampling/scoring/dedupe.
-- [ ] Add async cancellation and call-count gates.
-- [ ] Audit observers/listeners/diagnostic disposers.
-- [ ] Verify screenshot interaction.
-- [ ] Independently audit G04 acceptance.
+- [x] Map capture/freeze exit paths (freeze lifecycle E2E covers every documented exit).
+- [x] Implement one freeze lifecycle owner (`capture-freeze.ts` controller + `useCaptureFreeze` hook + toolbar predicate; pipeline success/error and save-error paths unfreeze explicitly).
+- [x] Add hover/popover/animation fixture tests (JS-driven hover popover, CSS `@keyframes`, JS rAF loop).
+- [x] Formalize region sampling/scoring/dedupe (`region.ts`: 4 inset corners + center + cell centers, `columns/rows = clamp(ceil(dim/120), 2, 8)`, dedup, max 69 points; tiered `targetSignal`; symmetric prune + order-independent final pass).
+- [x] Add async cancellation and call-count gates (pipeline session guard; pointermove zero-inspection, one Pick commit = one inspection, one Multi commit = one per distinct target).
+- [x] Audit observers/listeners/diagnostic disposers (marker-observer gated by `needsDomTracking`; diagnostics restores XHR `open`/`send`; freeze controller removes styles and restores rAF identity-exactly; upstream `disposeBaselineStyles()` on unmount/HMR).
+- [x] Verify screenshot interaction (rasterization bounded to 5s; save never depends on screenshot success; freeze follows save/resume).
+- [x] Independently audit G04 acceptance (fresh reviewer round; all findings fixed, gates rerun).
+- [x] Fix the completed-visibility E2E flake at the ROOT: an OPEN auxiliary panel now thaws the page (`captureActive` gated on `auxPanel === "none"` — capture handlers are already suspended while a panel is open, so freezing only deferred the Studio's own React updates); the mutation flush paths (`flushPendingOps`, `saveEdit`) unfreeze when the authoritative result lands (success/conflict/error) like the save path already did.
+- [x] Fix the dock re-measure deferral: re-expanding the toolbar while a capture session is active re-freezes in the same commit, deferring the width-measure render — the bar then kept the chip-sized anchor and overflowed the viewport. The re-measure effect now applies the measured-size clamp natively (same pattern as the frozen outline).
+- [x] Portal Studio E2E 31/31 green twice in a row from the main repo (port 4176).
 
 ## Surprises & Discoveries
 
-- None yet.
+- The upstream freeze only intercepts React scheduler callbacks — raw page `requestAnimationFrame` loops keep running, and plain CSS compositor animations are not paused either. The freeze controller therefore holds page rAF callbacks (queue + replay on unfreeze) and injects a page-wide `animation-play-state: paused` override.
+- The upstream freeze defers ALL React updates while frozen, so the in-page Studio itself would deadlock (e.g. a draft's pipeline resolution could never enable Save). The hook unfreezes synchronously around every native pointer/key interaction and re-applies after 120ms; async exits (pipeline success/error, save branches) unfreeze explicitly.
+- The upstream freeze sets `pointer-events: none` on the page, which removes CSS `:hover` state — a CSS-only hover popover collapses during Pick. The fixture popover is state-driven (React `mouseenter`/`mouseleave`) so hover-opened UI survives the frozen window.
+- `expect.poll`-style freeze checks were replaced with a manual polling helper: the freeze legitimately takes up to ~200ms to (re)apply after an interaction (transient unfreeze window + mode flush), and the first immediate poll evaluation races that window.
+- Playwright `boundingBox()` is already viewport-relative; converting with `scrollX/scrollY` double-subtracts and produces empty samples once the fixture is scrolled.
+- Re-expanding the toolbar while a capture session is active re-engages the freeze in the SAME commit (captureActive flips false→true), and the upstream freeze's queue patch makes the dock's width-measure state update INVISIBLE to React's render while frozen — the expanded bar then stayed anchored at the chip-sized position and overflowed the viewport on narrower screens (its rightmost buttons unreachable, and Playwright reports "element is outside of the viewport" while the click can never land to unfreeze). The re-measure effect applies the clamped position natively so the bar always stays inside.
+- The E2E's users-table tests must wait for `tbody tr` BEFORE entering a capture mode: while the page is frozen, the app's own deferred React updates can never paint the table rows, so a Pick started during the table load times out forever.
 
 ## Decision Log
 
 - Decision: Freeze is automatic for capture modes rather than a separate toolbar mode.
   Rationale: it preserves transient UI exactly when annotation needs it without adding another primary control.
-  Date/Author: Goal author; confirm with actual UX evidence.
+  Date/Author: Goal author; confirmed by E2E (freeze lifecycle, hover popover, animation stability).
+- Decision: The freeze controller also holds page rAF callbacks and pauses CSS animations page-wide.
+  Rationale: upstream freeze does not pause either; the annotated target must stay visually stable during capture. Queued frames replay on unfreeze so the page resumes coherently.
+- Decision: The hover popover fixture is state-driven rather than CSS `:hover`.
+  Rationale: `pointer-events: none` removes `:hover`; a state-driven popover survives the frozen window and stays annotatable (G04-AC01).
+- Decision: `expect.poll` freeze assertions use a manual `waitFrozen` helper.
+  Rationale: the freeze re-applies after a ~120ms flush window; polling with the first immediate evaluation races the mode flush.
+- Decision: the page is NOT frozen while an auxiliary panel (Help/List) is open — `captureActive` requires `auxPanel === "none"`.
+  Rationale: every capture handler is already gated on `auxPanel === "none"` (the capture is suspended), so freezing then only deferred the Studio's own React updates; list mutations and their async flushes must render live.
+- Decision: mutation flushes (`flushPendingOps`, `saveEdit`) unfreeze when the authoritative result lands (success, conflict-adopt, and error paths).
+  Rationale: the same async-exit contract as save success — while frozen the upstream freeze buffers all dispatches until the next interaction, so a completion/edit landing on a frozen page would stay invisible (the G04 completed-visibility E2E flake).
+- Decision: the dock re-measure effect applies the measured-size clamp natively to the dock element.
+  Rationale: re-expanding while a capture session is active re-freezes before the width-measure render can apply, leaving the bar anchored at the chip size and overflowing the viewport; the native write (like the frozen outline) keeps the bar inside while the state reconciles on unfreeze.
+- Decision: the save-resume (Goal 02 continuous loop) deliberately does NOT re-engage the freeze mid-flush.
+  Rationale: re-freezing in the same commit as the resume's state updates lets the upstream React-pause swallow the interaction's own dispatches (the toolbar then sticks expanded + frozen until another interaction, and the E2E cannot recover). The async-exit unfreeze stays released; the freeze re-engages on the NEXT explicit capture-mode entry (a fresh session). This is documented in `resumeAfterSave` and the freeze hook.
 
 ## Outcomes & Retrospective
 
-Fill at completion.
+- G04-AC01…AC14 all PASS (contract E2E 20/20; freeze lifecycle, hover popover, CSS/JS animation stability, Pick/Multi commit call counts, Area caps, collapse re-expand, pagehide exit).
+- Full gates: `pnpm typecheck` clean; `pnpm test` 58 files / 672 tests PASS; `pnpm build` clean with zero `react-grab|bippy|portal-studio` in `dist`; `git diff --check` clean; exactly one `react-grab/primitives` import owner; no `querySelectorAll("*")` in region sampling; Portal Studio E2E 31/31 twice in a row from the main repo (port 4176, `PLAYWRIGHT_WORKERS=1`).
+- Region: deterministic point grid (max 69), tiered scoring, symmetric pruning with an order-independent final pass for multi-level wrapper chains; distinct sibling cards/cells preserved.
+- Runtime: freeze controller idempotent, bounded error message, Studio-safe pointer-events override, page-wide animation pause, rAF frame hold with exact identity restore; diagnostics restores XHR prototypes; marker observer gated by `needsDomTracking`.
+- Performance: pointermove = hit testing + bounds only, zero `inspect()`; one Pick commit = one inspection; one Multi commit = one inspection per distinct target.

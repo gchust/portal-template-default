@@ -131,4 +131,9 @@ export interface InspectionEngine {
   freeze(elements?: Element[]): void;
   unfreeze(): void;
   isFrozen(): boolean;
+  /**
+   * Goal 04 teardown: releases the upstream baseline-style machinery
+   * (disposeBaselineStyles). Idempotent; called on unmount/HMR disposal.
+   */
+  dispose(): void;
 }
