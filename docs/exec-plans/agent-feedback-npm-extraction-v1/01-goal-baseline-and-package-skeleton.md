@@ -113,6 +113,7 @@ git diff --stat
 - [x] 2026-08-12T11:09Z Default Portal plan/baseline checkpoint commit：`3d8dedd4eb13dac9cb048559db217d31364c6f02`；production source 未进入 commit；`23340b7baf2f2d8f5f25b6a0e9907aa12866e354` 首次记录了错误 SHA，修正 commit 为 `6fb030a64dead5af67b384c516e34838f3e55d4a`。
 - [x] 2026-08-12T11:22Z 独立复核重读合同并审查两仓完整 Goal 01 history/diff；发现发布清单泄漏仓库迁移基线以及 living plan 错标 SHA 修正 commit。
 - [x] 2026-08-12T11:27Z follow-up commits `7630205d5a6514ce4ce0f2cf66fb31420d5235b9`、`0933efc6c9dbff24a3ecfd82b4dc59872fd4fa18` 将 `MIGRATION-BASELINE.md` 保留为仓库证据但从 tarball 排除，并补记 NocoBase error-redactor direct coupling；fresh 21-file tarball、offline frozen Fixture、四入口、CLI、package/Portal build gates 全部通过。
+- [x] 2026-08-12T11:34Z fresh serial focused Studio suite 完整通过：37 files / 646 tests；现有 `G02-07b` 409 retry case 仍输出 React duplicate-key warning，Goal 01 只记录而不改 embedded runtime。
 
 ### Surprises & Discoveries
 
@@ -122,6 +123,7 @@ git diff --stat
 - focused Studio suite 与 package/Portal build 并行运行时有 2 个进程型测试超过默认 5s；相同两个文件以 15s timeout 隔离重跑，11/11 通过。Baseline 同时保留首次 FAIL 和重跑 PASS。
 - 独立复核发现 11:00 的早期 tarball（当时 baseline 尚未写入）确实仅含 dist、LICENSE、README、package.json；但 11:05 的最终 tarball 实际为 22 files，并新增 Portal-specific `MIGRATION-BASELINE.md`，扩大了公共包边界。该报告现仅留在 repository，fresh tarball 为 21 files。
 - `23340b7baf2f2d8f5f25b6a0e9907aa12866e354` 写入的两个 checkpoint SHA 均不存在；真正修正它们的是后续 `6fb030a64dead5af67b384c516e34838f3e55d4a`，不是该记录 commit 本身。
+- fresh serial focused Studio suite 不再复现原并行 run 的 timeout：37 files / 646 tests PASS；但 `G02-07b` 409 retry case 发出既存 duplicate React-key warning，已补入 baseline known risks。
 
 ### Decision Log
 
@@ -150,6 +152,7 @@ git diff --stat
 - agent-feedback: `3ac5528ecc0c7b67380782b6adcd66c021c98f01` (`chore: establish Agent Feedback package skeleton`)
 - agent-feedback follow-up: `7630205d5a6514ce4ce0f2cf66fb31420d5235b9` (`fix: keep migration evidence out of package`)
 - agent-feedback baseline follow-up: `0933efc6c9dbff24a3ecfd82b4dc59872fd4fa18` (`docs: complete migration coupling baseline`)
+- agent-feedback evidence follow-up: `eab212b7b516bb848a657194dc51a50cfe0dc512` (`docs: record fresh Studio baseline rerun`)
 - portal-template-default: `3d8dedd4eb13dac9cb048559db217d31364c6f02` (`docs: add Agent Feedback extraction plan`), `23340b7baf2f2d8f5f25b6a0e9907aa12866e354` (`docs: record Goal 01 checkpoint SHAs`, contains invalid SHAs), `6fb030a64dead5af67b384c516e34838f3e55d4a` (`docs: correct Goal 01 checkpoint SHAs`), `c10b6c4d9dab0291c3703911abfc3173a0ef17ee` and `e37f7958c9cca0ea73f0c7980cfe21368c1291bb` (independent review evidence)
 
 #### 运行过的命令及结果
@@ -169,6 +172,7 @@ git diff --stat
 - Portal `pnpm typecheck` → PASS，exit 0。
 - Portal `pnpm build` → PASS：5,952 modules transformed，exit 0。
 - Portal focused Studio suite first concurrent run → FAIL：644 PASS、2 timeout；隔离 rerun命令 `pnpm exec vitest run tests/logic/portal-studio/print-cli.test.ts tests/logic/portal-studio/cli-smoke.test.ts --testTimeout=15000 --reporter=verbose` → PASS：2 files / 11 tests。
+- review Portal focused Studio suite（相同完整命令、serial fresh run）→ PASS：37 files / 646 tests，exit 0；保留一个既存 duplicate React-key warning。
 - 两仓 `git status --short`、`git diff --stat` 和 Portal production-path diff scan → PASS：package 只有 Goal 01 files；Portal 只有 `AGENTS.md` 与 ExecPlan，production diff 空。
 
 #### Acceptance criteria
