@@ -92,25 +92,89 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
 
 ### Progress
 
-- [ ] 在执行过程中逐项更新，不要等到最后。
+- [x] 2026-08-12: Confirmed clean accepted baselines: package
+  `ad13f94f3042609cf014dd69029ffd1725c3ac5c`, template
+  `c2729afdfc3e5ce94549fd3262551c4d267d6a07`.
+- [x] 2026-08-12: Read the frozen constants, shared contract, this Goal, and
+  traced the embedded Studio bootstrap, toolbar, task model, inspection
+  engine/pipeline, region sampler, markers, composer, list, Help, Tooltip,
+  diagnostics, dock, and hotkey implementations.
+- [x] Implemented the generic browser runtime and package-owned in-memory
+  transport.
+- [x] Completed the blank React/Vite playground and focused tests.
+- [x] Ran package, external-tarball, and real-browser acceptance gates.
+- [x] Recorded final evidence and criterion results; focused repository
+  commits are the final delivery step.
 
 ### Surprises & Discoveries
 
-- 记录实际仓库与计划不一致、上游 API 行为、测试环境差异。
+- The standalone repository is `/root/work/agent-feedback` rather than the
+  constants file's parent-directory sketch `agent-feedback-workspace/agent-feedback`;
+  its accepted Goal 02 HEAD and clean state are otherwise exact.
+- Goal 02 already owns the generic v1 schema, mutation, format, redaction,
+  selection, placement, and hotkey primitives, so Goal 03 can reuse those
+  contracts instead of porting the embedded Studio's legacy schema/runtime.
+- This shell's proxy environment did not exempt loopback, so Playwright's
+  web-server probe returned 502 until both `NO_PROXY` and `no_proxy` were set
+  to `localhost,127.0.0.1`; the checked-in Playwright config also passes them
+  to its web server.
+- A packed consumer is only valid after the tarball leaves the package repo:
+  the final fixture used external artifact `agent-feedback-g03.tgz`, then a
+  clean `--frozen-lockfile --offline` reinstall before build and E2E.
 
 ### Decision Log
 
-- 记录所有偏离推荐文件布局或实现路径的决定及理由。
+- Keep all generic runtime implementation in the standalone package and make
+  the template repository's Goal 03 living plan its only change; G03-015
+  explicitly forbids switching the Default Portal.
+- Reuse the embedded Studio only as behavioral reference. Build the new v1
+  runtime directly on Goal 02 core contracts so no PortalStudio compatibility
+  layer or NocoBase-specific context crosses the package boundary.
+- Keep `MemoryTaskTransport` behind `./testing`, and keep Goal 03 entirely
+  browser-side: no Vite file API, persistence, CLI/MCP extraction, Registry,
+  NocoBase adapter, or later-goal reliability patch was added.
+- Use React Grab's selector as persisted marker identity and only ordinary
+  `document.querySelector` resolution in this Goal; cross-boundary marker
+  reliability remains owned by Goal 07.
 
 ### Outcomes & Retrospective
 
-完成时写明：
-
-- 实际交付；
-- 未交付；
-- 运行过的命令及结果；
-- AC 逐项 PASS/FAIL/BLOCKED；
-- 下一 Goal 的可靠起点。
+- Delivered public async `mountAgentFeedback()`/idempotent unmount, Shadow DOM
+  runtime, dock/toolbar, Pick/Multi/Area, composer, markers/editor/list/help,
+  hotkeys/tooltips, open/completed/reopen/delete/copy flows, diagnostics,
+  host/enricher/redactor/exporter contracts, and `MemoryTaskTransport`.
+- Delivered a blank React/Vite playground with ordinary, SVG, mapped, memo,
+  forwardRef, Portal, Shadow Root, canvas, and long-scroll fixtures plus real
+  Playwright closed-loop acceptance.
+- Fresh mandatory gates all PASS: `pnpm typecheck`; `pnpm test -- client
+  inspection components` (10 files, 28 tests); playground E2E (3 tests);
+  `pnpm build`; `pnpm pack --json`; all three source audits. `pnpm
+  check:package` also passed.
+- Packed boundary PASS: external tarball SHA-256
+  `ebb9b04863db945412a6db3ff666a8b3d6f6a12a45b89828dabfea4f1165af54`;
+  `/tmp/agent-feedback-g03-consumer.QLKpWB` reinstalled it with
+  `--frozen-lockfile --offline`, then passed Vite build and all 3 E2E tests.
+- Evidence root: `/root/work/agent-feedback-workspace-artifacts/g03/`; traces
+  are under `playwright-results/`, browser screenshots are named by state, and
+  mandatory command logs are under `commands/`.
+- G03-001 PASS — public root exports mount and returned unmount/API.
+- G03-002 PASS — playground has no `@nocobase/*`; source audit is empty.
+- G03-003 PASS — Pick browser flow persists exactly one target.
+- G03-004 PASS — Multi browser flow persists one annotation with two targets.
+- G03-005 PASS — Area uses bounded React Grab point stacks; no `querySelectorAll("*")`.
+- G03-006 PASS — real marker clicks exercise edit/complete/reopen/delete.
+- G03-007 PASS — clipboard excludes completed annotations; manual fallback shown.
+- G03-008 PASS — drag/collapse/hotkey/Tooltip/Help tests pass.
+- G03-009 PASS — host ignore attribute exists before capture/inspection.
+- G03-010 PASS — runtime vocabulary audit has zero matches.
+- G03-011 PASS — exactly one primitives import; forbidden-engine audit empty.
+- G03-012 PASS — idempotent unmount removes listeners/timers/root; remount passes.
+- G03-013 PASS — required screenshots and Playwright traces saved externally.
+- G03-014 PASS — build, pack, external frozen-offline consumer build/E2E pass.
+- G03-015 PASS — Default Portal integration remains unchanged; only this plan
+  changes in the template repository.
+- Known issues within Goal 03: none.
+- Not started: Goals 04, 05, 06, 07, 08, 09, and 10.
 
 ## 最终报告格式
 
