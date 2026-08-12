@@ -50,23 +50,35 @@ const FIBER_PATTERN = new RegExp('__react' + 'Fiber\\$');
 const MODULE_GRAPH_PATTERN = new RegExp('module' + 'Graph');
 const TRANSFORM_RESULT_PATTERN = new RegExp('transform' + 'Result');
 const RESOLVE_SOURCES_PATTERN = new RegExp('resolve' + 'ComponentSources');
-const ASSIGN_SOURCES_PATTERN = new RegExp('assign' + 'SourceCandidates');
+// Note: the assign-source-candidates guard now lives in the permanent
+// `pnpm studio:inspection:audit` command (Goal 05) — its pattern strings
+// would otherwise trip the very greps they enforce.
 const FORBIDDEN_INSPECTION_PATTERNS = [
   FIBER_PATTERN,
   MODULE_GRAPH_PATTERN,
   TRANSFORM_RESULT_PATTERN,
   RESOLVE_SOURCES_PATTERN,
-  ASSIGN_SOURCES_PATTERN,
   /\b(fallback|legacy)\b/,
 ];
 
 describe("whole-repository react-grab import ownership", () => {
+  // The Goal 05 audit test intentionally builds forbidden-pattern fixtures
+  // (it exercises `pnpm studio:inspection:audit`), so it is excluded from
+  // this gate exactly like the audit script excludes itself.
+  const SELF_REFERENTIAL_GUARD_FILES = new Set([
+    "tests/logic/portal-studio/inspection-audit.test.ts",
+  ]);
   const files = [
     ...collectFiles(path.join(repoRoot, "src")),
     ...collectFiles(path.join(repoRoot, "tests")),
     ...collectFiles(path.join(repoRoot, "e2e")),
     ...collectFiles(path.join(repoRoot, "scripts")),
-  ];
+  ].filter(
+    (file) =>
+      !SELF_REFERENTIAL_GUARD_FILES.has(
+        path.relative(repoRoot, file).split(path.sep).join("/")
+      )
+  );
 
   it("allows exactly one file to import the upstream primitives module", () => {
     const importers = files.filter((file) =>

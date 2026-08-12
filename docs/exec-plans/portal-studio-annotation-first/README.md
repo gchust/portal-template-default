@@ -3,6 +3,7 @@
 > Studio UX work is `docs/exec-plans/portal-studio-horizontal-toolbar-v5/`
 > (the accepted draggable horizontal icon-first toolbar). Do not implement
 > the conflicting designs here.
+> **ARCHIVED — DO NOT IMPLEMENT** — superseded by React Grab single-engine migration v1; the custom Fiber/module-graph adapter and v1–v5 compatibility are deleted (Goal 05).
 
 # Portal Studio — Annotation-first redesign (executable series)
 

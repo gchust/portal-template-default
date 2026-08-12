@@ -126,7 +126,12 @@ export async function buildCaptureDraft(
     if (businessContext.length >= MAX_BUSINESS_CONTEXT_ITEMS) break;
   }
   const captures: ElementCapture[] = ordered.map((target) => {
-    const { businessContext: _business, route: _route, ...capture } = target;
+    // The pipeline attaches businessContext/route per target for the
+    // aggregation pass; they are NOT persisted per capture (v6 element
+    // captures carry no such fields).
+    const { businessContext, route, ...capture } = target;
+    void businessContext;
+    void route;
     return capture as ElementCapture;
   });
   return { ok: true, captures, businessContext };

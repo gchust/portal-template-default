@@ -304,11 +304,15 @@ const saveTask = async (
   // matches all three states and toBeEnabled resolves once enabled.
   await expect(saveButton, { timeout: 20000 }).toBeEnabled();
   await saveButton.click();
-  // Goal 02: the compact toast replaces the technical Saved panel.
+  // Goal 02: the compact toast replaces the technical Saved panel. The
+  // save POST + screenshot merge can exceed 5s on a cold /dev page (Vite
+  // on-demand compile), so the toast wait gets the same bounded window as
+  // the Save-enabled wait above.
   await expect(
     page.locator("#portal-studio-root .ps-save-toast", {
       hasText: /Annotation saved|批注已保存/,
-    })
+    }),
+    { timeout: 20000 }
   ).toBeVisible();
   await expect
     .poll(() => readActiveTask().annotations.at(-1)?.comment)
@@ -4147,6 +4151,14 @@ test("G05-06 annotation surfaces: composer, marker editor, completed/unresolved/
         createdAt: "2026-08-11T00:00:00.000Z",
         status: "open",
         elements: [capture],
+        pageContext: {
+          url: resolvePortalTestURL(environment, "/users"),
+          routeKey: "/users",
+          title: "Users",
+          viewport: { width: 1440, height: 900 },
+          scroll: { x: 0, y: 0 },
+          businessContext: [],
+        },
       })),
       businessContext: [],
       redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
@@ -4209,12 +4221,22 @@ test("G05-06 annotation surfaces: composer, marker editor, completed/unresolved/
           elements: [
             {
               tagName: "td",
-              selectorCandidates: [
-                { kind: "id", selector: "#does-not-exist-xyz" },
-              ],
-              componentCandidates: [],
-              sourceCandidates: [],
-              snapshot: { text: "gone", attributes: {}, childCount: 0 },
+              selector: "#does-not-exist-xyz",
+              bounds: { x: 0, y: 0, width: 0, height: 0 },
+              componentName: null,
+              source: null,
+              sourceStack: [],
+              htmlPreview: "",
+              styleText: "",
+              fingerprint: {
+                tagName: "td",
+                role: "",
+                accessibleName: "",
+                text: "gone",
+                identityAttributes: {},
+                childCount: 0,
+                parent: { tagName: "tr", role: "" },
+              },
             },
           ],
         },

@@ -45,8 +45,10 @@ describe("currentRouteKey / capturePageContext", () => {
 });
 
 describe("annotationMatchesRoute", () => {
-  it("legacy annotations WITHOUT pageContext always render (backward compatible)", () => {
-    expect(annotationMatchesRoute(baseAnnotation())).toBe(true);
+  it("annotations WITHOUT pageContext never render (malformed v6 artifacts)", () => {
+    // Goal 05: the legacy "render everywhere" branch is gone — a missing
+    // routeKey must not render markers on an unknown route.
+    expect(annotationMatchesRoute(baseAnnotation())).toBe(false);
   });
 
   it("renders when the routeKey matches the current route", () => {

@@ -15,10 +15,6 @@
 import {
   TASK_FILENAME,
   TASK_SCHEMA_VERSION,
-  TASK_SCHEMA_VERSION_V1,
-  TASK_SCHEMA_VERSION_V2,
-  TASK_SCHEMA_VERSION_V4,
-  TASK_SCHEMA_VERSION_V5,
 } from "./types.ts";
 import type {
   Annotation,
@@ -40,8 +36,9 @@ export const ACTIVE_TASK_CLEAR_PATH = `tasks/${TASK_FILENAME}`;
  * Shared typed old-schema result (shared contract §5 "Unsupported old
  * artifacts"): any task-shaped artifact whose schemaVersion is not 6 gets
  * this one result with the actual/expected version and a safe instruction
- * to clear the dev-only task. Never normalized, never migrated. Returns
- * null for v6 tasks and for non-task inputs (which stay "invalid_task").
+ * to clear the dev-only task. This is the ONE schema-version check —
+ * rejection, never normalization or migration. Returns null for v6 tasks
+ * and for non-task inputs (which stay "invalid_task").
  */
 export function describeUnsupportedSchema(
   input: unknown
@@ -50,14 +47,6 @@ export function describeUnsupportedSchema(
   const schemaVersion = input.schemaVersion;
   if (typeof schemaVersion !== "number") return null;
   if (schemaVersion === TASK_SCHEMA_VERSION) return null;
-  const known = new Set([
-    TASK_SCHEMA_VERSION_V1,
-    TASK_SCHEMA_VERSION_V2,
-    3,
-    TASK_SCHEMA_VERSION_V4,
-    TASK_SCHEMA_VERSION_V5,
-  ]);
-  if (!known.has(schemaVersion)) return null;
   return {
     status: "unsupported_schema",
     schemaVersion,
@@ -89,7 +78,7 @@ export function normalizeTask(input: unknown): PortalStudioTask | null {
  * Every mutation is a pure function over the annotations list: stable
  * annotationIds never change; display numbers are derived live (order
  * index), so deletion renumbers automatically; empty lists are VALID
- * v5 tasks (the server accepts `annotations: []`).
+ * v6 tasks (the server accepts `annotations: []`).
  */
 
 /** Append an annotation (bounded by MAX_ANNOTATIONS). */
@@ -136,7 +125,7 @@ export function updateAnnotationComment(
   );
 }
 
-/** Clear all annotations → a valid empty v5 task (clear-all action). */
+/** Clear all annotations → a valid empty v6 task (clear-all action). */
 export function clearAnnotations(): Annotation[] {
   return [];
 }
@@ -144,8 +133,8 @@ export function clearAnnotations(): Annotation[] {
 /**
  * Group bound for the true multi-select mode (D-033 #5). Kept local so this
  * module stays importable at vite config-load time (no `@/` alias there,
- * D-008) — selection.ts's MAX_SELECTED_ELEMENTS is the same value for the
- * legacy selection model; both are deliberately aligned at 50.
+ * D-008) — selection.ts's MAX_SELECTED_ELEMENTS is the same value; both
+ * are deliberately aligned at 50.
  */
 export const MAX_GROUP_ELEMENTS = 50;
 

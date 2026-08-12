@@ -1,5 +1,5 @@
 /**
- * Task id for the schema-v4 task JSON. `crypto.randomUUID` is only available
+ * Task id for the v6 task JSON. `crypto.randomUUID` is only available
  * in secure contexts (https or localhost); the Studio also runs from plain
  * http on a LAN IP (D-031), where it throws and would strand the save flow
  * in the "saving" state. Fall back to a Math.random-based v4-shaped id.

@@ -15,7 +15,6 @@
 export const DOCK_STORAGE_KEY = "portal-studio.dock";
 export const DEFAULT_DOCK_MARGIN = 16;
 export const TOGGLE_SIZE = 40;
-export const DOCK_ROW_GAP = 4;
 /** Single launcher — no badge, no More button (Goal 01). */
 export const DEFAULT_DOCK_WIDTH = TOGGLE_SIZE;
 

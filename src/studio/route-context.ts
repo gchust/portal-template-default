@@ -5,8 +5,8 @@
  * viewport, scroll, businessContext) at creation time. Markers for an
  * annotation only resolve/render when the CURRENT routeKey matches the
  * annotation's — an annotation made on /users must never render markers
- * over a /dev/ai-chat page. Legacy annotations WITHOUT pageContext keep
- * rendering everywhere (backward compatible).
+ * over a /dev/ai-chat page. Every v6 annotation carries pageContext, so a
+ * missing routeKey (malformed artifact) never renders markers anywhere.
  */
 
 import type { Annotation, BusinessContextItem } from "./types";
@@ -33,12 +33,11 @@ export function capturePageContext(
 }
 
 /**
- * Whether the annotation's markers may render on the current route.
- * Absent pageContext (legacy annotations) always matches; otherwise the
- * routeKey must equal the current one.
+ * Whether the annotation's markers may render on the current route: the
+ * annotation's routeKey must equal the current one. A missing routeKey
+ * (malformed v6 artifact) never matches — markers must not render on an
+ * unknown route.
  */
 export function annotationMatchesRoute(annotation: Annotation): boolean {
-  const routeKey = annotation.pageContext?.routeKey;
-  if (!routeKey) return true;
-  return routeKey === currentRouteKey();
+  return annotation.pageContext?.routeKey === currentRouteKey();
 }

@@ -111,8 +111,8 @@ export function AnnotationMarkerLayer({
       {visibleAnnotations.map((annotation) => {
         if (!markersVisible || annotation.hidden === true) return null;
         // Goal 06: markers only render when the annotation's routeKey
-        // matches the current route (legacy annotations without pageContext
-        // always render).
+        // matches the current route (v6 annotations always carry
+        // pageContext).
         if (!annotationMatchesRoute(annotation)) return null;
         // Review P2: marker numbers are STABLE across Open/All filtering —
         // always derived from the FULL annotations list so they match the

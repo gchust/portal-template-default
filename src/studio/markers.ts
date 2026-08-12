@@ -129,10 +129,9 @@ export function resolveMarkerEditorPosition(
 // ---------------------------------------------------------------------------
 // Goal 05 follow-up (manual-test finding): marker collision resolution.
 // Two annotations can legitimately resolve to targets whose anchors overlap
-// (adjacent small cells, or older captures with ambiguous selectors that
-// collapse onto one element). The markers must never cover each other: the
-// later marker is nudged along a diagonal until its footprint is free, while
-// the FIRST annotation keeps its exact anchor.
+// (adjacent small cells). The markers must never cover each other: the
+// later marker is nudged along a diagonal until its footprint is free,
+// while the FIRST annotation keeps its exact anchor.
 // ---------------------------------------------------------------------------
 
 /** Marker footprint (the ≈30px hit box, incl. the ::before extension). */

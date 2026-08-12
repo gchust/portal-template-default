@@ -1,3 +1,10 @@
+> **ARCHIVED — DO NOT IMPLEMENT — superseded by React Grab single-engine migration v1**
+>
+> This plan promoted the custom Fiber/module-graph perception adapter and v1–v5 schema
+> compatibility. The migration contract (docs/exec-plans/portal-studio-react-grab-migration-v1/)
+> is the only normative source; schema v6 and react-grab/primitives are the only supported
+> engine. Kept for history only.
+
 # 02 — Persistent per-comment annotations (independently executable)
 
 Implements: D-033 #1, #4, #6, #7, #8, #9, #14, #17; D-034 #1, #2, #3, #8;

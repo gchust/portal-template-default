@@ -118,7 +118,8 @@
     "studio:reopen": "tsx ./scripts/portal-studio-agent.mjs reopen",
     "studio:print": "tsx ./scripts/portal-studio-print.mjs",
     "studio:verify": "tsx ./scripts/portal-studio-verify.mjs",
-    "studio:mcp": "tsx ./scripts/portal-studio-mcp.mjs"
+    "studio:mcp": "tsx ./scripts/portal-studio-mcp.mjs",
+    "studio:inspection:audit": "tsx ./scripts/portal-studio-inspection-audit.ts"
   },
   "browserslist": {
     "production": [

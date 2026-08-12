@@ -31,8 +31,18 @@ export type UseCaptureFreezeOptions = {
   onRouteChange: () => void;
 };
 
-/** How long after an interaction the freeze is re-applied (flush window). */
-export const FREEZE_REAPPLY_DELAY_MS = 120;
+/**
+ * How long after an interaction the freeze is re-applied (flush window).
+ *
+ * G05 finding: the upstream pause resume replays the whole fiber tree on
+ * unfreeze, which under load can take 100-300ms before the interaction's
+ * OWN dispatches even schedule their render. Re-freezing while that render
+ * is still pending makes the update invisible to React (the queue patch),
+ * sticking the UI in the pre-interaction state (the Goal 04 stuck class).
+ * 500ms covers the worst observed flush while keeping the capture window
+ * tight (pointermove never unfreezes, so hovers stay frozen).
+ */
+export const FREEZE_REAPPLY_DELAY_MS = 500;
 
 export function useCaptureFreeze(options: UseCaptureFreezeOptions): {
   /** Bounded user-facing freeze failure (null when healthy). */

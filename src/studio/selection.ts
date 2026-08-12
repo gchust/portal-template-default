@@ -41,17 +41,6 @@ export function toggleInSelection(
   return { ...state, elements };
 }
 
-export function clearSelection(): SelectionState {
-  return EMPTY_SELECTION;
-}
-
-export function setRegion(
-  state: SelectionState,
-  region: Region | undefined
-): SelectionState {
-  return { ...state, region };
-}
-
 /** Normalize a raw marquee rect into a bounded viewport-aligned rect. */
 export function normalizeRegion(
   raw: { x: number; y: number; width: number; height: number },
@@ -90,18 +79,6 @@ export function toDocumentRegion(
 }
 
 /** Convert a document-relative v6 region back to viewport coordinates. */
-export function toViewportRegion(
-  region: Region,
-  scroll: { x: number; y: number }
-): { x: number; y: number; width: number; height: number } {
-  return {
-    x: Math.round(region.x - scroll.x),
-    y: Math.round(region.y - scroll.y),
-    width: Math.round(region.width),
-    height: Math.round(region.height),
-  };
-}
-
 const intersects = (rect: DOMRect, region: Region) =>
   rect.left < region.x + region.width &&
   rect.right > region.x &&

@@ -104,6 +104,33 @@ const jsonResponse = (payload: unknown, ok = true, status?: number) => ({
 });
 
 /**
+ * Mirror the server's v6 contract (sanitizeTask REQUIRES pageContext on
+ * every annotation): fixtures that omit it get the default context for
+ * the jsdom route "/" so marker route-gating behaves like production.
+ */
+const withRequiredPageContext = (annotations: unknown[]): unknown[] =>
+  annotations.map((annotation) => {
+    if (
+      annotation &&
+      typeof annotation === "object" &&
+      !("pageContext" in (annotation as Record<string, unknown>))
+    ) {
+      return {
+        ...(annotation as Record<string, unknown>),
+        pageContext: {
+          url: "http://127.0.0.1:4173/users",
+          routeKey: "/",
+          title: "Users",
+          viewport: { width: 1280, height: 720 },
+          scroll: { x: 0, y: 0 },
+          businessContext: [],
+        },
+      };
+    }
+    return annotation;
+  });
+
+/**
  * URL-routed fetch mock: the panel's status GET and the save-flow POSTs are
  * dispatched by URL so mock ordering never depends on effect timing.
  */
@@ -219,6 +246,9 @@ beforeEach(async () => {
 
 afterEach(() => {
   document.body.innerHTML = "";
+  // Restore the default route: marker route-gating compares against the
+  // CURRENT pathname, and earlier tests may have pushed other routes.
+  window.history.pushState({}, "", "/");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -280,9 +310,6 @@ describe("StudioToolbar", () => {
             ok: true,
             taskId: "task-1",
             file: "/repo/.portal-studio/tasks/active-task.json",
-            sourceCandidates: [
-              { kind: "module", file: "/repo/registry/users/list.tsx", line: 42 },
-            ],
           }),
       },
       {
@@ -399,7 +426,7 @@ describe("StudioToolbar", () => {
       {
         url: "/__portal-studio/tasks",
         method: "POST",
-        respond: async () => jsonResponse({ ok: true, taskId: "task-1", sourceCandidates: [] }),
+        respond: async () => jsonResponse({ ok: true, taskId: "task-1" }),
       },
       {
         url: "/__portal-studio/screenshots",
@@ -473,7 +500,7 @@ describe("StudioToolbar", () => {
       {
         url: "/__portal-studio/tasks",
         method: "POST",
-        respond: async () => jsonResponse({ ok: true, taskId: "task-1", sourceCandidates: [] }),
+        respond: async () => jsonResponse({ ok: true, taskId: "task-1" }),
       },
       {
         url: "/__portal-studio/screenshots",
@@ -800,7 +827,9 @@ describe("StudioToolbar", () => {
       createdAt: "2026-08-07T12:00:00.000Z",
       url: "http://127.0.0.1:4173/users",
       title: "Users",
-      annotations,
+      // The real server REQUIRES pageContext on every v6 annotation — the
+      // harness mirrors that by defaulting the fixture annotations.
+      annotations: withRequiredPageContext(annotations),
       businessContext: [],
       redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
       screenshot: {
@@ -1309,13 +1338,21 @@ describe("StudioToolbar", () => {
         status: "open",
         elements: Array.from({ length: 40 }, (_, i) => ({
           tagName: "div",
-          selectorCandidates: [{ kind: "path", selector: `x > div:nth(${i})` }],
-          componentCandidates: [],
-          sourceCandidates: [],
-          snapshot: {
-            text: "t".repeat(2000),
-            attributes: {},
+          selector: `x > div:nth(${i})`,
+          bounds: { x: 0, y: 0, width: 0, height: 0 },
+          componentName: null,
+          source: null,
+          sourceStack: [],
+          htmlPreview: "t".repeat(2000),
+          styleText: "",
+          fingerprint: {
+            tagName: "div",
+            role: "",
+            accessibleName: "",
+            text: "",
+            identityAttributes: {},
             childCount: 0,
+            parent: { tagName: "body", role: "" },
           },
         })),
       },
@@ -1895,7 +1932,7 @@ describe("StudioToolbar", () => {
       {
         url: "/__portal-studio/tasks",
         method: "POST",
-        respond: async () => jsonResponse({ ok: true, taskId: "task-1", sourceCandidates: [] }),
+        respond: async () => jsonResponse({ ok: true, taskId: "task-1" }),
       },
       {
         url: "/__portal-studio/tasks",
@@ -2013,7 +2050,9 @@ describe("StudioToolbar", () => {
       createdAt: "2026-08-08T12:00:00.000Z",
       url: "http://127.0.0.1:4173/users",
       title: "Users",
-      annotations,
+      // The real server REQUIRES pageContext on every v6 annotation — the
+      // harness mirrors that by defaulting the fixture annotations.
+      annotations: withRequiredPageContext(annotations),
       businessContext: [],
       redaction: { droppedKeys: [], redactedValues: 0, truncatedValues: 0 },
     },
@@ -3288,7 +3327,7 @@ describe("StudioToolbar", () => {
           postedTaskIds.push(body.taskId);
           postedTaskBodies.push(body);
           taskExists = true;
-          return jsonResponse({ ok: true, taskId: body.taskId, sourceCandidates: [] });
+          return jsonResponse({ ok: true, taskId: body.taskId });
         },
       },
       {
@@ -3595,7 +3634,7 @@ describe("StudioToolbar", () => {
           postedTaskIds.push(body.taskId);
           postedTaskBodies.push(body);
           currentTask = body;
-          return jsonResponse({ ok: true, taskId: body.taskId, sourceCandidates: [] });
+          return jsonResponse({ ok: true, taskId: body.taskId });
         },
       },
       {
@@ -3659,7 +3698,7 @@ describe("StudioToolbar", () => {
           postedTaskIds.push(body.taskId);
           postedTaskBodies.push(body);
           currentTask = body;
-          return jsonResponse({ ok: true, taskId: body.taskId, sourceCandidates: [] });
+          return jsonResponse({ ok: true, taskId: body.taskId });
         },
       },
       {
@@ -3755,7 +3794,7 @@ describe("StudioToolbar", () => {
           postedTaskIds.push(body.taskId);
           postedTaskBodies.push(body);
           currentTask = body;
-          return jsonResponse({ ok: true, taskId: body.taskId, sourceCandidates: [] });
+          return jsonResponse({ ok: true, taskId: body.taskId });
         },
       },
       {
@@ -5269,7 +5308,6 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
           return jsonResponse({
             ok: true,
             taskId: task.taskId,
-            sourceCandidates: [],
           });
         },
       },
@@ -5555,7 +5593,7 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
         respond: async () =>
           failNext
             ? jsonResponse({ ok: false, error: "invalid_task" }, false, 400)
-            : jsonResponse({ ok: true, taskId: "task-g02-07", sourceCandidates: [] }),
+            : jsonResponse({ ok: true, taskId: "task-g02-07" }),
       },
       {
         url: "/__portal-studio/screenshots",
@@ -5648,7 +5686,6 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
           return jsonResponse({
             ok: true,
             taskId: body.taskId,
-            sourceCandidates: [],
             taskRevision: 2,
           });
         },
@@ -5695,7 +5732,6 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
           return jsonResponse({
             ok: true,
             taskId: "task-g02-03b",
-            sourceCandidates: [],
             taskRevision: 1,
           });
         },
@@ -5778,7 +5814,6 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
           return jsonResponse({
             ok: true,
             taskId: "task-g02-03b-m",
-            sourceCandidates: [],
           });
         },
       },
@@ -5829,7 +5864,6 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
           return jsonResponse({
             ok: true,
             taskId: "task-g02-03b-a",
-            sourceCandidates: [],
           });
         },
       },
@@ -5884,7 +5918,6 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
           return jsonResponse({
             ok: true,
             taskId: "task-g02-03b-r",
-            sourceCandidates: [],
           });
         },
       },
@@ -5933,7 +5966,7 @@ describe("Goal 02 — fast target-side composer and continuous loop", () => {
         url: "/__portal-studio/tasks",
         method: "POST",
         respond: async () =>
-          jsonResponse({ ok: true, taskId: "task-g02-08", sourceCandidates: [] }),
+          jsonResponse({ ok: true, taskId: "task-g02-08" }),
       },
       {
         url: "/__portal-studio/screenshots",
@@ -6194,7 +6227,7 @@ describe("Goal 03 — stable marker/list semantics and viewport polish", () => {
               createdAt: "2026-08-10T00:00:00.000Z",
               url: "http://127.0.0.1:4173/users",
               title: "Users",
-              annotations: current,
+              annotations: withRequiredPageContext(current),
               businessContext: [],
               redaction: {
                 droppedKeys: [],

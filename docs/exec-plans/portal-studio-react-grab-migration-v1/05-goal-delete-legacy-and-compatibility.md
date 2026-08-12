@@ -186,28 +186,46 @@ Record findings and fixes.
 
 ## Progress
 
-- [ ] Inventory every old symbol and import edge.
-- [ ] Delete custom Fiber path.
-- [ ] Delete Vite source guessing/backfill.
-- [ ] Delete candidate schema.
-- [ ] Delete v1–v5 compatibility.
-- [ ] Simplify endpoint/task/revision/formatter code.
-- [ ] Archive conflicting docs.
-- [ ] Add and test the permanent inspection audit command.
-- [ ] Run zero-result checks.
-- [ ] Perform independent semantic review.
-- [ ] Run full gates and audit ACs.
+- [x] Inventory every old symbol and import edge (grab.ts/capture.ts dead since Goal 03 — only imported by each other; legacy constants; stale comments; route-context legacy branch; test fixtures still carrying candidate fields).
+- [x] Delete custom Fiber path (`src/studio/grab.ts`, `src/studio/capture.ts` deleted — all useful helpers already have v6 equivalents in the inspection domain).
+- [x] Delete Vite source guessing/backfill (already gone since Goal 03; stale comments removed, plugin header rewritten).
+- [x] Delete candidate schema (field/type names removed from every active fixture; negative-sanitizer test now builds the field names dynamically).
+- [x] Delete v1–v5 compatibility (`TASK_SCHEMA_VERSION_V1/_V2/_V4/_V5` constants deleted; `describeUnsupportedSchema` is now ONE plain `schemaVersion !== 6` check; the route-context "legacy annotations render everywhere" branch deleted — the server already REQUIRES pageContext on every v6 annotation).
+- [x] Simplify endpoint/task/revision/formatter code (stale v1–v5 claims in comments rewritten; dead server sanitizers/constants/imports removed; ESLint back to 0 errors; 6 truly-dead exports removed: DOCK_ROW_GAP, MAX_WAIT_TIMEOUT_MS, MAX_SOURCE_REVISION_FILES, clearSelection, setRegion, toViewportRegion).
+- [x] Archive conflicting docs (ARCHIVED header added to every file under docs/exec-plans/portal-studio/ and docs/exec-plans/portal-studio-annotation-first/).
+- [x] Add and test the permanent inspection audit command (`pnpm studio:inspection:audit`; 29 unit tests with passing + per-pattern failing fixture trees; scripts/ added to tsconfig include).
+- [x] Run zero-result checks (all six mandatory greps clean — only the audit script's own allowlisted pattern strings match).
+- [x] Perform independent semantic review (fresh reviewer starting from the shared contract; findings fixed, gates re-run).
+- [x] Run full gates and audit ACs (typecheck, 701 Vitest tests, contract 20/20, Portal Studio E2E 31/31, build + prod exclusion, eslint 0 errors).
 
 ## Surprises & Discoveries
 
-- None yet.
+- The mandatory zero-result greps also matched the OWNERSHIP TEST's dynamic pattern literals (`'assign' + 'SourceCandidates'`) and the new audit test's fixture content — self-referential guard files must be allowlisted (the ownership gate now excludes the audit test exactly like the audit script excludes itself).
+- tsc does not typecheck `tests/` (tsconfig includes only src/registry/scripts), so a fixture helper accidentally scoped inside one describe and referenced from a sibling describe only failed at RUNTIME (ReferenceError inside the mocked GET → empty annotation state → "no markers" symptoms).
+- Removing the route-context legacy branch surfaced an ORDER-DEPENDENT component-test failure: earlier route tests pushState to /dev/ai-chat, and the G03 marker fixtures now carry routeKey "/" — the toolbar afterEach now resets the history.
+- ESLint found 8 pre-existing dead-code errors at HEAD (unused server sanitizers, constants, an import) — exactly Goal 05's deletion mandate, fixed.
+- The react-grab contract suite began flaking under load at "cancelCapture → unfreeze": the 120ms freeze reapply can re-freeze BEFORE the interaction's own render commits (the upstream pause-resume replay of the whole fiber tree can take 100-300ms under load, and the queue patch then hides the pending update — the Goal 04 stuck class). Bumped FREEZE_REAPPLY_DELAY_MS to 500ms with a documented rationale; contract suite 20/20 x3 in a row after the change.
+- The dev-page E2E's save toast can take >5s on a cold Vite /dev compile — the saveTask helper's toast wait now gets the same 20s window as its Save-enabled wait.
 
 ## Decision Log
 
 - Decision: Old dev artifacts are disposable and receive no migration.
   Rationale: feature is unreleased; compatibility would permanently retain duplicate concepts.
-  Date/Author: Goal author; confirm during implementation.
+  Date/Author: Goal author; confirmed during implementation.
+- Decision: `describeUnsupportedSchema` compares `schemaVersion !== 6` with NO known-version set.
+  Rationale: G05-AC06 / contract §5 — any non-6 numeric version gets the one typed rejection; non-task inputs stay invalid_task.
+- Decision: the route-context "missing pageContext renders everywhere" branch is deleted.
+  Rationale: the server already REQUIRES pageContext on every v6 annotation (sanitizeTask rejects without it), so the branch was dead compatibility; a malformed artifact now never renders markers on an unknown route.
+- Decision: the audit script and its unit tests are explicit pattern-string allowlists (plus archived docs outside the scan scope), and the ownership gate excludes the audit test.
+  Rationale: the guard must not fail on its own enforcement literals — the goal's "explicit path allowlists for archived documentation and the audit script's own pattern strings".
+- Decision: FREEZE_REAPPLY_DELAY_MS raised 120 → 500.
+  Rationale: re-freezing before the interaction's render commits makes the update invisible to React (upstream queue patch), sticking the UI in the pre-interaction state; 500ms covers the worst observed flush while hovers stay frozen (pointermove never unfreezes).
 
 ## Outcomes & Retrospective
 
-Fill at completion, including before/after changed line counts for the removed engine area and all zero-result outputs.
+- G05-AC01…G05-AC14 all PASS (see evidence log; audit unit tests 29/29).
+- Deleted: `src/studio/grab.ts` (106 lines), `src/studio/capture.ts` (383 lines) — 489 lines of legacy Fiber/candidate code removed; `TASK_SCHEMA_VERSION_V1/_V2/_V4/_V5` constants and all candidate-array fields/types removed; six dead exports removed; 8 ESLint dead-code errors fixed (0 errors remaining).
+- The single unsupported-schema path is now one plain `schemaVersion !== 6` check shared by browser, endpoint, print, verify, CLI and MCP (unchanged shared typed result).
+- `pnpm studio:inspection:audit` (scripts/portal-studio-inspection-audit.ts) enforces the eight architecture invariants with explicit allowlists; 29 unit tests prove pass + fail for every forbidden construct incl. injected fixtures.
+- Zero-result outputs: all six mandatory greps return nothing outside the two allowlisted guard files.
+- Full gates: `pnpm typecheck` clean; `pnpm test` 59 files / 702 tests PASS; react-grab contract 20/20 (three consecutive runs); Portal Studio E2E 31/31 twice in a row; `pnpm build` clean with zero react-grab|bippy|portal-studio in dist; `git diff --check` clean; eslint 0 errors (4 pre-existing hook-dep warnings); `pnpm studio:inspection:audit` PASS.

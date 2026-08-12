@@ -84,7 +84,7 @@ const formatElementLines = (elements: ElementCapture[]): string[] => {
 const formatAnnotation = (annotation: Annotation): string[] => {
   const lines: string[] = [];
   // v6: pageContext is required on new annotations; the formatter stays
-  // defensive for raw/legacy files that lack it.
+  // defensive for malformed artifacts that lack it.
   const pageContext = annotation.pageContext;
   lines.push(
     `- page: ${pageContext?.routeKey || pageContext?.url || "(unknown)"}` +
@@ -123,8 +123,8 @@ const formatAnnotation = (annotation: Annotation): string[] => {
 };
 
 /**
- * Render the canonical (v5-normalized) task as Markdown — the single
- * agent-facing format shared by Copy, the print CLI, and MCP.
+ * Render the canonical (v6) task as Markdown — the single agent-facing
+ * format shared by Copy, the print CLI, and MCP.
  *
  * Goal 04: one shared formatter with an explicit all-mode option.
  * The DEFAULT (no option) renders ALL annotations (existing behavior —
@@ -263,9 +263,9 @@ export function formatTaskMarkdown(
 }
 
 /**
- * Render the canonical (v5-normalized) task as pretty-printed JSON — used
- * by the print CLI `--json` and MCP `print_task` so all consumers see the
- * exact same artifact (v4 files are served normalized, D-033 #17).
+ * Render the canonical (v6) task as pretty-printed JSON — used by the
+ * print CLI `--json` and MCP `print_task` so all consumers see the exact
+ * same artifact. Old-schema artifacts render the shared typed rejection.
  */
 export function formatTaskJson(
   input: unknown
@@ -283,8 +283,8 @@ export function formatTaskJson(
 
 /** Whether every annotation is completed (for verify semantics, G04). */
 export function isTaskCompleted(task: PortalStudioTask): boolean {
-  // Defensive: only canonical v5 artifacts have annotations[] (F-4); a
-  // manually-dropped legacy file must never 500 the verify endpoint.
+  // Defensive: only canonical v6 tasks have annotations[] (F-4); a
+  // malformed artifact must never 500 the verify endpoint.
   if (!Array.isArray(task.annotations)) return false;
   return (
     task.annotations.length > 0 &&

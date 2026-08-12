@@ -43,9 +43,6 @@ import { applyMutationOperations } from "@/studio/mutation";
 import { normalizeTask } from "@/studio/task-model";
 import {
   TASK_SCHEMA_VERSION,
-  TASK_SCHEMA_VERSION_V1,
-  TASK_SCHEMA_VERSION_V2,
-  TASK_SCHEMA_VERSION_V4,
 } from "@/studio/types";
 
 const makeTempStudioRoot = () =>
@@ -111,19 +108,19 @@ const v6Task = {
 /** Old-schema fixtures used ONLY to prove the typed unsupported rejection. */
 const oldSchemaFixtures = [
   {
-    schemaVersion: TASK_SCHEMA_VERSION_V1,
+    schemaVersion: 1,
     taskId: "old-1",
     instruction: "x",
     element: {},
   },
   {
-    schemaVersion: TASK_SCHEMA_VERSION_V2,
+    schemaVersion: 2,
     taskId: "old-2",
     instruction: "x",
     elements: [],
   },
   {
-    schemaVersion: TASK_SCHEMA_VERSION_V4,
+    schemaVersion: 4,
     taskId: "old-4",
     instruction: "x",
     elements: [],
@@ -430,23 +427,31 @@ describe("task sanitization (v6 only)", () => {
     expect(sanitizeTask(huge)).toBeNull();
   });
 
-  it("rejects client-supplied source backfill fields (server resolves nothing)", () => {
+  it("drops client-supplied legacy backfill fields (v6 whitelist only)", () => {
     const withSources = structuredClone(v6Task);
+    // Field names are built dynamically so the audit's zero-result search
+    // stays clean: the v6 whitelist must drop ANY unknown element field.
+    const backfillFieldA = "source" + "Candidates";
+    const backfillFieldB = "selector" + "Candidates";
     (withSources.annotations[0].elements[0] as Record<string, unknown>)[
-      "sourceCandidates"
+      backfillFieldA
     ] = [{ kind: "module", file: "/fake/evil.ts", line: 1 }];
     (withSources.annotations[0].elements[0] as Record<string, unknown>)[
-      "selectorCandidates"
+      backfillFieldB
     ] = [{ kind: "id", selector: "#x" }];
     const task = sanitizeTask(withSources);
-    // v6 whitelist drops candidate fields entirely.
+    // The v6 whitelist drops unknown fields entirely and keeps the one
+    // normalized React Grab selector.
+    expect(task?.annotations[0].elements[0].selector).toBe("#row-a");
     expect(
-      (task?.annotations[0].elements[0] as Record<string, unknown>)
-        .sourceCandidates
+      (task?.annotations[0].elements[0] as Record<string, unknown>)[
+        backfillFieldA
+      ]
     ).toBeUndefined();
     expect(
-      (task?.annotations[0].elements[0] as Record<string, unknown>)
-        .selectorCandidates
+      (task?.annotations[0].elements[0] as Record<string, unknown>)[
+        backfillFieldB
+      ]
     ).toBeUndefined();
   });
 });

@@ -12,10 +12,6 @@
  */
 
 export const TASK_SCHEMA_VERSION = 6 as const;
-export const TASK_SCHEMA_VERSION_V1 = 1 as const;
-export const TASK_SCHEMA_VERSION_V2 = 2 as const;
-export const TASK_SCHEMA_VERSION_V4 = 4 as const;
-export const TASK_SCHEMA_VERSION_V5 = 5 as const;
 
 export const TASK_FILENAME = "active-task.json";
 export const SCREENSHOTS_DIRECTORY = "screenshots";
@@ -81,7 +77,7 @@ export type ScreenshotRef = {
   file: string;
   width: number;
   height: number;
-  /** When the browser captured this PNG (schema v3). */
+  /** When the browser captured this PNG. */
   capturedAt?: string;
 };
 
@@ -106,15 +102,15 @@ export type HeartbeatState = "online" | "stale" | "offline";
  * Server-derived page state (never trusted from the browser alone — the
  * server computes the state from the last client report time).
  */
-/** Revision-tracking states (contract §10, schema v4). */
+/** Revision-tracking states (contract §10). */
 export type RevisionState = "pending" | "matched" | "stale";
 
 /**
- * Update-verification bookkeeping (schema v4): the source revision is the
- * content hash of the task-referenced source files (computed by the dev
- * server from disk); the browser revision is a server-issued monotonic
- * counter bumped at every bootstrap (full reload); HMR ack is informational
- * (server-observed hot update), the reload bump is the authoritative signal.
+ * Update-verification bookkeeping: the source revision is the content hash
+ * of the task-referenced source files (computed by the dev server from
+ * disk); the browser revision is a server-issued monotonic counter bumped
+ * at every bootstrap (full reload); HMR ack is informational (server-
+ * observed hot update), the reload bump is the authoritative signal.
  */
 export type RevisionInfo = {
   sourceRevision: string;
@@ -154,10 +150,10 @@ export type Annotation = {
   status: "open" | "completed";
   completedAt?: string;
   /**
-   * Additive completion evidence (Goal 05): recorded by studio:complete
-   * with --verified and a bounded summary. ADDITIVE on purpose — legacy
-   * readers keep working (status/completedAt still the source of truth
-   * for "completed"); never inferred from HMR/source/timestamps/tests.
+   * Additive completion evidence (agent CLI --verified): recorded by
+   * studio:complete with --verified and a bounded summary. ADDITIVE on
+   * purpose — status/completedAt remain the source of truth for
+   * "completed"; never inferred from HMR/source/timestamps/tests.
    */
   completedEvidence?: {
     verified: boolean;
@@ -222,11 +218,11 @@ export type PortalStudioTask = {
   businessContext: BusinessContextItem[];
   redaction: RedactionManifest;
   screenshot?: ScreenshotRef;
-  /** Bounded ring buffer of runtime errors (schema v3). */
+  /** Bounded ring buffer of runtime errors. */
   diagnostics?: DiagnosticEntry[];
-  /** Server-derived page state (schema v3). */
+  /** Server-derived page state. */
   heartbeat?: HeartbeatReport;
-  /** Update-verification bookkeeping (schema v4). */
+  /** Update-verification bookkeeping. */
   revision?: RevisionInfo;
   /**
    * Server-owned monotonic task revision (Goal 05): incremented by the

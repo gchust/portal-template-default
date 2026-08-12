@@ -2,9 +2,9 @@
  * Portal Studio — dev endpoint helpers (server side, node only).
  *
  * Pure, testable pieces used by the serve-only Vite plugin (`vite.ts`):
- * constant-time session token verification, task validation/sanitization
- * (v1 and v2 payloads, normalized to schema v2), path-traversal-safe file
- * naming, atomic task/screenshot writes, and the clear lifecycle.
+ * constant-time session token verification, v6 task validation/
+ * sanitization, path-traversal-safe file naming, atomic task/screenshot
+ * writes, and the clear lifecycle.
  *
  * Security invariants (contract §7): loopback dev server only, random
  * per-session token (≥ 32 bytes CSPRNG), constant-time comparison, body and
@@ -47,10 +47,8 @@ import {
   type RevisionState,
   type ScreenshotRef,
   type SourceFrame,
-  type UnsupportedSchemaResult,
 } from "./types.ts";
 import {
-  describeUnsupportedSchema,
   MAX_ANNOTATIONS,
   MAX_COMPLETION_SUMMARY_LENGTH,
 } from "./task-model.ts";
@@ -138,9 +136,6 @@ export function redactSessionToken(text: string, sessionToken: string): string {
   return text.split(sessionToken).join("[REDACTED]");
 }
 
-const SECRET_KEY_PATTERN =
-  /(?:^|[-_.])(?:token|secret|password|authorization|cookie|api[-_.]?key)(?:$|[-_.]|$)/i;
-
 const SERVER_REDACTION_PATTERNS: Array<[RegExp, string]> = [
   [/\bBearer\s+[^\s"']+/gi, "Bearer [REDACTED]"],
   [/^(\s*(?:authorization|cookie|set-cookie)\s*:).*$/gim, "$1 [REDACTED]"],
@@ -160,9 +155,6 @@ const SERVER_REDACTION_PATTERNS: Array<[RegExp, string]> = [
   ],
 ];
 
-const MAX_SERVER_STRING = 2000;
-const MAX_SERVER_ATTRIBUTE = 200;
-const MAX_SERVER_DEPTH = 6;
 
 export type ServerRecorder = {
   droppedKeys: Set<string>;
@@ -200,60 +192,6 @@ function serverRedactText(
     if (truncated.length !== redacted.length) recorder.truncatedValues += 1;
   }
   return truncated;
-}
-
-function sanitizeServerValue(
-  value: unknown,
-  depth: number,
-  recorder: ServerRecorder
-): unknown {
-  if (typeof value === "string") {
-    return serverRedactText(value, MAX_SERVER_STRING, recorder);
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return value;
-  }
-  if (value === null || value === undefined) {
-    return null;
-  }
-  if (Array.isArray(value)) {
-    if (depth >= MAX_SERVER_DEPTH) {
-      recorder.truncatedValues += 1;
-      return "[truncated]";
-    }
-    return value.map((item) => sanitizeServerValue(item, depth + 1, recorder));
-  }
-  if (isRecord(value)) {
-    if (depth >= MAX_SERVER_DEPTH) {
-      recorder.truncatedValues += 1;
-      return "[truncated]";
-    }
-    const result: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      if (SECRET_KEY_PATTERN.test(key)) {
-        recorder.droppedKeys.add(key);
-        continue;
-      }
-      result[key] = sanitizeServerValue(entry, depth + 1, recorder);
-    }
-    return result;
-  }
-  return null;
-}
-
-function sanitizeServerAttributes(
-  attributes: Record<string, string>,
-  recorder: ServerRecorder
-): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(attributes)) {
-    if (SECRET_KEY_PATTERN.test(key)) {
-      recorder.droppedKeys.add(key);
-      continue;
-    }
-    result[key] = serverRedactText(value, MAX_SERVER_ATTRIBUTE, recorder);
-  }
-  return result;
 }
 
 /** Hash-then-compare so lengths do not leak through timing. */
@@ -725,10 +663,8 @@ export function updateActiveTaskEvidence(
   });
 }
 
-// Revision tracking (contract §10, schema v4, Decision Log D-019).
+// Revision tracking (contract §10).
 export const DEFAULT_WAIT_TIMEOUT_MS = 10_000;
-export const MAX_WAIT_TIMEOUT_MS = 30_000;
-export const MAX_SOURCE_REVISION_FILES = 20;
 
 /**
  * Content hash of the task-referenced source files (sorted, stable). Files
@@ -817,11 +753,11 @@ export function buildRevisionInfo(
 }
 
 /**
- * Validate and normalize a raw v1–v5 task payload into a safe v5 task
- * (schema evolution, D-033 #14/#17): v1–v4 payloads are accepted and
- * normalized into a single v5 annotation; v5 payloads validate their
- * `annotations[]` in place. The server never trusts client redaction —
- * every field is re-sanitized with the authoritative recorder.
+ * Validate and normalize a raw v6 task payload (server-authoritative):
+ * every field is re-sanitized with the authoritative recorder — the
+ * server never trusts client redaction. Schema v1-v5 artifacts get the
+ * shared typed unsupported_schema result (see describeUnsupportedSchema)
+ * — never normalized, never migrated.
  */
 export function sanitizeTask(
   input: unknown,
@@ -910,7 +846,7 @@ export function sanitizeTask(
   return task;
 }
 
-/** Validate a single v5 annotation (server-authoritative). */
+/** Validate a single v6 annotation (server-authoritative). */
 function sanitizeAnnotation(
   input: unknown,
   recorder: ServerRecorder
@@ -937,9 +873,9 @@ function sanitizeAnnotation(
   }
   const hidden =
     typeof input.hidden === "boolean" ? (input.hidden as boolean) : undefined;
-  // Goal 05: preserve the additive verified-completion evidence across the
+  // The additive verified-completion evidence is preserved across the
   // browser POST path (sanitized, bounded, never trusted raw). status and
-  // completedAt remain the canonical completion fields for legacy readers.
+  // completedAt remain the canonical completion fields.
   let completedEvidence: Annotation["completedEvidence"];
   const rawEvidence = isRecord(input.completedEvidence)
     ? input.completedEvidence
@@ -1288,8 +1224,8 @@ export function stampTaskRevision(
   // max(current clock, floor + 1 ms), so two successful writes that
   // observe the same (or an earlier, e.g. clock-adjusted) millisecond
   // still persist strictly increasing timestamps. Tasks (and persisted
-  // tasks) without updatedAt (legacy, or a fresh creation) fall back to
-  // the current time.
+  // tasks) without updatedAt (older artifacts or a fresh creation) fall
+  // back to the current time.
   const floorMs = [task.updatedAt, readActiveTask(studioRoot)?.updatedAt]
     .map((candidate) => (candidate ? Date.parse(candidate) : Number.NaN))
     // Malformed or out-of-range timestamps parse to NaN — ignore them;

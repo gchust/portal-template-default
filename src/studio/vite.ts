@@ -17,12 +17,14 @@ export function buildStudioInitScript(base: string): string {
 /**
  * Portal Studio — serve-only Vite plugin.
  *
- * Dev-only (apply: "serve"): owns the session token, the local task endpoint,
- * the dev HTML bootstrap injection, and server-side source-candidate
- * resolution against the Vite module graph. Never participates in production
- * builds: `pnpm build` does not run serve plugins, so no endpoint, token, or
- * injection code reaches `dist/` (verified by Goal 01 prod-exclusion
- * evidence).
+ * Dev-only (apply: "serve"): owns the session token, the local task
+ * endpoint, the dev HTML bootstrap injection, and the source-revision
+ * bookkeeping. Never participates in production builds: `pnpm build` does
+ * not run serve plugins, so no endpoint, token, or injection code reaches
+ * `dist/` (verified by Goal 01 prod-exclusion evidence). The v6 artifact
+ * already carries the normalized source/sourceStack from the browser-side
+ * inspection engine — there is NO server-side source resolution or
+ * module-graph backfill.
  */
 
 import { randomBytes } from "node:crypto";
@@ -30,7 +32,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { networkInterfaces } from "node:os";
 
-import type { Plugin, ViteDevServer } from "vite";
+import type { Plugin } from "vite";
 
 import {
   atomicWriteSessionFile,
@@ -131,7 +133,7 @@ export const ownServerAddresses = (): ReadonlySet<string> => {
 };
 
 /**
- * Trusted dev-machine source: loopback (legacy contract §7) or any address
+ * Trusted dev-machine source: loopback (contract §7) or any address
  * bound to this machine (LAN dev access). Remote machines stay rejected
  * unless the plugin is configured with `allowRemote` (D-031).
  */
@@ -725,9 +727,8 @@ export function portalStudioPlugin(
                 if (!authoritative) {
                   return { ok: false, error: "no_active_task" };
                 }
-                // P2-2 review: the typed ops apply against the NORMALIZED
-                // v5 task (legacy v1–v4 artifacts have no annotations[]
-                // and would crash the pure apply).
+                // The typed ops apply against the normalized v6 task (a
+                // non-v6 artifact never reaches the pure apply).
                 const normalized = normalizeTask(authoritative);
                 if (!normalized) {
                   // Goal 03: old-schema artifacts are rejected, never
