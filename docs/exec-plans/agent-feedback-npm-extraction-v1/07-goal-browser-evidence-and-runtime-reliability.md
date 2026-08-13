@@ -110,6 +110,7 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 - [x] 2026-08-13：通用包已完成 Screenshot、跨 realm 恢复、Freeze、Region 与 Marker observer 修复；Goal 08 未开始。
 - [x] 2026-08-13：fresh relative-tarball consumer `/tmp/agent-feedback-g07-release2-d1UhnM/consumer` 完成 vertical、source benchmark、5 项 reliability browser E2E、production build 和 SIGTERM cleanup；外部证据位于 `/root/work/agent-feedback-goal07-evidence-20260813T0830Z/final/`。
 - [x] 2026-08-13：最终 follow-up 后 external consumer `/tmp/agent-feedback-g07-release-8N3ove` 的 reliability browser suite 5/5 PASS；package full Vitest 20 files / 88 tests、typecheck、build、audit、check:package 与 diff check 均 PASS。
+- [x] 2026-08-13：最终提交 `cf3fdf6` 后 fresh relative-tarball consumer `/tmp/agent-feedback-g07-final-cf3fdf6-jpMdQj/consumer` 完整 E2E、production build/exclusion 与 SIGTERM cleanup PASS；证据位于 `/root/work/agent-feedback-goal07-evidence-20260813T0830Z/final-cf3fdf6/`。
 
 ### Surprises & Discoveries
 
@@ -129,9 +130,9 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 
 **未交付：** Goal 07 无缺项。Goal 08、09、10 均未开始；未 push、publish。
 
-**执行证据：** `pnpm typecheck` PASS；focused/full Vitest 20 files / 87 tests PASS；`pnpm build` PASS；`publint && attw --pack . --profile esm-only` PASS；architecture audit PASS；forbidden source scan 0 matches；38-file package tarball只含 LICENSE/README/package.json/dist；fresh relative-tarball consumer 完整 E2E PASS（vertical 1、source 1、reliability 5）并 production build / six public imports / CLI help / production exclusion / SIGTERM cleanup PASS。
+**执行证据：** `pnpm typecheck` PASS；focused/full Vitest 20 files / 88 tests PASS；`pnpm build` PASS；`publint && attw --pack . --profile esm-only` PASS；architecture audit PASS；forbidden source scan 0 matches；38-file package tarball只含 LICENSE/README/package.json/dist；fresh relative-tarball consumer 完整 E2E PASS（vertical 1、source 1、reliability 5）并 production build / six public imports / CLI help / production exclusion / SIGTERM cleanup PASS。
 
-**性能基线：** 最终 fresh Chromium 1920×1080 screenshot 280 ms、40,777 bytes；69-point Area 最坏 160 ms；dynamic DOM 10 秒 marker refresh 11 次；200-candidate prune focused unit 81.948 ms（算法上限 200 candidates、最终 50）。
+**性能基线：** 最终 fresh Chromium 1920×1080 screenshot 314 ms、40,777 bytes；69-point Area 最坏 169 ms；dynamic DOM 10 秒 marker refresh 10 次；200-candidate prune focused unit 81.948 ms（算法上限 200 candidates、最终 50）。
 
 **验收结果：**
 
@@ -146,12 +147,12 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 - **G07-009 PASS** — public freeze/unfreeze 对称；packed popover、animation、streaming dynamic fixture 与 toolbar 均可用。
 - **G07-010 PASS** — wrapper-heavy Region 在 200 candidates 后语义 pruning，保留 button target。
 - **G07-011 PASS** — source forbidden scan无 `querySelectorAll("*")`。
-- **G07-012 PASS** — mutation-heavy 10 秒仅 11 次 marker refresh，rAF 合并有上界。
+- **G07-012 PASS** — mutation-heavy 10 秒仅 10 次 marker refresh，rAF 合并有上界。
 - **G07-013 PASS** — no-marker unit 证明 MutationObserver/ResizeObserver 不启动；隐藏 marker 后停止。
 - **G07-014 PASS** — runtime unit 验证 host 首次 render 前已有 `data-react-grab-ignore`。
 - **G07-015 PASS** — package build、fresh relative-tarball full E2E、production exclusion、public imports 均通过。
 
-**下一可靠起点：** package Goal 07 commits `29597d142ebf9c3575e473f212fa1191af98a974`、`f2beb3b` 与 `0c0a1f714baa60e2acd3e1c34762bed533ac40f4`；Portal plan-only completion commit includes this final evidence. Goal 08 仍未开始。
+**下一可靠起点：** package Goal 07 tip `cf3fdf6f8f50f1eec531a834f64612ce6fa7a5a7`（基于 `4786e2fd64f40d4a66350a633cd25186b2ec7ae0`）；Portal plan-only completion commit includes this final evidence. Goal 08 仍未开始。
 
 ## 最终报告格式
 
