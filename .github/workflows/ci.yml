@@ -1,8 +1,4 @@
-name: Portal Studio CI
-
-# Goal 05 (G05-07): the CI gate sequence — typecheck, unit/component tests,
-# CLI process smoke, Playwright interaction tests, visual snapshots, and the
-# production build + Studio-code exclusion scan.
+name: Portal CI
 on:
   push:
     branches: ["**"]
@@ -36,9 +32,9 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Scoped lint
-        run: npx eslint src/studio scripts tests/components/portal-studio tests/logic/portal-studio e2e --max-warnings=0
+        run: npx eslint src/agent-feedback tests/logic/agent-feedback e2e --max-warnings=0
 
-      - name: Unit / component tests (incl. write-serialization + CLI smoke)
+      - name: Unit / component tests
         run: npx vitest run
 
       - name: SDK tests
@@ -47,27 +43,9 @@ jobs:
       - name: Production build
         run: pnpm build
 
-      - name: Production Studio-code exclusion scan
+      - name: Production Agent Feedback exclusion scan
         run: |
-          total=0
-          for marker in ps-tool-action ps-collapsed-chip ps-horizontal-bar ps-list-panel ps-shortcut-help mountPortalStudio StudioToolbar portal-studio-root __PORTAL_STUDIO portalStudioPlugin studio-actions; do
-            count=$(grep -rl "$marker" dist/ 2>/dev/null | wc -l)
-            echo "$marker: $count"
-            total=$((total + count))
-          done
-          echo "TOTAL LEAKS: $total"
-          test "$total" -eq 0
-          grep -c "portal-studio" dist/index.html || true
+          ! grep -rE "agent-feedback-root|__agent-feedback|x-agent-feedback-token|virtual:agent-feedback/client|data-agent-feedback-root|nocobase\.portal|Portal Studio" dist/
 
-      - name: Playwright interaction tests (incl. Goal 05 visual snapshots)
+      - name: Playwright interaction tests
         run: npx playwright test
-
-      - name: Goal 05 visual snapshots (focused)
-        run: npx playwright test -g "G05-06"
-
-      - name: Upload visual evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: portal-studio-visual
-          path: test-results/visual/
