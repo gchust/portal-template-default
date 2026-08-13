@@ -132,7 +132,7 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 
 **执行证据：** `pnpm typecheck` PASS；focused/full Vitest 20 files / 88 tests PASS；`pnpm build` PASS；`publint && attw --pack . --profile esm-only` PASS；architecture audit PASS；forbidden source scan 0 matches；38-file package tarball只含 LICENSE/README/package.json/dist；fresh relative-tarball consumer 完整 E2E PASS（vertical 1、source 1、reliability 5）并 production build / six public imports / CLI help / production exclusion / SIGTERM cleanup PASS。
 
-**性能基线：** 最终 fresh Chromium 1920×1080 screenshot 354 ms、40,777 bytes；69-point Area 最坏 169 ms；dynamic DOM 10 秒 marker refresh 11 次；200-candidate prune focused unit 已记录（算法上限 200 candidates、最终 50）。
+**性能基线：** 最终 fresh Chromium 1920×1080 screenshot 354 ms、40,777 bytes；69-point Area 最坏 169 ms；dynamic DOM 10 秒 marker refresh 11 次；200-candidate prune focused unit 48.125 ms（算法上限 200 candidates、最终 50）。
 
 **验收结果：**
 
