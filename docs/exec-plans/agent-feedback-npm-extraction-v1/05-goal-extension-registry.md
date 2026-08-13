@@ -145,6 +145,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - independent final fresh pack → PASS，34 files，SHA-256 `c4f80187a73a41ca6556394107192e16cfd374e6fb71fe07b27f41306c5ec0e3`；`logs/final-pack.json`, `logs/final-pack.sha256`, `final-pack/`。
 - independent final repo-external consumer → PASS：lockfile-only install + frozen install、Chromium vertical E2E + SIGTERM cleanup、production build 26 modules、CLI help six commands；`logs/final-consumer-*.log`, `final-consumer/`, `final-consumer-browser/`。
 - independent final source/declaration/provenance/diff/clean scans → PASS；`logs/final-scan-status.log`, `scans/final-*.log`。在 repo 内直接执行 packed fixture 命令因 fixture 按设计未安装而 FAIL（`logs/in-repo-packed-fixture-required-command.log`）；同一 committed fixture 的 fresh repo-external relative-tarball frozen install 与 E2E 是有效 package-boundary gate 并 PASS。
+- package audit correction → PASS：`node --experimental-strip-types original-shortcut-check.mts` 在指定 `2653e08` snapshot 直接验证同-key/different-code 与 different-key/same-code 均拒绝；`pnpm typecheck` 与 `pnpm exec vitest run tests/extension/registry.test.ts` 再通过；final package tree `ab02e4061351e51b9cfc826090dfdd929f055815` 与 `2653e08` tree 完全相同。证据 `logs/original-shortcut-check.log`, `logs/post-revert-typecheck.log`, `logs/post-revert-registry.log`。
 
 #### Acceptance criteria
 
