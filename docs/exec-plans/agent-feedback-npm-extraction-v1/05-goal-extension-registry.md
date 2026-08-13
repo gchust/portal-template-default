@@ -92,8 +92,8 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - [x] 2026-08-13T02:16Z HMR acceptance 准确暴露 Vite virtual module 未 self-accept；最小修正为 virtual module `hot.accept()`，复用 checkpoint-B symbol-key cleanup，验证 setup=2/dispose=1、按钮=1，shortcut listener 每次只执行一次。
 - [x] 2026-08-13T02:17Z final required gates PASS；fresh repo-external evidence root `/root/work/agent-feedback-g05c-evidence-cuQ4RC/` 包含日志、截图、trace、task/counters JSON、tarball、manifest、hash 与 packed consumer。
 - [x] 2026-08-13T02:32Z 独立 review 从指定 clean package `2653e08af0e9aaef1038c683ace646ac0dc4b42c` 与 Portal `140475af1061714608071b12d0a693dc923d943f` 开始；未复用实现线程 evidence，fresh evidence root 为 `/root/work/agent-feedback-g05-independent-review-20260813-mGQOt2/`。
-- [x] 2026-08-13T02:40Z fresh adversarial registry inspection 发现不同 `key`/`code` 配对可绕过 shortcut conflict gate，却会被 runtime listener 同时匹配；在 package commit `a024c110d6a2fafc86069bf82e20b1ef9130f5d3` 最小修复并新增跨注册与单次注册回归断言。
-- [x] 2026-08-13T02:44Z 修复后独立 final gates 全部 PASS：typecheck、focused/full unit、Demo 与 built-in Chromium、build、package lint、fresh pack、frozen relative-tarball external consumer E2E/build/CLI、required scans、provenance、diff 与 clean-tree。
+- [x] 2026-08-13T02:40Z fresh adversarial registry inspection 重点复核不同 `key`/`code` 配对；直接在指定 `2653e08` snapshot 运行断言，确认现有 normalized signature map 已分别拒绝同 key 和同 code，未发现需要保留的 package defect。
+- [x] 2026-08-13T02:44Z 独立 final gates 全部 PASS：typecheck、focused/full unit、Demo 与 built-in Chromium、build、package lint、fresh pack、frozen relative-tarball external consumer E2E/build/CLI、required scans、provenance、diff 与 clean-tree。
 
 ### Surprises & Discoveries
 
@@ -101,7 +101,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - external exporter 存在时，原 runtime 会让无 exporter ID 的 built-in Copy 隐式选择排序第一项，破坏 built-in Markdown parity；`undefined` exporter ID 现在固定走 built-in formatter，第三方 exporter 仅在显式 ID 时执行。
 - 原 panel focus fallback 使用 `target?.focus() ?? panel.focus()`；`HTMLElement.focus()` 返回 `undefined`，因此即使 target focus 成功仍继续 focus panel。改为显式 target/fallback 分支后 unit 与 real browser focus 均通过。
 - packed fixture 在 repo-external copy 首轮因测试漏取 Playwright `context` FAIL；补齐 fixture 参数后通过。所有失败原始日志/trace 保留在同一 evidence root，最终有效证据明确使用 `demo-acceptance-pass*` 与 `packed-pass*`。
-- 独立 review 证明原 shortcut 冲突验证错误地把 `(modifiers,key)` 与 `(modifiers,code)` 放入同一 map；先注册 `key=C,code=KeyC` 后，`key=C,code=KeyX` 或 `key=Χ,code=KeyC` 未冲突，但 runtime 的 key-or-code matcher 会双触发。分离 key/code maps 后注册语义与 listener 语义一致。
+- shortcut conflict 的 adversarial 复核曾因同一 map 存储两类签名而产生误判；指定 `2653e08` snapshot 的独立 executable check 证明签名包含 `key:`/`code:` discriminator，同 key 或同 code 均 deterministic fail，故未保留无效修复。
 
 ### Decision Log
 
@@ -109,7 +109,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - 2026-08-13：复用 checkpoint-B registry/runtime，不新增 demo adapter、fixture framework或 dependency；README 仅记录最小 runnable extension + Vite registration。
 - 2026-08-13：Vite virtual module 只增加 `import.meta.hot.accept()`，继续复用 checkpoint-B `Symbol.for("agent-feedback.mount")` cleanup；未扩展 public package types/API 或新增 window property。
 - 2026-08-13：`playgrounds/extension-demo` 是 package-repo playground，允许 package link；发布边界的 `fixtures/packed-react-vite` 则只在 fresh repo-external copy 中使用相对 tarball并冻结安装。两者职责不混用。
-- 2026-08-13：独立 review 仅修复已复现的 G05-009 根因；复用现有 `shortcutKeys()` 规范化与 registry atomic preflight，未新增 API、依赖或 runtime 分支。
+- 2026-08-13：Ponytail ladder 要求不保留无效改动；独立 executable check 证实 `2653e08` 已满足 G05-009 后，撤销临时 registry 改动，package 最终源码树与指定 HEAD 内容一致。
 
 ### Outcomes & Retrospective
 
@@ -118,7 +118,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - `playgrounds/extension-demo` 的真正 external Demo Extension：Copy JSON toolbar action、独立 Ctrl+Alt+J、custom/exclusive/focus-safe panel、namespaced target enricher、explicit JSON exporter、pre-persistence redactor 与 setup/dispose/action counters。
 - packed React/Vite fixture 从自身 `src/demo-extension.ts` 通过 Vite `clientExtensions` 注册同一 public-contract consumer；external copy 无 package source path、workspace/link resolution。
 - built-in Copy 默认 formatter parity、panel focus fallback 与 virtual-module self-accepted HMR cleanup 的最小 runtime corrections；public README 最小 runnable extension example。
-- 独立 review 修复 runtime-equivalent `key`/`code` shortcut 冲突漏检，并以 package commit `a024c110d6a2fafc86069bf82e20b1ef9130f5d3` 交付。
+- 独立 review 未发现需要保留的 Goal 05 package defect；package final tree 与 `2653e08af0e9aaef1038c683ace646ac0dc4b42c` 一致，review-only commit chain 为 `a024c110d6a2fafc86069bf82e20b1ef9130f5d3`、`7206198840d2583f5818e230f87ed8db34e25ff1`、`7f27b86155bedbc4adc6c397f4207df154bd87db`。
 
 #### 未交付
 
@@ -156,7 +156,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - **G05-006 PASS** — `task-extension.json` has only `annotation.extensions["demo.extension"]["target-context"]`.
 - **G05-007 PASS** — public snapshot lists `demo-json`; explicit exporter copies parseable `{ format: "demo-json" }` content.
 - **G05-008 PASS** — captured/persisted/exported data keeps `demoKind`/`kept` and contains no `redactMe`.
-- **G05-009 PASS** — independent review 先复现并修复 runtime-equivalent `key`/`code` shortcut conflict 漏检；final focused/full registry suite 覆盖 duplicate extension/contribution/panel、key conflict、code conflict、跨注册与单注册 deterministic failure。
+- **G05-009 PASS** — final focused/full registry suite 覆盖 duplicate extension/contribution/panel、key conflict、code conflict 与单注册 deterministic failure；另在指定 `2653e08` snapshot 直接执行同-key/different-code 与 different-key/same-code assertions，均按预期抛错。
 - **G05-010 PASS** — focused registry suite covers atomic invalid registration.
 - **G05-011 PASS** — browser HMR evidence records setup=2/dispose=1/button=1 and single shortcut execution; checkpoint-B unit test retains idempotent unmount/dispose-once coverage.
 - **G05-012 PASS** — compile-time public consumer and declaration audit cannot access internal setters/`React.Dispatch`.
@@ -166,7 +166,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 
 #### 下一可靠起点
 
-- Goal 05 已独立验收。保持 Goal 06–10 未开始；下一阶段只能从 final package `a024c110d6a2fafc86069bf82e20b1ef9130f5d3` 与本 independent-review plan commit 开始，并需另行授权 Goal 06。
+- Goal 05 已独立验收。保持 Goal 06–10 未开始；下一阶段只能从 final package `7f27b86155bedbc4adc6c397f4207df154bd87db`（tree 与 `2653e08` 一致）与本 independent-review plan commit 开始，并需另行授权 Goal 06。
 
 ## 最终报告格式
 
