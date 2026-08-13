@@ -112,6 +112,7 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 - [x] 2026-08-13：最终 follow-up 后 external consumer `/tmp/agent-feedback-g07-release-8N3ove` 的 reliability browser suite 5/5 PASS；package full Vitest 20 files / 88 tests、typecheck、build、audit、check:package 与 diff check 均 PASS。
 - [x] 2026-08-13：最终提交 `94c5e83` 后 fresh relative-tarball consumer `/tmp/agent-feedback-g07-tip94-jkoyGE` 完整 E2E、production build/exclusion、六个公共 import、CLI help、offline frozen reinstall 与 SIGTERM cleanup PASS；证据位于 `/root/work/agent-feedback-goal07-evidence-20260813T0830Z/final-tip-94c5e83/`。
 - [x] 2026-08-13：最终 HEAD `94c5e83` 的 fresh consumer `/tmp/agent-feedback-g07-proof3-kT9elp` 完整 E2E（vertical/source/reliability 5/5）、offline frozen reinstall、production build/exclusion、CLI help 与 SIGTERM cleanup PASS；nested frame readiness/二次 rAF refresh 消除 reload race，同时保留 observer 上界。
+- [x] 2026-08-13：最终独立 clean-room reviewer 在 detached worktree `/root/work/agent-feedback-g07-final-audit-20260813-GE4NEt/package` 对 `94c5e83` 重跑全部 package、packed consumer、串行 E2E、production exclusion 与 cleanliness gates；G07-001～G07-015 全部 PASS，报告位于 `/root/work/agent-feedback-g07-final-audit-20260813-GE4NEt/artifacts/FINAL-AUDIT.md`。
 
 ### Surprises & Discoveries
 
@@ -133,7 +134,7 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 
 **执行证据：** `pnpm typecheck` PASS；focused/full Vitest 20 files / 88 tests PASS；`pnpm build` PASS；`publint && attw --pack . --profile esm-only` PASS；architecture audit PASS；forbidden source scan 0 matches；38-file package tarball只含 LICENSE/README/package.json/dist；fresh relative-tarball consumer 完整 E2E PASS（vertical 1、source 1、reliability 5）并 production build / six public imports / CLI help / production exclusion / SIGTERM cleanup PASS。
 
-**性能基线：** 最终 fresh Chromium 1920×1080 screenshot 317 ms、40,777 bytes；69-point Area 最坏 142 ms；dynamic DOM 10 秒 marker refresh 11 次；200-candidate prune focused unit 48.125 ms（算法上限 200 candidates、最终 50）。
+**性能基线：** 最终独立 clean-room Chromium 1920×1080 screenshot 346 ms、40,792 bytes；69-point Area 最坏 141 ms；dynamic DOM 10 秒 marker refresh 12 次；200-candidate prune focused unit 50.006 ms（算法上限 200 candidates、最终 50）。
 
 **验收结果：**
 
@@ -148,7 +149,7 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 - **G07-009 PASS** — public freeze/unfreeze 对称；packed popover、animation、streaming dynamic fixture 与 toolbar 均可用。
 - **G07-010 PASS** — wrapper-heavy Region 在 200 candidates 后语义 pruning，保留 button target。
 - **G07-011 PASS** — source forbidden scan无 `querySelectorAll("*")`。
-- **G07-012 PASS** — mutation-heavy 10 秒仅 11 次 marker refresh，rAF 合并有上界。
+- **G07-012 PASS** — 最终独立 clean-room mutation-heavy 10 秒仅 12 次 marker refresh，rAF 合并有上界。
 - **G07-013 PASS** — no-marker unit 证明 MutationObserver/ResizeObserver 不启动；隐藏 marker 后停止。
 - **G07-014 PASS** — runtime unit 验证 host 首次 render 前已有 `data-react-grab-ignore`。
 - **G07-015 PASS** — package build、fresh relative-tarball full E2E、production exclusion、public imports 均通过。
