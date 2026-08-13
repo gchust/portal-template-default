@@ -111,7 +111,7 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 - [x] 2026-08-13：fresh relative-tarball consumer `/tmp/agent-feedback-g07-release2-d1UhnM/consumer` 完成 vertical、source benchmark、5 项 reliability browser E2E、production build 和 SIGTERM cleanup；外部证据位于 `/root/work/agent-feedback-goal07-evidence-20260813T0830Z/final/`。
 - [x] 2026-08-13：最终 follow-up 后 external consumer `/tmp/agent-feedback-g07-release-8N3ove` 的 reliability browser suite 5/5 PASS；package full Vitest 20 files / 88 tests、typecheck、build、audit、check:package 与 diff check 均 PASS。
 - [x] 2026-08-13：最终提交 `ec3234c` 后 fresh relative-tarball consumer `/tmp/agent-feedback-g07-final-rSbgYH/consumer` 完整 E2E、production build/exclusion、六个公共 import、CLI help、offline frozen reinstall 与 SIGTERM cleanup PASS；证据位于 `/root/work/agent-feedback-goal07-evidence-20260813T0830Z/final-committed/`。
-- [x] 2026-08-13：最终 HEAD `94c5e83` 的 fresh consumer `/tmp/agent-feedback-g07-proof3-kT9elp` 再次验证 reliability 5/5 PASS；nested frame readiness/二次 rAF refresh 消除 reload race，同时保留 observer 上界。
+- [x] 2026-08-13：最终 HEAD `94c5e83` 的 fresh consumer `/tmp/agent-feedback-g07-proof3-kT9elp` 完整 E2E（vertical/source/reliability 5/5）、offline frozen reinstall、production build/exclusion、CLI help 与 SIGTERM cleanup PASS；nested frame readiness/二次 rAF refresh 消除 reload race，同时保留 observer 上界。
 
 ### Surprises & Discoveries
 
@@ -133,7 +133,7 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 
 **执行证据：** `pnpm typecheck` PASS；focused/full Vitest 20 files / 88 tests PASS；`pnpm build` PASS；`publint && attw --pack . --profile esm-only` PASS；architecture audit PASS；forbidden source scan 0 matches；38-file package tarball只含 LICENSE/README/package.json/dist；fresh relative-tarball consumer 完整 E2E PASS（vertical 1、source 1、reliability 5）并 production build / six public imports / CLI help / production exclusion / SIGTERM cleanup PASS。
 
-**性能基线：** 最终 fresh Chromium 1920×1080 screenshot 340 ms、40,777 bytes；69-point Area 最坏 139 ms；dynamic DOM 10 秒 marker refresh 12 次；200-candidate prune focused unit 81.948 ms（算法上限 200 candidates、最终 50）。
+**性能基线：** 最终 fresh Chromium 1920×1080 screenshot 344 ms、40,777 bytes；69-point Area 最坏 142 ms；dynamic DOM 10 秒 marker refresh 12 次；200-candidate prune focused unit 81.948 ms（算法上限 200 candidates、最终 50）。
 
 **验收结果：**
 
