@@ -152,7 +152,7 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 - **G07-014 PASS** — runtime unit 验证 host 首次 render 前已有 `data-react-grab-ignore`。
 - **G07-015 PASS** — package build、fresh relative-tarball full E2E、production exclusion、public imports 均通过。
 
-**下一可靠起点：** package Goal 07 tip `ec3234c450d18ded311b7994695d6528f343eacc`（基于 `4786e2fd64f40d4a66350a633cd25186b2ec7ae0`）；Portal plan-only completion commit includes this final evidence. Goal 08 仍未开始。
+**下一可靠起点：** package Goal 07 tip `94c5e83f802b970a9cdf313f38788ba2e03548f6`（基于 `4786e2fd64f40d4a66350a633cd25186b2ec7ae0`）；Portal plan-only completion commit includes this final evidence. Goal 08 仍未开始。
 
 ## 最终报告格式
 
