@@ -91,25 +91,62 @@ pnpm exec agent-feedback mcp   # 由 smoke harness 完成 initialize/tools-list
 
 ### Progress
 
-- [ ] 在执行过程中逐项更新，不要等到最后。
+- [x] 2026-08-13：确认 package HEAD `7f27b86155bedbc4adc6c397f4207df154bd87db` 与 Portal HEAD `22895e40cf2d296886d56e78f6c5e54ca54c4f17` 均为 clean 起点；已完整读取 AGENTS、冻结常量、共享合同、本 Goal 与 launcher。
+- [x] 2026-08-13：完成 browser raw source -> Vite post-React sourcemap -> server canonicalization -> exact source revision -> CLI/MCP 的真实调用链修复；未修改 Portal production/runtime source。
+- [x] 2026-08-13：`pnpm test -- source-path revision cli mcp audit` PASS（16 files / 74 tests），完整 `pnpm test` PASS（16 / 74），`pnpm typecheck`、`pnpm build`、`pnpm run audit`、`pnpm check:package` 均 PASS。
+- [x] 2026-08-13：fresh external packed consumer `/tmp/agent-feedback-g06-final-rnbPMl/consumer` 以 React/ReactDOM `19.2.8` 安装相对 tarball，随后 frozen offline reinstall PASS；完整 packed fixture E2E 的 vertical、source benchmark、SIGTERM process smoke 全部 PASS。
+- [x] 2026-08-13：packed binary `pnpm exec agent-feedback --help`、MCP initialize/tools-list smoke PASS；`pnpm pack --json` 得到 38-file tarball，仅含 `LICENSE`、`README.md`、`dist`、`package.json`，无 fixture/source/runtime-dir 泄漏。`dist/audit/index.mjs` 中旧词与 host 词仅是 audit 检测规则字面量，按 audit 实现 allowlist 处理，不是 production hardcoding。
 
 ### Surprises & Discoveries
 
-- 记录实际仓库与计划不一致、上游 API 行为、测试环境差异。
+- 起点 package 已有 schema v1 CLI/MCP 基线且 MCP 工具仅为 `list_annotations`、`print_task`、`verify_task`；但 source canonicalizer 仅执行 `path.resolve(root, input)` 的词法 containment，尚未验证存在性、realpath/symlink、Windows/file URL/Vite `/@fs/`/leading `/src`，也没有 source-file revision watch。
+- Vite 6 会在 transform sourcemap chain recomposition 中把普通 absolute source 再相对化为 `Card.tsx`。最终修复在 post-order transform 中精确验证 local source 后，将 combined sourcemap 的 `sources` 原位替换为 canonical `file://` URL；真实 served-module test 证明 duplicate-a/b 保持两个不同完整 source。
+- Packed fixture 的两个 Playwright spec 共享同一 active task 时并行执行会互相污染；fixture script 顺序运行 vertical 与 source benchmark，保持每项真实浏览器隔离且不改变产品行为。
 
 ### Decision Log
 
-- 记录所有偏离推荐文件布局或实现路径的决定及理由。
+- 2026-08-13：所有通用修复、测试、audit 与 fixture 仅进入 standalone package；Portal 仓库只持续更新本 Goal Living ExecPlan，绝不修改 production/runtime source。
+- 2026-08-13：只有 leading `/src/...` 作为 Vite root-relative special case；其他 POSIX absolute path 均按真实 absolute path 验证，绝不剥离 leading slash 后猜入 workspace。
+- 2026-08-13：MCP `wait_verification` 以 workspace cwd 的 exact `sourceRevision` 为输入、轮询和结果；`AGENT_FEEDBACK_DIR` 只覆盖存储位置。
+- 2026-08-13：architecture audit 读取 whole-file 内容并使用 multiline-safe forbidden patterns；每一种禁止架构以及 multiline transformed-code、basename、built-in bypass 均有注入失败测试。
 
 ### Outcomes & Retrospective
 
-完成时写明：
+实际交付：standalone package 内完成 exact source canonicalization、post-React served sourcemap normalization、unresolved/null、exact source revisions、schema-v1 CLI/read-only MCP、permanent architecture audit，以及 duplicate basename/memo/forwardRef/ReactDOM Portal packed browser benchmark。未交付：无 Goal 06 内缺项；Goal 07–10 均未开始。
 
-- 实际交付；
-- 未交付；
-- 运行过的命令及结果；
-- AC 逐项 PASS/FAIL/BLOCKED；
-- 下一 Goal 的可靠起点。
+Fresh browser evidence（`/tmp/agent-feedback-g06-final-rnbPMl/evidence/packed-e2e.log`）：
+
+```text
+expected duplicate-a = src/duplicate-a/Card.tsx:1:33
+actual   duplicate-a = src/duplicate-a/Card.tsx:1:33
+expected duplicate-b = src/duplicate-b/Card.tsx:1:33
+actual   duplicate-b = src/duplicate-b/Card.tsx:1:33
+expected memo        = src/main.tsx:8:36;  actual = src/main.tsx:8:36
+expected forwardRef  = src/main.tsx:9:70;  actual = src/main.tsx:9:70
+expected Portal      = src/main.tsx:21:28; actual = src/main.tsx:21:28
+baseline/after wrong sourceRevision = abc1cdf5ecb205a6c93cdb764d364abedf2e6840db9429080f280c462d52d077
+after correct sourceRevision         = df192adc65e86f06c95f92b28a8006767615d768724d17942bb984c5ff6562cd
+taskRevision remained 6; sourceFiles remained [src/duplicate-a/Card.tsx, src/main.tsx]
+```
+
+Acceptance classification：
+
+- **G06-001 PASS** — canonicalizer tests cover relative POSIX, Windows, file URL, `/@fs/`, leading `/src`, query/hash, realpath and canonical POSIX output.
+- **G06-002 PASS** — tests reject outside absolute paths, traversal, missing/directory input and symlink escape.
+- **G06-003 PASS** — fresh packed browser persists distinct `src/duplicate-a/Card.tsx` and `src/duplicate-b/Card.tsx`.
+- **G06-004 PASS** — permanent audit reports clean tree and injected basename lookup fails, including multiline form; no first-match lookup exists.
+- **G06-005 PASS** — fixture-derived exact line/column expected/actual values above all match.
+- **G06-006 PASS** — unresolved frame unit test persists primary source as null and removes unresolved stack entries; no basename fallback.
+- **G06-007 PASS** — source service unit and `/revision` E2E prove only canonical selected files contribute to source revision.
+- **G06-008 PASS** — wrong duplicate leaves task/source revision and sourceFiles unchanged; selected duplicate changes only sourceRevision, with hashes above; process MCP test proves the same wait contract.
+- **G06-009 PASS** — packed MCP tools are exactly `list_annotations`, `print_task`, `verify_task`, `read_diagnostics`, `list_screenshots`, `wait_verification`; no capture/create/old-schema tool or text.
+- **G06-010 PASS** — built CLI process tests cover every public command; packed consumer runs the real bin for vertical CLI flow, `--help`, audit and MCP process smoke.
+- **G06-011 PASS** — `pnpm run audit` reports `[agent-feedback] architecture audit PASS`.
+- **G06-012 PASS** — injected tests fail sole importer, React Grab UI, element-source, Fiber/private, transformed-code, basename, old schema, NocoBase and built-in bypass patterns, including multiline violations.
+- **G06-013 PASS** — README command list equals packed `--help`; MCP exact-source wait signature is documented and process-verified.
+- **G06-014 PASS** — Portal diff is this Living ExecPlan only; no Portal production/runtime source or NocoBase patch changed.
+
+Reliable next start：package Goal 06 commit `4786e2fd64f40d4a66350a633cd25186b2ec7ae0` from baseline `7f27b86155bedbc4adc6c397f4207df154bd87db`; Portal plan-only commit follows baseline `22895e40cf2d296886d56e78f6c5e54ca54c4f17`. Goal 07 remains explicitly unstarted.
 
 ## 最终报告格式
 
