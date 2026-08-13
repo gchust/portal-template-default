@@ -30,6 +30,10 @@ dist-ssr
 # Agent Feedback dev runtime (session token + task files)
 /.agent-feedback/
 
+# Keep pre-extraction local Studio data ignored; do not delete user evidence.
+/.portal-studio/
+/.portal-studio-evidence/
+
 # Editor directories and files
 
 .vscode/_
