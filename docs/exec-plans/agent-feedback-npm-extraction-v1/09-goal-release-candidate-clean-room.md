@@ -182,7 +182,7 @@ Result: PASS（writer provisional；独立最终验收未声称）
 
 关键命令与结果：
 
-- Node 20/22 clean archives `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm check:package`, `pnpm exec agent-feedback audit`, `pnpm audit`, `pnpm check:docs`, `pnpm check:tarball` → PASS；证据 `logs/171-*`～`logs/188-*`。
+- Node 20/22 clean archives `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm check:package`, `pnpm run audit`, `pnpm audit`, `pnpm check:docs`, `pnpm check:tarball` → PASS；证据 `logs/171-*`～`logs/188-*`。installed `pnpm exec agent-feedback audit` 另在 generic packed blank host PASS。
 - source `pnpm --dir playgrounds/react-vite test:e2e && build` → PASS（3/3）；Extension Demo 等价命令 → PASS（1/1 + HMR）；证据 `logs/213-*`～`logs/216-*`。
 - packed blank frozen install/E2E/build/six imports/CLI/audit/scans → PASS（7/7 + SIGTERM）；证据 `logs/189-*`～`logs/195-*`。
 - packed Portal frozen install/typecheck/test/test:sdk/build/real E2E/CLI/production browser → PASS（23/58、9/30、2/2）；offline frozen reinstall 后 typecheck/tests/build → PASS；证据 `logs/196-*`～`logs/212-*`。缺少显式测试凭据的首次 E2E `logs/202-*` 为预期配置 FAIL，配置后 `logs/203-*` PASS。
