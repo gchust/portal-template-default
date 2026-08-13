@@ -91,6 +91,9 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - [x] 2026-08-13T02:12Z 首轮浏览器验证准确暴露 panel focus 表达式返回值误用与 Demo redactor 数据层级误判；修正共享 runtime focus 根因和 external redactor 后，focused tests 14 files / 54 tests 与 demo E2E 通过。
 - [x] 2026-08-13T02:16Z HMR acceptance 准确暴露 Vite virtual module 未 self-accept；最小修正为 virtual module `hot.accept()`，复用 checkpoint-B symbol-key cleanup，验证 setup=2/dispose=1、按钮=1，shortcut listener 每次只执行一次。
 - [x] 2026-08-13T02:17Z final required gates PASS；fresh repo-external evidence root `/root/work/agent-feedback-g05c-evidence-cuQ4RC/` 包含日志、截图、trace、task/counters JSON、tarball、manifest、hash 与 packed consumer。
+- [x] 2026-08-13T02:32Z 独立 review 从指定 clean package `2653e08af0e9aaef1038c683ace646ac0dc4b42c` 与 Portal `140475af1061714608071b12d0a693dc923d943f` 开始；未复用实现线程 evidence，fresh evidence root 为 `/root/work/agent-feedback-g05-independent-review-20260813-mGQOt2/`。
+- [x] 2026-08-13T02:40Z fresh adversarial registry inspection 发现不同 `key`/`code` 配对可绕过 shortcut conflict gate，却会被 runtime listener 同时匹配；在 package commit `a024c110d6a2fafc86069bf82e20b1ef9130f5d3` 最小修复并新增跨注册与单次注册回归断言。
+- [x] 2026-08-13T02:44Z 修复后独立 final gates 全部 PASS：typecheck、focused/full unit、Demo 与 built-in Chromium、build、package lint、fresh pack、frozen relative-tarball external consumer E2E/build/CLI、required scans、provenance、diff 与 clean-tree。
 
 ### Surprises & Discoveries
 
@@ -98,6 +101,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - external exporter 存在时，原 runtime 会让无 exporter ID 的 built-in Copy 隐式选择排序第一项，破坏 built-in Markdown parity；`undefined` exporter ID 现在固定走 built-in formatter，第三方 exporter 仅在显式 ID 时执行。
 - 原 panel focus fallback 使用 `target?.focus() ?? panel.focus()`；`HTMLElement.focus()` 返回 `undefined`，因此即使 target focus 成功仍继续 focus panel。改为显式 target/fallback 分支后 unit 与 real browser focus 均通过。
 - packed fixture 在 repo-external copy 首轮因测试漏取 Playwright `context` FAIL；补齐 fixture 参数后通过。所有失败原始日志/trace 保留在同一 evidence root，最终有效证据明确使用 `demo-acceptance-pass*` 与 `packed-pass*`。
+- 独立 review 证明原 shortcut 冲突验证错误地把 `(modifiers,key)` 与 `(modifiers,code)` 放入同一 map；先注册 `key=C,code=KeyC` 后，`key=C,code=KeyX` 或 `key=Χ,code=KeyC` 未冲突，但 runtime 的 key-or-code matcher 会双触发。分离 key/code maps 后注册语义与 listener 语义一致。
 
 ### Decision Log
 
@@ -105,6 +109,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - 2026-08-13：复用 checkpoint-B registry/runtime，不新增 demo adapter、fixture framework或 dependency；README 仅记录最小 runnable extension + Vite registration。
 - 2026-08-13：Vite virtual module 只增加 `import.meta.hot.accept()`，继续复用 checkpoint-B `Symbol.for("agent-feedback.mount")` cleanup；未扩展 public package types/API 或新增 window property。
 - 2026-08-13：`playgrounds/extension-demo` 是 package-repo playground，允许 package link；发布边界的 `fixtures/packed-react-vite` 则只在 fresh repo-external copy 中使用相对 tarball并冻结安装。两者职责不混用。
+- 2026-08-13：独立 review 仅修复已复现的 G05-009 根因；复用现有 `shortcutKeys()` 规范化与 registry atomic preflight，未新增 API、依赖或 runtime 分支。
 
 ### Outcomes & Retrospective
 
@@ -113,11 +118,12 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - `playgrounds/extension-demo` 的真正 external Demo Extension：Copy JSON toolbar action、独立 Ctrl+Alt+J、custom/exclusive/focus-safe panel、namespaced target enricher、explicit JSON exporter、pre-persistence redactor 与 setup/dispose/action counters。
 - packed React/Vite fixture 从自身 `src/demo-extension.ts` 通过 Vite `clientExtensions` 注册同一 public-contract consumer；external copy 无 package source path、workspace/link resolution。
 - built-in Copy 默认 formatter parity、panel focus fallback 与 virtual-module self-accepted HMR cleanup 的最小 runtime corrections；public README 最小 runnable extension example。
+- 独立 review 修复 runtime-equivalent `key`/`code` shortcut 冲突漏检，并以 package commit `a024c110d6a2fafc86069bf82e20b1ef9130f5d3` 交付。
 
 #### 未交付
 
 - Goal 06–10 均未开始；未修改 Portal production/runtime source，未 push、publish、触碰 remotes 或改写 history。
-- Goal 05 的独立 review 尚未执行；本 checkpoint C completion 仍需另一条独立审查线程按 G05-001–G05-015 重跑 fresh evidence 后才能作为 independently accepted Goal 05。
+- Goal 05 独立 review 已完成；G05-001–G05-015 在修复后全部 PASS。
 
 #### 运行过的命令及结果
 
@@ -131,6 +137,14 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - final external packed consumer `AGENT_FEEDBACK_EVIDENCE=.../delivery-packed-pass pnpm test:e2e` → PASS，1 Chromium packed vertical flow + direct Vite SIGTERM cleanup；`delivery-packed-test.log` and `delivery-packed-pass/vertical-loop.png`。
 - final external packed consumer `pnpm build` + `pnpm exec agent-feedback --help` → PASS；production build 26 modules and CLI help lists six commands；`delivery-packed-build.log`, `delivery-packed-cli-help.log`。
 - source/declaration audits → PASS：required toolbar switch/case scan no matches; setter/`React.Dispatch` declaration scan no matches; external import scan proves `/extension`, `/vite`, and `clientExtensions` only.
+- independent final `pnpm typecheck` → PASS；`logs/final-typecheck.log`。
+- independent final focused/full `pnpm test` → PASS，14 files / 54 tests；`logs/final-focused-tests.log`, `logs/final-full-tests.log`。
+- independent final Demo Chromium → PASS，1 test；exact order/shortcut/Tooltip/Help/panel/focus/namespace/redaction/exporter/setup-dispose/HMR evidence in `logs/final-demo-e2e.log` and `final-demo-browser/`。
+- independent final built-in Chromium parity → PASS，3 tests；Pick/Multi/Area, Copy/fallback, list/help/hotkeys/markers/unmount-remount and target coverage in `logs/final-builtin-e2e.log` and `final-builtin-browser/`。
+- independent final `pnpm build` + `pnpm check:package` → PASS；`logs/final-build.log`, `logs/final-check-package.log`。
+- independent final fresh pack → PASS，34 files，SHA-256 `c4f80187a73a41ca6556394107192e16cfd374e6fb71fe07b27f41306c5ec0e3`；`logs/final-pack.json`, `logs/final-pack.sha256`, `final-pack/`。
+- independent final repo-external consumer → PASS：lockfile-only install + frozen install、Chromium vertical E2E + SIGTERM cleanup、production build 26 modules、CLI help six commands；`logs/final-consumer-*.log`, `final-consumer/`, `final-consumer-browser/`。
+- independent final source/declaration/provenance/diff/clean scans → PASS；`logs/final-scan-status.log`, `scans/final-*.log`。在 repo 内直接执行 packed fixture 命令因 fixture 按设计未安装而 FAIL（`logs/in-repo-packed-fixture-required-command.log`）；同一 committed fixture 的 fresh repo-external relative-tarball frozen install 与 E2E 是有效 package-boundary gate 并 PASS。
 
 #### Acceptance criteria
 
@@ -142,7 +156,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - **G05-006 PASS** — `task-extension.json` has only `annotation.extensions["demo.extension"]["target-context"]`.
 - **G05-007 PASS** — public snapshot lists `demo-json`; explicit exporter copies parseable `{ format: "demo-json" }` content.
 - **G05-008 PASS** — captured/persisted/exported data keeps `demoKind`/`kept` and contains no `redactMe`.
-- **G05-009 PASS** — focused registry suite covers duplicate extension/contribution/panel/shortcut deterministic failures.
+- **G05-009 PASS** — independent review 先复现并修复 runtime-equivalent `key`/`code` shortcut conflict 漏检；final focused/full registry suite 覆盖 duplicate extension/contribution/panel、key conflict、code conflict、跨注册与单注册 deterministic failure。
 - **G05-010 PASS** — focused registry suite covers atomic invalid registration.
 - **G05-011 PASS** — browser HMR evidence records setup=2/dispose=1/button=1 and single shortcut execution; checkpoint-B unit test retains idempotent unmount/dispose-once coverage.
 - **G05-012 PASS** — compile-time public consumer and declaration audit cannot access internal setters/`React.Dispatch`.
@@ -152,7 +166,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 
 #### 下一可靠起点
 
-- 保持 Goal 06 未开始。先从 package checkpoint-C commit 和本 plan-only commit 启动独立 Goal 05 review，复核所有 G05 criteria、fresh tarball consumer 和 clean-tree/commit provenance；只有独立 review PASS 后才可授权 Goal 06。
+- Goal 05 已独立验收。保持 Goal 06–10 未开始；下一阶段只能从 final package `a024c110d6a2fafc86069bf82e20b1ef9130f5d3` 与本 independent-review plan commit 开始，并需另行授权 Goal 06。
 
 ## 最终报告格式
 
