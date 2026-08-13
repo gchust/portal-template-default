@@ -9,6 +9,11 @@ Object.entries(fileEnvironment).forEach(([key, value]) => {
 });
 
 const environment = loadPortalE2EEnvironment();
+const loopbackNoProxy = [process.env.NO_PROXY, "127.0.0.1", "localhost"]
+  .filter(Boolean)
+  .join(",");
+process.env.NO_PROXY = loopbackNoProxy;
+process.env.no_proxy = loopbackNoProxy;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -20,7 +25,7 @@ export default defineConfig({
   reporter: process.env.CI
     ? [["line"], ["html", { open: "never" }]]
     : "list",
-  outputDir: "./test-results",
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? "./test-results",
   use: {
     baseURL: environment.baseURL,
     trace: "on-first-retry",
@@ -35,6 +40,8 @@ export default defineConfig({
     env: {
       NOCOBASE_API_URL: environment.apiURL,
       NOCOBASE_PORTAL_BASE: environment.portalBase,
+      NO_PROXY: loopbackNoProxy,
+      no_proxy: loopbackNoProxy,
     },
   },
   projects: [

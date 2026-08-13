@@ -27,7 +27,10 @@ dist-ssr
 .env.e2e
 .env.e2e.local
 
-# Portal Studio dev runtime (session token + task files)
+# Agent Feedback dev runtime (session token + task files)
+/.agent-feedback/
+
+# Keep pre-extraction local Studio data ignored; do not delete user evidence.
 /.portal-studio/
 /.portal-studio-evidence/
 
@@ -42,6 +45,3 @@ _.ntvs_
 _.njsproj
 _.sln
 \*.sw?
-
-# Goal 04: contract-suite generated evidence output (fixture runs).
-e2e/react-grab-g01/.portal-studio-evidence/

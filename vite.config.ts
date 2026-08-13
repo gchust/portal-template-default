@@ -7,7 +7,7 @@ import {
   portalRawIndexHtmlPlugin,
   portalSdkCompatibilityPlugin,
 } from "@nocobase/portal-sdk/vite";
-import { portalStudioPlugin, resolveAllowRemote } from "./src/studio/vite";
+import agentFeedback from "@gchust/agent-feedback/vite";
 
 const portalTemplate = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "package.json"), "utf8")
@@ -72,21 +72,14 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
       portalRawIndexHtmlPlugin({ root: __dirname, base: portalBase }),
-      // Dev-only Portal Studio: session token, task endpoint, and dev
-      // bootstrap injection. apply: "serve" keeps it out of production
-      // builds. Remote access is EXPLICITLY opt-in (Goal 06) via
-      // NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE === "true" — never hard-coded.
-      // The value is resolved through Vite's own env loader MERGED with
-      // process.env: vite.config.ts is evaluated BEFORE .env is loaded
-      // into process.env, and `nb portal dev` replaces the child
-      // environment — loadEnv reads the portal's .env files directly so
-      // the opt-in works under both `pnpm dev` and `nb portal dev`.
-      portalStudioPlugin({
+      // Dev-only Agent Feedback; `apply: "serve"` excludes production.
+      // Keep the legacy host env name until the Portal configuration changes.
+      agentFeedback({
         root: __dirname,
-        allowRemote: resolveAllowRemote(
-          loadEnv("development", __dirname, "").NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE ??
-            process.env.NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE
-        ),
+        clientExtensions: [path.resolve(__dirname, "src/agent-feedback/nocobase-extension.ts")],
+        allowRemote:
+          env.NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE === "true" ||
+          process.env.NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE === "true",
       }),
     ],
     resolve: {
