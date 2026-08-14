@@ -45,7 +45,7 @@ async function saveElement(page: Page, action: "pick" | "multi", targets: Locato
   for (const target of targets) await target.click();
   if (action === "multi") await page.keyboard.press("Enter");
   await shadow(page, '[aria-label="Annotation comment"]').fill(comment);
-  await shadow(page, 'button:has-text("Save annotation")').click();
+  await shadow(page, 'button[aria-label="Save annotation"]').click();
   await expect.poll(() => readTask().annotations.some((entry) => entry.comment === comment)).toBe(true);
 }
 
@@ -59,7 +59,8 @@ test("G08 real Portal thin integration, locale, capture, CLI and browser sync", 
   await expect(page.locator("main").last()).toBeVisible();
   await expect(page.locator("#agent-feedback-root")).toHaveCount(1);
   await expect(shadow(page, ".af-dock")).toBeVisible();
-  await expect(shadow(page, '[data-action-id="pick"]')).toHaveText(/^(Pick|选取)$/);
+  await expect(shadow(page, '[data-action-id="pick"]')).toHaveAttribute("aria-label", /^(Pick|选取) \(/);
+  await expect(shadow(page, '[data-action-id="pick"] svg')).toHaveCount(1);
   if (evidenceRoot) {
     mkdirSync(evidenceRoot, { recursive: true });
     await page.screenshot({ path: path.join(evidenceRoot, "portal-toolbar.png") });
@@ -97,7 +98,7 @@ test("G08 real Portal thin integration, locale, capture, CLI and browser sync", 
   await page.mouse.move(box.x + 180, box.y + 100, { steps: 4 });
   await page.mouse.up();
   await shadow(page, '[aria-label="Annotation comment"]').fill("G08 area");
-  await shadow(page, 'button:has-text("Save annotation")').click();
+  await shadow(page, 'button[aria-label="Save annotation"]').click();
   await expect.poll(() => readTask().annotations).toHaveLength(3);
 
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -107,7 +108,7 @@ test("G08 real Portal thin integration, locale, capture, CLI and browser sync", 
   const browserCompleteId = readTask().annotations[0]!.annotationId;
   await shadow(page, '[data-action-id="list"]').click();
   await shadow(page, '.af-panel button[aria-label="Edit annotation 1"]').click();
-  await shadow(page, 'button:has-text("Complete")').click();
+  await shadow(page, 'button[aria-label="Complete"]').click();
   await expect.poll(() => readTask().annotations.find((entry) => entry.annotationId === browserCompleteId)?.status)
     .toBe("completed");
 
@@ -125,7 +126,7 @@ test("G08 real Portal thin integration, locale, capture, CLI and browser sync", 
   );
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
-  await expect(shadow(page, '[data-action-id="pick"]')).toContainText("选取");
+  await expect(shadow(page, '[data-action-id="pick"]')).toHaveAttribute("aria-label", /^选取 \(/);
   if (evidenceRoot) {
     await page.screenshot({ path: path.join(evidenceRoot, "portal-toolbar-zh-CN.png") });
   }
@@ -135,6 +136,6 @@ test("G08 real Portal thin integration, locale, capture, CLI and browser sync", 
   );
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
-  await expect(shadow(page, '[data-action-id="pick"]')).toContainText("Pick");
+  await expect(shadow(page, '[data-action-id="pick"]')).toHaveAttribute("aria-label", /^Pick \(/);
   await expect(page.locator("#agent-feedback-root")).toHaveCount(1);
 });
