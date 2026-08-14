@@ -137,6 +137,8 @@ artifacts/
 - [x] 2026-08-14: 在真实 `nb portal dev main` 的 `/x/main/` base 下复现工具栏缺失；HTML 将虚拟客户端硬编码为根路径 `/@id/...`，真实 Chromium 得到 404，`#agent-feedback-root=0`。
 - [x] 2026-08-14: 通用 package 在 `8da19fbd34e94f4eb41fce933e37651dc21680a2` 修复 Vite resolved base 注入并增加回归测试；typecheck、21 files / 93 tests 和 build PASS。
 - [x] 2026-08-14: 从该提交重产 25-file tarball，53258 bytes，SHA-256 `5dfd8a54300c1f1740dc71bdb08167381248c5ba93b0679f0e702871ede34358`；Portal 安装后 typecheck、薄适配测试 2/2、production build 和登录态 Chromium `/users` toolbar 验证 PASS。
+- [x] 2026-08-14: 登录态 Agent Browser 复现 comment Save 缺少可靠完成/失败反馈及 editor 固定左上角；通用 package `bc3b07dc32137994624050578ba89592a84e7ce3` 增加 marker 邻近定位、viewport clamp 和可重试 Save 回归，typecheck、21 files / 95 tests、build、architecture audit、publint/ATTW 全部 PASS。
+- [x] 2026-08-14: 从 `bc3b07d` 重产唯一 25-file tarball，53498 bytes，SHA-256 `d9aca6e1ea6227df22d7d629f9102cf4b0f55155383f5d10aeaf6f540ff7ea8c`；Portal consumer `65b7b408ad525c16d32342064c8225aedc7ec818` 的 typecheck、薄适配 2/2、build PASS。`local23000` 登录态 Chromium 实测 marker/editor 间距 8px、POST 200、成功关闭 editor 与 `Comment saved`、CLI/刷新持久化 PASS；截图在 `/root/work/agent-feedback-browser-20260814-5CTgdN/editor-near-marker-fixed.png`。
 - [ ] 2026-08-14: 新 package commit 和 tarball 改变 RC，必须重新执行完整 G09-001–014 与 F-001–044 clean-room 独立验收后才可恢复 Goal 09 PASS。
 
 ### Surprises & Discoveries
@@ -154,6 +156,7 @@ artifacts/
 - packed Portal 首次 E2E 因未显式提供 `NOCOBASE_E2E_ACCOUNT`/`NOCOBASE_E2E_PASSWORD` 按合同 FAIL；使用本机真实 NocoBase test backend 的已有测试账户通过进程环境提供后，原样 2/2 Chromium PASS，未写入仓库或证据凭据。
 - 对整个 NocoBase Portal 运行通用 package architecture audit 会按设计拒绝 Portal 的 `@nocobase/*` imports；适用边界是 package source 与 generic packed host audit PASS，Portal host 由薄集成、namespace 与生产隔离门禁验证。
 - 既有 root-base fixtures 没有覆盖 Portal 实际 `/x/main/` dev base；`transformIndexHtml` 的根路径硬编码因此在真实 Portal 中使虚拟客户端模块 404，而此前 packed/root-base 浏览器门禁仍会通过。
+- comment update 实际已返回 200 并写入任务；“Save 无效”的直接 UX 原因是成功后 editor 仍打开且 toast 很短，失败分支则会抛出未处理异常。editor 距 marker 过远的直接原因是固定 `left:8px; top:8px`。
 
 ### Decision Log
 
@@ -171,13 +174,14 @@ artifacts/
 - 2026-08-13: packed Portal E2E 只通过当前进程环境接入已有本机测试 backend；不创建 `.env.e2e`、不记录账号密码、不修改 Portal archive source。
 - 2026-08-13: 两 host production exclusion 使用真正从 final tarball 安装的 blank 与 Portal builds；source Playground 直接嵌入 runtime，不能作为 Vite plugin exclusion host，故不伪造相同断言。
 - 2026-08-14: 非根 base 属于通用 Vite plugin 合同，修复读取 Vite resolved `config.base`；不在 NocoBase adapter 增加补丁。remote API 仍默认 loopback-only，不因可见性修复放宽安全边界。
+- 2026-08-14: comment editor 由通用 runtime 相对 marker 放置，优先下方 8px、空间不足转上方并钳制 viewport；Save 期间禁用按钮，成功关闭 editor，失败保留原 DOM/草稿并显示错误。状态提示改为增量更新，避免失败提示本身重建表单并丢失输入；不增加依赖或 Portal adapter 补丁。
 
 ### Outcomes & Retrospective
 
 Goal: G09
-Result: IN PROGRESS（2026-08-14 因非根 Vite base 真实缺陷重开）
+Result: IN PROGRESS（2026-08-14 真实缺陷修复后等待新 RC 完整独立重审）
 
-2026-08-14 addendum：以下 2026-08-13 writer 结果保留为历史证据，但其 RC 与完成结论已被 `8da19fb` 修复和新 tarball 取代；不得用于当前发布候选的最终 PASS 声明。
+2026-08-14 addendum：以下 2026-08-13 writer 结果保留为历史证据，但其 RC 与完成结论已被 `8da19fb`、`bc3b07d` 修复和后续 tarball 取代；不得用于当前发布候选的最终 PASS 声明。
 
 实际交付：
 
@@ -196,11 +200,11 @@ Result: IN PROGRESS（2026-08-14 因非根 Vite base 真实缺陷重开）
 - packed Portal frozen install/typecheck/test/test:sdk/build/real E2E/CLI/production browser → PASS（23/58、9/30、2/2）；offline frozen reinstall 后 typecheck/tests/build → PASS；证据 `logs/196-*`～`logs/212-*`。缺少显式测试凭据的首次 E2E `logs/202-*` 为预期配置 FAIL，配置后 `logs/203-*` PASS。
 - exact tarball `sha256sum -c`, manifest diff, forbidden-member and 200000-byte size gate → PASS；证据 `logs/221-*`。
 
-Acceptance criteria：`8da19fb` focused source/Portal checks PASS；当前新 RC 的 G09-001～G09-014 与 F-001～F-044 完整 clean-room matrix 尚未重跑，因此不得沿用旧 RC 的 PASS。
+Acceptance criteria：`bc3b07d` focused source/Portal/Agent Browser checks PASS；当前新 RC 的 G09-001～G09-014 与 F-001～F-044 完整 clean-room matrix 尚未重跑，因此不得沿用旧 RC 的 PASS。
 
 Known issues within this Goal: 非根 base 缺陷已修复；新 RC 的完整独立 clean-room re-audit 仍待执行。
 
-下一可靠起点：package `8da19fbd34e94f4eb41fce933e37651dc21680a2`、exact tarball `/root/work/agent-feedback-base-fix-final-20260814-rYsUkf/gchust-agent-feedback-0.1.0-alpha.0.tgz`、SHA-256 `5dfd8a54300c1f1740dc71bdb08167381248c5ba93b0679f0e702871ede34358`。Goal 10 未开始。
+下一可靠起点：package `bc3b07dc32137994624050578ba89592a84e7ce3`、Portal consumer `65b7b408ad525c16d32342064c8225aedc7ec818`、exact tarball `/root/work/agent-feedback-editor-fix-20260814-UVIeNQ/gchust-agent-feedback-0.1.0-alpha.0.tgz`、SHA-256 `d9aca6e1ea6227df22d7d629f9102cf4b0f55155383f5d10aeaf6f540ff7ea8c`。Goal 10 未开始。
 
 ## 最终报告格式
 
