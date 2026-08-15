@@ -149,7 +149,7 @@ artifacts/
 - [x] 2026-08-15: 登录态 OpenCLI 在真实 LAN `/x/main/` 发现虚拟客户端虽从正确 base 加载，但 transport 仍请求根路径 `/__agent-annotations/task` 并得到 404；通用 package `b6df160ef8d787b6f90eff34e7efc54378de6d1c` 将 resolved Vite base 同时用于客户端 endpoint、middleware 和 session metadata，并扩展既有非根 base 测试，测试数量仍为 21 files / 97 tests。typecheck、tests、build、architecture、publint/ATTW PASS。
 - [x] 2026-08-15: 从 `b6df160` 产出 25-file tarball `/root/work/agent-annotations-base-fix-20260815-j5WYgd/gchust-agent-annotations-0.1.0-alpha.0.tgz`，54843 bytes，SHA-256 `3f9c2b3c65477fbe97ea260d725bee37203003d4b50cd94655a11fdd9d17ed6e`；Portal consumer `b439bb69b83159bacdc6c4e67dc5baf67a8f1755` 的 typecheck、薄适配 2/2、production build/exclusion PASS。
 - [x] 2026-08-15: OpenCLI 通过 LAN `http://192.168.2.199:5173/x/main/users` 验证 `#agent-annotations-root`、`.aa-dock`、light theme、8/8 action SVG、0 可见 action 文本、5 个已恢复 marker 和 task GET 200；旧 root、dock 与 CLI 均不存在。被忽略的本地 `.env.local` LAN opt-in 同步为 `NOCOBASE_AGENT_ANNOTATIONS_ALLOW_REMOTE=true`。
-- [ ] 2026-08-15: 重命名改变 RC 的公开合同和 provenance，必须重新执行完整 G09-001–014 与 F-001–044 clean-room 独立验收后才可恢复 Goal 09 PASS。
+- [x] 2026-08-15: 独立 clean-room 审计已针对 package `b6df160ef8d787b6f90eff34e7efc54378de6d1c`、Portal `f13597d72688186213fd2f5f90c586845fb065fe` 和 exact RC 完整重跑；G09-001–G09-014 与 F-001–F-044 全部 PASS。最终报告复制到 `/root/work/agent-annotations-base-fix-20260815-j5WYgd/FINAL-ACCEPTANCE-REPORT.md`。
 
 ### Surprises & Discoveries
 
@@ -170,6 +170,7 @@ artifacts/
 - toolbar 和 editor 的 dark appearance 不是宿主 theme 继承，而是 Shadow Root 内显式 `color-scheme: dark` 和硬编码深色 palette；按钮占宽则来自直接插入 label 文本。局域网最终 Save 失败是另一独立根因：非 secure-context HTTP 暴露 `crypto.getRandomValues`，但不提供 `crypto.randomUUID`。
 - 只修改 NPM package name 仍会留下旧 CLI、schema、endpoint、运行目录和浏览器标识；这些属于同一个公开合同，必须一次性同名迁移。旧历史 commit 与仓外审计证据不是运行时兼容面，不改写历史。
 - Vite 非根 base 不只影响注入脚本 URL，也影响同一插件的 API middleware 路径；只修前者会让模块成功加载后在首个 task read 上 404。`nb portal dev` 生成 `.env.local` 并过滤自定义父进程变量，因此 LAN opt-in 必须存在于该本地 Vite env 文件。
+- 最终独立审计保留了代理绕过 localhost、Save UI 尚未 settle 时过早触发快捷键、Portal archive 相对 tarball 路径和 reviewer `require()` typo 四类 harness/reviewer 失误；未改产品源码，原样或校正 harness 后的完整冷启动均通过。
 
 ### Decision Log
 
@@ -192,40 +193,42 @@ artifacts/
 - 2026-08-14: UUID fallback 放在所有新实体共用的 core ID helper，使用原生 Web Crypto `getRandomValues` 并设置 UUID v4/version bits；不在 Portal adapter 或单个 Save caller 打补丁。
 - 2026-08-15: 新品牌只保留 `agent-annotations` / `Agent Annotations` 合同；不提供旧 CLI、schema、env、endpoint、类型或 CSS alias，不增加兼容层和新测试。已有测试仅同步公开名称。
 - 2026-08-15: resolved Vite base 是注入 URL、客户端 transport、server middleware 和 session metadata 的单一事实来源；修复留在通用包并扩展既有 base test，不在 Portal adapter 增加 endpoint workaround。
+- 2026-08-15: Goal 09 最终状态只采用独立审计 `/root/work/agent-annotations-g09-final-audit-20260815-q0NqRG/FINAL-INDEPENDENT-AUDIT.md`；将其逐字复制为 RC 旁的 `FINAL-ACCEPTANCE-REPORT.md`，不修改已审计源码、RC 或 candidate metadata。
 
 ### Outcomes & Retrospective
 
 Goal: G09
-Result: IN PROGRESS（2026-08-15 完成全量品牌迁移后等待新 RC 完整独立重审）
+Result: PASS
 
-2026-08-14 addendum：以下 2026-08-13 writer 结果保留为历史证据，但其 RC 与完成结论已被 `8da19fb`、`bc3b07d` 修复和后续 tarball 取代；不得用于当前发布候选的最终 PASS 声明。
+最终不可变目标：
 
-2026-08-15 addendum：package `1a63068` 与 Portal `607605f` 已完成 Agent Annotations 全量公开合同迁移；旧 RC provenance 继续只作历史证据。当前 exact tarball 是 54797-byte、25-file 的 `703962f2...` 产物。
+- package commit：`b6df160ef8d787b6f90eff34e7efc54378de6d1c`，公开仓库 `https://github.com/gchust/agent-annotations` 的 `main` 与之相同。
+- Portal commit：`f13597d72688186213fd2f5f90c586845fb065fe`，`feat-agent-annotations` 本地与远端分支均与之相同。
+- RC：`/root/work/agent-annotations-base-fix-20260815-j5WYgd/gchust-agent-annotations-0.1.0-alpha.0.tgz`，SHA-256 `3f9c2b3c65477fbe97ea260d725bee37203003d4b50cd94655a11fdd9d17ed6e`，54,843 bytes，25 files。
+- 独立证据：`/root/work/agent-annotations-g09-final-audit-20260815-q0NqRG/FINAL-INDEPENDENT-AUDIT.md`；发布候选旁的逐字副本为 `/root/work/agent-annotations-base-fix-20260815-j5WYgd/FINAL-ACCEPTANCE-REPORT.md`。
 
-2026-08-15 base-path addendum：真实 LAN 验收将当前 package/Portal 起点推进到 `b6df160` / `b439bb6`；当前 exact tarball 是 54843-byte、25-file 的 `3f9c2b3c...` 产物。
+独立审计结果：Node 20.20.2 / 22.22.0、21 files / 97 package tests、两个 Playground、exact-RC blank consumer、CLI/MCP/types、iframe/open Shadow Root、SIGTERM、非根 `/x/main/`、Portal 23 files / 58 tests、SDK 9 files / 30 tests、真实 Chromium、offline reinstall 和 two-host production exclusion 全部 PASS；两个源码仓库与 RC/candidate metadata 保持不变。
 
-实际交付：
+Acceptance criteria：
 
-- package 从冻结起点产生五个本地逻辑 commit：`4dc320d`（quality/docs/metadata）、`812dcb2`（Node 20 build compatibility）、`688e960` 与 `c7d2056`（packed audit boundary corrections）、`5feabb0`（移除 maps/internal source leaks）。最终 package source commit 为 `5feabb0fdcc9f71843efddd2d26b8ff06303f90f`。
-- 最终 RC 目录为 `/root/work/agent-annotations-g09-writer-20260813/artifacts`；包含 exact tarball、checksum、25-file contents、release notes 与 writer acceptance report。生成 consumers、logs、reports、screenshots 均在两个仓库外。
-- Node 20.20.2 / 22.22.0 clean archives 均通过 frozen install/typecheck/91 tests/build/publint/ATTW/architecture/dependency/docs/tarball；plain Playground、Extension Demo、packed blank、packed Portal、offline reinstall、two-host production exclusion 和 packed types 均通过。
-- F-001–F-044 逐项 provisional PASS 的证据映射完整写入 `artifacts/FINAL-ACCEPTANCE-REPORT.md`；G09-001–G09-014 均为 writer provisional PASS。
+- G09-001 PASS — Node 20/22 clean committed archives frozen install；证据 `FINAL-ACCEPTANCE-REPORT.md` `logs/010-*`, `logs/030-*`。
+- G09-002 PASS — typecheck、97 tests、build、literal root E2E；证据 `logs/012-*`–`logs/020-*`, `logs/032-*`–`logs/040-*`, `logs/125-*`, `logs/126-*`。
+- G09-003 PASS — 两个 Node matrix 的单一 pack 均与 exact RC byte-identical；证据 `logs/041-*`–`logs/043-*`。
+- G09-004 PASS — 25-file manifest 与 whitelist/`PACK-CONTENTS.txt` 一致且无泄漏；证据 `logs/078-*`, `logs/122-*`, `logs/122a-*`。
+- G09-005 PASS — exact-RC blank consumer 的 frozen/offline/browser/SIGTERM/build/CLI/import/types/production checks；证据 `logs/060-*`, `logs/065-*`–`logs/087-*`, `logs/128-*`, `logs/131-*`。
+- G09-006 PASS — exact committed Portal archive 的 frozen/offline/static/browser/base-path/production matrix；证据 `logs/093-*`–`logs/111-*`, `logs/132-*`。
+- G09-007 PASS — six exports、strict external types、installed CLI lifecycle/MCP；证据 `logs/062-*`, `logs/063-*`, `logs/068-*`–`logs/076-*`, `logs/119-*`。
+- G09-008 PASS — source/installed audits 与全部 failure fixtures；证据 `logs/016-*`, `logs/036-*`, `logs/070-*`, `logs/084-*`, `logs/116-*`。
+- G09-009 PASS — blank/Portal 两个 production hosts 无 runtime/API marker；证据 `logs/080-*`, `logs/102-*`, `logs/110-*`。
+- G09-010 PASS — README 内容通过 docs smoke 及 Playground/Extension/CLI/MCP/production probes；证据 `logs/018a-*`, `logs/038a-*`, `logs/049c-*`, `logs/051-*`, `logs/069-*`–`logs/076-*`, `logs/117-*`。
+- G09-011 PASS — F-001–F-044 全部逐项 PASS；见 `FINAL-ACCEPTANCE-REPORT.md`。
+- G09-012 PASS — release notes 包含功能、限制、breaking reset、精确 provenance/validation 和未执行的 publish command；证据 `logs/077-*`。
+- G09-013 PASS — 未执行 npm publish、credential write 或 Goal 10；证据 `logs/133-*`。
+- G09-014 PASS — RC path、SHA-256、54,843-byte size、25-file count 与 checksum 和两个 deterministic repacks 一致；证据 `logs/001-*`, `logs/043-*`, `logs/078-*`。
 
-未交付：独立 agent 最终复审、npm publish、registry cutover 与 Goal 10 均未执行。
+Known issues within this Goal: none。保留的四个 reviewer/harness errors 均在最终报告中与产品结果分开记录，未触发产品修复。
 
-关键命令与结果：
-
-- Node 20/22 clean archives `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm check:package`, `pnpm run audit`, `pnpm audit`, `pnpm check:docs`, `pnpm check:tarball` → PASS；证据 `logs/171-*`～`logs/188-*`。installed `pnpm exec agent-annotations audit` 另在 generic packed blank host PASS。
-- source `pnpm --dir playgrounds/react-vite test:e2e && build` → PASS（3/3）；Extension Demo 等价命令 → PASS（1/1 + HMR）；证据 `logs/213-*`～`logs/216-*`。
-- packed blank frozen install/E2E/build/six imports/CLI/audit/scans → PASS（7/7 + SIGTERM）；证据 `logs/189-*`～`logs/195-*`。
-- packed Portal frozen install/typecheck/test/test:sdk/build/real E2E/CLI/production browser → PASS（23/58、9/30、2/2）；offline frozen reinstall 后 typecheck/tests/build → PASS；证据 `logs/196-*`～`logs/212-*`。缺少显式测试凭据的首次 E2E `logs/202-*` 为预期配置 FAIL，配置后 `logs/203-*` PASS。
-- exact tarball `sha256sum -c`, manifest diff, forbidden-member and 200000-byte size gate → PASS；证据 `logs/221-*`。
-
-Acceptance criteria：`b6df160` / `b439bb6` focused package、Portal、production exclusion 和真实 LAN OpenCLI checks PASS；当前新 RC 的 G09-001～G09-014 与 F-001～F-044 完整 clean-room matrix 尚未重跑，因此不得沿用旧 RC 的 PASS。
-
-Known issues within this Goal: 非根 base 缺陷已修复；新 RC 的完整独立 clean-room re-audit 仍待执行。
-
-下一可靠起点：package `b6df160ef8d787b6f90eff34e7efc54378de6d1c`、Portal consumer `b439bb69b83159bacdc6c4e67dc5baf67a8f1755`、exact tarball `/root/work/agent-annotations-base-fix-20260815-j5WYgd/gchust-agent-annotations-0.1.0-alpha.0.tgz`、SHA-256 `3f9c2b3c65477fbe97ea260d725bee37203003d4b50cd94655a11fdd9d17ed6e`。未执行 npm publish；Goal 10 未开始。
+Not started: npm publish 与 Goal 10 registry cutover。
 
 ## 最终报告格式
 
