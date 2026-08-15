@@ -3,11 +3,11 @@
 将以下短规则放到父工作区或两个仓库最接近该工作的 `AGENTS.md`。不要把全部 Goal 内容复制进 AGENTS.md。
 
 ```md
-## Agent Feedback NPM extraction
+## Agent Annotations NPM extraction
 
-For Agent Feedback extraction work, read `00-project-constants.md`,
+For Agent Annotations extraction work, read `00-project-constants.md`,
 `00-shared-contract.md`, and only the currently assigned numbered Goal under
-`docs/exec-plans/agent-feedback-npm-extraction-v1/`.
+`docs/exec-plans/agent-annotations-npm-extraction-v1/`.
 
 Complete and independently verify one Goal before starting the next. Keep its
 Progress, Surprises & Discoveries, Decision Log, and Outcomes & Retrospective

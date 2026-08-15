@@ -108,11 +108,11 @@ rg -n "window\.requestAnimationFrame\s*=|querySelectorAll\(['\"]\\?\*|instanceof
 
 - [x] 2026-08-13：已读取冻结常量、完整共享合同、Goal 07 与 launcher，并确认两个仓库位于指定干净基线。
 - [x] 2026-08-13：通用包已完成 Screenshot、跨 realm 恢复、Freeze、Region 与 Marker observer 修复；Goal 08 未开始。
-- [x] 2026-08-13：fresh relative-tarball consumer `/tmp/agent-feedback-g07-release2-d1UhnM/consumer` 完成 vertical、source benchmark、5 项 reliability browser E2E、production build 和 SIGTERM cleanup；外部证据位于 `/root/work/agent-feedback-goal07-evidence-20260813T0830Z/final/`。
-- [x] 2026-08-13：最终 follow-up 后 external consumer `/tmp/agent-feedback-g07-release-8N3ove` 的 reliability browser suite 5/5 PASS；package full Vitest 20 files / 88 tests、typecheck、build、audit、check:package 与 diff check 均 PASS。
-- [x] 2026-08-13：最终提交 `94c5e83` 后 fresh relative-tarball consumer `/tmp/agent-feedback-g07-tip94-jkoyGE` 完整 E2E、production build/exclusion、六个公共 import、CLI help、offline frozen reinstall 与 SIGTERM cleanup PASS；证据位于 `/root/work/agent-feedback-goal07-evidence-20260813T0830Z/final-tip-94c5e83/`。
-- [x] 2026-08-13：最终 HEAD `94c5e83` 的 fresh consumer `/tmp/agent-feedback-g07-proof3-kT9elp` 完整 E2E（vertical/source/reliability 5/5）、offline frozen reinstall、production build/exclusion、CLI help 与 SIGTERM cleanup PASS；nested frame readiness/二次 rAF refresh 消除 reload race，同时保留 observer 上界。
-- [x] 2026-08-13：最终独立 clean-room reviewer 在 detached worktree `/root/work/agent-feedback-g07-final-audit-20260813-GE4NEt/package` 对 `94c5e83` 重跑全部 package、packed consumer、串行 E2E、production exclusion 与 cleanliness gates；G07-001～G07-015 全部 PASS，报告位于 `/root/work/agent-feedback-g07-final-audit-20260813-GE4NEt/artifacts/FINAL-AUDIT.md`。
+- [x] 2026-08-13：fresh relative-tarball consumer `/tmp/agent-annotations-g07-release2-d1UhnM/consumer` 完成 vertical、source benchmark、5 项 reliability browser E2E、production build 和 SIGTERM cleanup；外部证据位于 `/root/work/agent-annotations-goal07-evidence-20260813T0830Z/final/`。
+- [x] 2026-08-13：最终 follow-up 后 external consumer `/tmp/agent-annotations-g07-release-8N3ove` 的 reliability browser suite 5/5 PASS；package full Vitest 20 files / 88 tests、typecheck、build、audit、check:package 与 diff check 均 PASS。
+- [x] 2026-08-13：最终提交 `94c5e83` 后 fresh relative-tarball consumer `/tmp/agent-annotations-g07-tip94-jkoyGE` 完整 E2E、production build/exclusion、六个公共 import、CLI help、offline frozen reinstall 与 SIGTERM cleanup PASS；证据位于 `/root/work/agent-annotations-goal07-evidence-20260813T0830Z/final-tip-94c5e83/`。
+- [x] 2026-08-13：最终 HEAD `94c5e83` 的 fresh consumer `/tmp/agent-annotations-g07-proof3-kT9elp` 完整 E2E（vertical/source/reliability 5/5）、offline frozen reinstall、production build/exclusion、CLI help 与 SIGTERM cleanup PASS；nested frame readiness/二次 rAF refresh 消除 reload race，同时保留 observer 上界。
+- [x] 2026-08-13：最终独立 clean-room reviewer 在 detached worktree `/root/work/agent-annotations-g07-final-audit-20260813-GE4NEt/package` 对 `94c5e83` 重跑全部 package、packed consumer、串行 E2E、production exclusion 与 cleanliness gates；G07-001～G07-015 全部 PASS，报告位于 `/root/work/agent-annotations-g07-final-audit-20260813-GE4NEt/artifacts/FINAL-AUDIT.md`。
 
 ### Surprises & Discoveries
 
@@ -163,7 +163,7 @@ Goal: GXX
 Result: PASS | FAIL | BLOCKED
 
 Changed files by repository:
-- agent-feedback: ...
+- agent-annotations: ...
 - portal-template-default: ...
 
 Commands run:

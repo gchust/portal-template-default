@@ -4,9 +4,9 @@ import extension, {
   collectNocoBaseContext,
   NOCOBASE_EXTENSION_ID,
   redactNocoBaseContext,
-} from "@/agent-feedback/nocobase-extension";
+} from "@/agent-annotations/nocobase-extension";
 
-describe("NocoBase Agent Feedback extension", () => {
+describe("NocoBase Agent Annotations extension", () => {
   it("classifies stable identity and contextual evidence", () => {
     const parent = document.createElement("section");
     parent.setAttribute("data-nb-resource", "users");

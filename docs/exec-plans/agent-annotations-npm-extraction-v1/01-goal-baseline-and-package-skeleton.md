@@ -2,7 +2,7 @@
 
 ## 单一完成状态
 
-`agent-feedback/` 已成为独立 Git 仓库，能 build、typecheck、test、`pnpm pack` 并从 tarball 导入最小公开入口；当前 Default Portal 的 Studio 行为和生产源码没有改变，同时已有可重复的迁移基线报告。
+`agent-annotations/` 已成为独立 Git 仓库，能 build、typecheck、test、`pnpm pack` 并从 tarball 导入最小公开入口；当前 Default Portal 的 Studio 行为和生产源码没有改变，同时已有可重复的迁移基线报告。
 
 本 Goal 不迁移 Studio 代码，不设计完整 Extension Registry，不修功能 Bug。
 
@@ -17,7 +17,7 @@
 
 ### 必须完成
 
-1. 确认父工作区包含两个 sibling 路径；若 `agent-feedback/` 不存在则创建并 `git init`。
+1. 确认父工作区包含两个 sibling 路径；若 `agent-annotations/` 不存在则创建并 `git init`。
 2. 创建独立 package skeleton：
    - `package.json`；
    - `pnpm-lock.yaml`；
@@ -60,7 +60,7 @@
 - **G01-005** dist 包含四个声明的公开子路径和 CLI。
 - **G01-006** `pnpm pack --json` 成功，tarball 清单无 Playground source、测试、临时文件和 Default Portal 文件。
 - **G01-007** 临时 Fixture 从 tarball 安装后能 import `.`, `/vite`, `/extension`, `/types`。
-- **G01-008** tarball 安装后的 `agent-feedback --help` 退出码为 0。
+- **G01-008** tarball 安装后的 `agent-annotations --help` 退出码为 0。
 - **G01-009** package dependency graph 中无 `@nocobase/*`。
 - **G01-010** Default Portal 的 production source diff 为零；只允许添加本套 ExecPlan 或 baseline 证据。
 - **G01-011** `MIGRATION-BASELINE.md` 包含真实命令结果，不复制历史完成声明。
@@ -79,8 +79,8 @@ pnpm pack --json
 # tarball fixture
 pnpm install --frozen-lockfile
 pnpm test
-node -e "Promise.all([import('@gchust/agent-feedback'), import('@gchust/agent-feedback/vite'), import('@gchust/agent-feedback/extension'), import('@gchust/agent-feedback/types')]).then(()=>console.log('imports ok'))"
-pnpm exec agent-feedback --help
+node -e "Promise.all([import('@gchust/agent-annotations'), import('@gchust/agent-annotations/vite'), import('@gchust/agent-annotations/extension'), import('@gchust/agent-annotations/types')]).then(()=>console.log('imports ok'))"
+pnpm exec agent-annotations --help
 
 # both repos
 git status --short
@@ -100,13 +100,13 @@ git diff --stat
 ### Progress
 
 - [x] 2026-08-12T10:42Z 完整读取 `AGENTS.md`、冻结常量、共享合同和 Goal 01；确认只执行 Goal 01。
-- [x] 2026-08-12T10:45Z 记录模板初始状态：`feat-agent-feedback` @ `cdfbfb4c959ee660379b7510d89ce506c15f4817`；已有意图内未提交项为 `AGENTS.md` 和本 ExecPlan 目录，production source diff 为零。
-- [x] 2026-08-12T10:47Z 确认 `/root/work/portal-template-default/.git` 存在且 `/root/work/agent-feedback` 尚不存在；Node `v22.22.0`、pnpm `10.28.1` 满足冻结常量。
+- [x] 2026-08-12T10:45Z 记录模板初始状态：`feat-agent-annotations` @ `cdfbfb4c959ee660379b7510d89ce506c15f4817`；已有意图内未提交项为 `AGENTS.md` 和本 ExecPlan 目录，production source diff 为零。
+- [x] 2026-08-12T10:47Z 确认 `/root/work/portal-template-default/.git` 存在且 `/root/work/agent-annotations` 尚不存在；Node `v22.22.0`、pnpm `10.28.1` 满足冻结常量。
 - [x] 2026-08-12T10:50Z 盘点当前 Studio、scripts、测试、直接 NocoBase 耦合和已知缺陷，供新仓库 `MIGRATION-BASELINE.md` 使用。
-- [x] 2026-08-12T10:53Z 创建 `/root/work/agent-feedback/.git`（`main`）及冻结 metadata、ESM-only 多入口、声明输出、CLI、最小测试和 React/Vite Playground。
+- [x] 2026-08-12T10:53Z 创建 `/root/work/agent-annotations/.git`（`main`）及冻结 metadata、ESM-only 多入口、声明输出、CLI、最小测试和 React/Vite Playground。
 - [x] 2026-08-12T10:56Z 首次 `pnpm install` 生成 lockfile；依据唯一具体失败，将 Playground 从 package `tsconfig` 的 typecheck 范围移出，随后 package typecheck/test/build 全部通过。
-- [x] 2026-08-12T11:00Z `pnpm pack --json --out /tmp/agent-feedback-g01-fixture.1vDFBq/agent-feedback.tgz` 成功，清单仅含 dist、LICENSE、README、package.json。
-- [x] 2026-08-12T11:00Z 新建 clean Fixture，并在第二个无源码副本 `/tmp/agent-feedback-g01-offline.Jv96by` 用 tarball + frozen lockfile + offline install 验证测试、四入口 import 和 CLI help。
+- [x] 2026-08-12T11:00Z `pnpm pack --json --out /tmp/agent-annotations-g01-fixture.1vDFBq/agent-annotations.tgz` 成功，清单仅含 dist、LICENSE、README、package.json。
+- [x] 2026-08-12T11:00Z 新建 clean Fixture，并在第二个无源码副本 `/tmp/agent-annotations-g01-offline.Jv96by` 用 tarball + frozen lockfile + offline install 验证测试、四入口 import 和 CLI help。
 - [x] 2026-08-12T11:01Z 模板 typecheck/build 通过；并行 focused suite 的两个 5s timeout 已以 15s focused rerun 证实 2 files / 11 tests PASS，原始失败仍如实写入 baseline。
 - [x] 2026-08-12T11:05Z 逐项记录 G01-001–G01-012 的最终新鲜证据。
 - [x] 2026-08-12T11:08Z standalone package checkpoint commit：`3ac5528ecc0c7b67380782b6adcd66c021c98f01`。
@@ -130,16 +130,16 @@ git diff --stat
 - 2026-08-12：package skeleton 只实现可导入的空公开入口和 `--help` CLI；Extension Registry、schema 和运行时功能明确留给 Goal 02+，避免提前设计。
 - 2026-08-12：采用当前 Node 可运行的精确工具版本；所有关键 build/release validation tool 和 React/Vite 测试依赖均精确 pin，不使用 caret。
 - 2026-08-12：`@arethetypeswrong/cli` 使用 `--profile esm-only`，因为 ESM-only 是冻结模块格式；仍保留并通过 Node ESM 与 bundler 两种解析检查，不伪造 CommonJS 支持。
-- 2026-08-12：packed Fixture 额外复制到第二个临时目录并用 `--offline --frozen-lockfile` 安装，以证明解析只依赖 `.tgz` 与 store，不依赖 `/root/work/agent-feedback` workspace source。
+- 2026-08-12：packed Fixture 额外复制到第二个临时目录并用 `--offline --frozen-lockfile` 安装，以证明解析只依赖 `.tgz` 与 store，不依赖 `/root/work/agent-annotations` workspace source。
 - 2026-08-12 independent review：`MIGRATION-BASELINE.md` 是两仓迁移证据，不是消费者文档；保留在 Git repo 但从 package `files` 排除，避免发布 Portal 路径、旧协议与 NocoBase coupling 清单。
 
 ### Outcomes & Retrospective
 
 #### 实际交付
 
-- `/root/work/agent-feedback` 是独立 Git repo，包含冻结 package metadata、pnpm lockfile、ESM-only tsdown 五入口 build、四个公开 exports、CLI、最小 Vitest、React/Vite import Playground、README、MIT LICENSE 和 `MIGRATION-BASELINE.md`。
-- 发布边界经 `publint`、ATTW ESM-only profile 和 fresh `pnpm pack --json` 验证；最终复核 tarball 为 `/tmp/agent-feedback-g01-final-review.SYgDv8/agent-feedback.tgz`（SHA-256 `240cfc6e20e9d8bd90326d86b24ab59f8349ebb5f14a5589da1b899f5c14f014`）。
-- clean Fixture `/tmp/agent-feedback-g01-final-review.SYgDv8/fixture` 只携带 tarball、fixture files 和 lockfile，在 `--offline --frozen-lockfile` 下安装成功并通过测试、四入口动态 import 和 CLI help。
+- `/root/work/agent-annotations` 是独立 Git repo，包含冻结 package metadata、pnpm lockfile、ESM-only tsdown 五入口 build、四个公开 exports、CLI、最小 Vitest、React/Vite import Playground、README、MIT LICENSE 和 `MIGRATION-BASELINE.md`。
+- 发布边界经 `publint`、ATTW ESM-only profile 和 fresh `pnpm pack --json` 验证；最终复核 tarball 为 `/tmp/agent-annotations-g01-final-review.SYgDv8/agent-annotations.tgz`（SHA-256 `240cfc6e20e9d8bd90326d86b24ab59f8349ebb5f14a5589da1b899f5c14f014`）。
+- clean Fixture `/tmp/agent-annotations-g01-final-review.SYgDv8/fixture` 只携带 tarball、fixture files 和 lockfile，在 `--offline --frozen-lockfile` 下安装成功并通过测试、四入口动态 import 和 CLI help。
 - Default Portal production source 未改变；`pnpm typecheck` 和 `pnpm build` 新鲜通过。
 
 #### 未交付
@@ -149,11 +149,11 @@ git diff --stat
 
 #### 本地 checkpoint commits
 
-- agent-feedback: `3ac5528ecc0c7b67380782b6adcd66c021c98f01` (`chore: establish Agent Feedback package skeleton`)
-- agent-feedback follow-up: `7630205d5a6514ce4ce0f2cf66fb31420d5235b9` (`fix: keep migration evidence out of package`)
-- agent-feedback baseline follow-up: `0933efc6c9dbff24a3ecfd82b4dc59872fd4fa18` (`docs: complete migration coupling baseline`)
-- agent-feedback evidence follow-up: `eab212b7b516bb848a657194dc51a50cfe0dc512` (`docs: record fresh Studio baseline rerun`)
-- portal-template-default: `3d8dedd4eb13dac9cb048559db217d31364c6f02` (`docs: add Agent Feedback extraction plan`), `23340b7baf2f2d8f5f25b6a0e9907aa12866e354` (`docs: record Goal 01 checkpoint SHAs`, contains invalid SHAs), `6fb030a64dead5af67b384c516e34838f3e55d4a` (`docs: correct Goal 01 checkpoint SHAs`), `c10b6c4d9dab0291c3703911abfc3173a0ef17ee` and `e37f7958c9cca0ea73f0c7980cfe21368c1291bb` (independent review evidence)
+- agent-annotations: `3ac5528ecc0c7b67380782b6adcd66c021c98f01` (`chore: establish Agent Annotations package skeleton`)
+- agent-annotations follow-up: `7630205d5a6514ce4ce0f2cf66fb31420d5235b9` (`fix: keep migration evidence out of package`)
+- agent-annotations baseline follow-up: `0933efc6c9dbff24a3ecfd82b4dc59872fd4fa18` (`docs: complete migration coupling baseline`)
+- agent-annotations evidence follow-up: `eab212b7b516bb848a657194dc51a50cfe0dc512` (`docs: record fresh Studio baseline rerun`)
+- portal-template-default: `3d8dedd4eb13dac9cb048559db217d31364c6f02` (`docs: add Agent Annotations extraction plan`), `23340b7baf2f2d8f5f25b6a0e9907aa12866e354` (`docs: record Goal 01 checkpoint SHAs`, contains invalid SHAs), `6fb030a64dead5af67b384c516e34838f3e55d4a` (`docs: correct Goal 01 checkpoint SHAs`), `c10b6c4d9dab0291c3703911abfc3173a0ef17ee` and `e37f7958c9cca0ea73f0c7980cfe21368c1291bb` (independent review evidence)
 
 #### 运行过的命令及结果
 
@@ -164,10 +164,10 @@ git diff --stat
 - package `pnpm build` → PASS：tsdown 生成 18 个 dist 文件，四公开子路径和 CLI 均有 JS/声明（CLI 有声明和可执行 JS），exit 0。
 - package `pnpm check:package` → PASS：publint `All good!`；ATTW ESM-only 的 Node ESM/bundler 全绿，exit 0。
 - Playground `pnpm --dir playgrounds/react-vite install --frozen-lockfile && ... build` → PASS：27 modules transformed，exit 0。
-- review `pnpm pack --json --out /tmp/agent-feedback-g01-final-review.SYgDv8/agent-feedback.tgz` → PASS：21 files，仅 dist、LICENSE、package.json、README.md；无 Playground、tests、temporary、baseline 或 Default Portal files。
+- review `pnpm pack --json --out /tmp/agent-annotations-g01-final-review.SYgDv8/agent-annotations.tgz` → PASS：21 files，仅 dist、LICENSE、package.json、README.md；无 Playground、tests、temporary、baseline 或 Default Portal files。
 - review clean Fixture `pnpm install --frozen-lockfile --offline && pnpm test` → PASS：50 packages reused / 0 downloaded；`packed fixture ok`。
 - clean Fixture 四入口 `node -e "Promise.all([...imports])"` → PASS：`imports ok`。
-- clean Fixture `pnpm exec agent-feedback --help` → PASS：打印版本、Usage、描述，exit 0。
+- clean Fixture `pnpm exec agent-annotations --help` → PASS：打印版本、Usage、描述，exit 0。
 - package `pnpm list --depth Infinity --json` + dependency/lockfile scan → PASS：`nocobaseHits: []`。
 - Portal `pnpm typecheck` → PASS，exit 0。
 - Portal `pnpm build` → PASS：5,952 modules transformed，exit 0。
@@ -177,14 +177,14 @@ git diff --stat
 
 #### Acceptance criteria
 
-- **G01-001 PASS** — 两个路径各自存在 `.git`；`git rev-parse --show-toplevel` 分别解析到 `/root/work/portal-template-default` 与 `/root/work/agent-feedback`。
+- **G01-001 PASS** — 两个路径各自存在 `.git`；`git rev-parse --show-toplevel` 分别解析到 `/root/work/portal-template-default` 与 `/root/work/agent-annotations`。
 - **G01-002 PASS** — `package.json` 的 name/displayName/description/version/license、Node engine、ESM、React/ReactDOM/Vite peers、react-grab `0.1.50`、exports 与 CLI 均与冻结常量一致。
 - **G01-003 PASS** — package `pnpm install --frozen-lockfile` exit 0。
 - **G01-004 PASS** — package typecheck、1-test Vitest suite 和 tsdown build 均 exit 0。
 - **G01-005 PASS** — dist 包含 `client`、`vite`、`extension`、`types` 的 JS/`.d.ts`，以及 mode 755 的 `cli/index.js` 和 CLI declaration。
 - **G01-006 PASS** — fresh `pnpm pack --json` exit 0；21-file manifest 无 Playground source、tests、临时文件、migration baseline 或 Default Portal 文件。
 - **G01-007 PASS** — fresh clean/offline Fixture 从 review tarball 安装后，`.`、`/vite`、`/extension`、`/types` 全部 import 成功。
-- **G01-008 PASS** — tarball Fixture 的 `pnpm exec agent-feedback --help` exit 0。
+- **G01-008 PASS** — tarball Fixture 的 `pnpm exec agent-annotations --help` exit 0。
 - **G01-009 PASS** — package dependency graph JSON 与 package/lockfile scan 的 `@nocobase/*` 命中为零。
 - **G01-010 PASS** — `git diff --name-only -- src scripts vite.config.ts package.json pnpm-lock.yaml` 无输出；Portal runtime behavior 未改，typecheck/build 通过。
 - **G01-011 PASS** — `MIGRATION-BASELINE.md` 记录当前 SHA/branch、44 files/13,903 lines、耦合、scripts、真实 PASS/FAIL/rerun 结果和已知问题。
@@ -201,7 +201,7 @@ Goal: GXX
 Result: PASS | FAIL | BLOCKED
 
 Changed files by repository:
-- agent-feedback: ...
+- agent-annotations: ...
 - portal-template-default: ...
 
 Commands run:

@@ -7,7 +7,7 @@ import {
   portalRawIndexHtmlPlugin,
   portalSdkCompatibilityPlugin,
 } from "@nocobase/portal-sdk/vite";
-import agentFeedback from "@gchust/agent-feedback/vite";
+import agentAnnotations from "@gchust/agent-annotations/vite";
 
 const portalTemplate = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "package.json"), "utf8")
@@ -72,14 +72,13 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
       portalRawIndexHtmlPlugin({ root: __dirname, base: portalBase }),
-      // Dev-only Agent Feedback; `apply: "serve"` excludes production.
-      // Keep the legacy host env name until the Portal configuration changes.
-      agentFeedback({
+      // Dev-only Agent Annotations; `apply: "serve"` excludes production.
+      agentAnnotations({
         root: __dirname,
-        clientExtensions: [path.resolve(__dirname, "src/agent-feedback/nocobase-extension.ts")],
+        clientExtensions: [path.resolve(__dirname, "src/agent-annotations/nocobase-extension.ts")],
         allowRemote:
-          env.NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE === "true" ||
-          process.env.NOCOBASE_PORTAL_STUDIO_ALLOW_REMOTE === "true",
+          env.NOCOBASE_AGENT_ANNOTATIONS_ALLOW_REMOTE === "true" ||
+          process.env.NOCOBASE_AGENT_ANNOTATIONS_ALLOW_REMOTE === "true",
       }),
     ],
     resolve: {

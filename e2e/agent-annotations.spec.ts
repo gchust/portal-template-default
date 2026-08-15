@@ -13,11 +13,11 @@ import { getPortalStorageKey } from "./support/session";
 
 const environment = loadPortalE2EEnvironment();
 const credentials = requirePortalE2ECredentials(environment);
-const runtimeRoot = path.resolve(".agent-feedback");
+const runtimeRoot = path.resolve(".agent-annotations");
 const taskPath = path.join(runtimeRoot, "tasks/active-task.json");
-const evidenceRoot = process.env.AGENT_FEEDBACK_EVIDENCE;
+const evidenceRoot = process.env.AGENT_ANNOTATIONS_EVIDENCE;
 const shadow = (page: Page, selector: string) =>
-  page.locator(`#agent-feedback-root >> ${selector}`);
+  page.locator(`#agent-annotations-root >> ${selector}`);
 const readTask = () => JSON.parse(readFileSync(taskPath, "utf8")) as {
   annotations: Array<{
     annotationId: string;
@@ -27,7 +27,7 @@ const readTask = () => JSON.parse(readFileSync(taskPath, "utf8")) as {
   }>;
 };
 const cli = (...args: string[]) =>
-  execFileSync("pnpm", ["exec", "agent-feedback", ...args], {
+  execFileSync("pnpm", ["exec", "agent-annotations", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -57,8 +57,8 @@ test("G08 real Portal thin integration, locale, capture, CLI and browser sync", 
   await page.goto(resolvePortalTestURL(environment, "/users"));
   const localeKey = getPortalStorageKey(environment, "locale");
   await expect(page.locator("main").last()).toBeVisible();
-  await expect(page.locator("#agent-feedback-root")).toHaveCount(1);
-  await expect(shadow(page, ".af-dock")).toBeVisible();
+  await expect(page.locator("#agent-annotations-root")).toHaveCount(1);
+  await expect(shadow(page, ".aa-dock")).toBeVisible();
   await expect(shadow(page, '[data-action-id="pick"]')).toHaveAttribute("aria-label", /^(Pick|选取) \(/);
   await expect(shadow(page, '[data-action-id="pick"] svg')).toHaveCount(1);
   if (evidenceRoot) {
@@ -107,7 +107,7 @@ test("G08 real Portal thin integration, locale, capture, CLI and browser sync", 
 
   const browserCompleteId = readTask().annotations[0]!.annotationId;
   await shadow(page, '[data-action-id="list"]').click();
-  await shadow(page, '.af-panel button[aria-label="Edit annotation 1"]').click();
+  await shadow(page, '.aa-panel button[aria-label="Edit annotation 1"]').click();
   await shadow(page, 'button[aria-label="Complete"]').click();
   await expect.poll(() => readTask().annotations.find((entry) => entry.annotationId === browserCompleteId)?.status)
     .toBe("completed");
@@ -137,5 +137,5 @@ test("G08 real Portal thin integration, locale, capture, CLI and browser sync", 
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
   await expect(shadow(page, '[data-action-id="pick"]')).toHaveAttribute("aria-label", /^Pick \(/);
-  await expect(page.locator("#agent-feedback-root")).toHaveCount(1);
+  await expect(page.locator("#agent-annotations-root")).toHaveCount(1);
 });

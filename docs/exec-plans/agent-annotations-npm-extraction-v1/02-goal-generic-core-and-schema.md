@@ -2,7 +2,7 @@
 
 ## 单一完成状态
 
-独立包已经拥有全新 `agent-feedback.task.v1` 的纯核心实现与测试；这些模块不依赖 React DOM、Vite、Node 文件系统或 NocoBase，并可独立完成 task create/mutate/format/redact/validate。Default Portal 运行行为仍未切换。
+独立包已经拥有全新 `agent-annotations.task.v1` 的纯核心实现与测试；这些模块不依赖 React DOM、Vite、Node 文件系统或 NocoBase，并可独立完成 task create/mutate/format/redact/validate。Default Portal 运行行为仍未切换。
 
 ## 范围
 
@@ -21,9 +21,9 @@
 推荐目录：
 
 ```text
-agent-feedback/src/core/
-agent-feedback/src/types/
-agent-feedback/tests/core/
+agent-annotations/src/core/
+agent-annotations/src/types/
+agent-annotations/tests/core/
 ```
 
 ## 核心要求
@@ -34,7 +34,7 @@ agent-feedback/tests/core/
 4. Mutation 必须使用 `expectedRevision` 并返回 deterministic conflict。
 5. Formatter 默认导出 open annotations，并支持 all/json。
 6. Generic redactor 不 import NocoBase；支持 extension redactor pipeline 的纯合同。
-7. 所有类型可从 `@gchust/agent-feedback/types` 导入。
+7. 所有类型可从 `@gchust/agent-annotations/types` 导入。
 8. 纯模块不得 import browser-only 或 Node-only 模块。
 9. 当前模板代码暂时不需要改为使用这些模块；本 Goal 只建立可靠核心。
 
@@ -86,25 +86,25 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 ### Progress
 
 - [x] 2026-08-12T12:00Z 完整读取 `AGENTS.md`、冻结项目常量、共享合同、Goal 02，以及 Goal 01 living plan；确认只执行 Goal 02。
-- [x] 2026-08-12T12:02Z 验证两仓工作树 clean：`agent-feedback` `main` @ `eab212b7b516bb848a657194dc51a50cfe0dc512`，`portal-template-default` `feat-agent-feedback` @ `a1c75911c7208a7bff49e2a1a2dd886c466170a0`。
+- [x] 2026-08-12T12:02Z 验证两仓工作树 clean：`agent-annotations` `main` @ `eab212b7b516bb848a657194dc51a50cfe0dc512`，`portal-template-default` `feat-agent-annotations` @ `a1c75911c7208a7bff49e2a1a2dd886c466170a0`。
 - [x] 2026-08-12T12:04Z 逐 commit 审查两仓完整 Goal 01 history；确认 package skeleton、发布边界 follow-up、baseline follow-up 与 Portal 独立复核记录均已落在当前 HEAD。
 - [x] 2026-08-12T12:07Z 追踪 embedded `types/task-model/mutation/format/redact/selection/annotation-selectors/task-id/placement/hotkeys` 的全部 source/test callers；确认 formatter/mutation 被 browser、Vite、CLI/MCP 共用，而 selection/redaction/hotkey 的旧实现含 DOM 或 NocoBase/browser coupling。
 - [x] 2026-08-12T12:08Z 在 standalone package 的 `src/core/`、`src/types/` 建立全新 v1 task create/validate/mutate/format/redact 与 plain-data selection/placement/hotkey contracts；未修改 Portal runtime。
 - [x] 2026-08-12T12:09Z 首轮 `pnpm typecheck` PASS；首轮 `pnpm test -- core` 15/16，唯一 FAIL 为 generic text redactor 漏掉 `input_value=`，在同一通用 regex 根因修正后 package suite（5 个 core test files + 既有 exports smoke）6 files / 16 tests PASS。
 - [x] 2026-08-12T12:14Z `pnpm build` PASS（18 dist files）；core/root/types build graph scan 无 React、Vite、Node built-in 或 NocoBase imports，禁止模式 scan 无结果。
 - [x] 2026-08-12T12:15Z `pnpm exec publint` PASS；合同原样 `pnpm exec attw --pack .` 首次因 strict profile 将 frozen ESM-only package 的预期 Node10/CJS 不支持计为 FAIL，新增 repository-level `.attw.json` 固定 `esm-only` profile 后原命令 PASS（Node ESM/bundler 全绿）。
-- [x] 2026-08-12T12:16Z fresh `pnpm pack --json` PASS：21 files，仅 dist、LICENSE、README、package.json；tarball `/tmp/agent-feedback-g02-final-pack.dPO0t2/agent-feedback.tgz`，SHA-256 `01dc7990c71054c968cad1cb6add449fdf5a1b0b8c4830418aca4271e2ad0194`。
-- [x] 2026-08-12T12:16Z tarball-only type consumer `/tmp/agent-feedback-g02-final-types.4eruGy` 从 `/types` 导入完整 task/annotation/mutation/redactor/shortcut 类型并以 TypeScript 5.9.3 compile PASS。
-- [x] 2026-08-12T12:17Z clean offline/frozen Fixture `/tmp/agent-feedback-g02-final-offline.xDI7li` 从 final tarball 安装并通过 `/types` compile 及 root schema/create/mutation/formatter runtime smoke。
+- [x] 2026-08-12T12:16Z fresh `pnpm pack --json` PASS：21 files，仅 dist、LICENSE、README、package.json；tarball `/tmp/agent-annotations-g02-final-pack.dPO0t2/agent-annotations.tgz`，SHA-256 `01dc7990c71054c968cad1cb6add449fdf5a1b0b8c4830418aca4271e2ad0194`。
+- [x] 2026-08-12T12:16Z tarball-only type consumer `/tmp/agent-annotations-g02-final-types.4eruGy` 从 `/types` 导入完整 task/annotation/mutation/redactor/shortcut 类型并以 TypeScript 5.9.3 compile PASS。
+- [x] 2026-08-12T12:17Z clean offline/frozen Fixture `/tmp/agent-annotations-g02-final-offline.xDI7li` 从 final tarball 安装并通过 `/types` compile 及 root schema/create/mutation/formatter runtime smoke。
 - [x] 2026-08-12T12:18Z standalone implementation checkpoint `3ffd140b0b2870765503623816aa345a43853935`（`feat: add host-neutral feedback core`）。
 - [x] 2026-08-12T12:22Z review 补充准确 public API README，checkpoint `d0969283a3aada8bad426d4de14830b435909f53`（`docs: describe public core API`）。
 - [x] 2026-08-12T12:24Z final review 将 Authorization redaction 覆盖到任意 scheme（含 Basic），并将 test helper 从 `fixtures.ts` 改名避免 Goal 必须命令的 fixture exclusion 歧义；checkpoint `b6f3b6c126d8b4a475133f90a961eb8f63ad5d52`（`fix: harden generic authorization redaction`）。
 - [x] 2026-08-12T12:27Z 补齐 task/annotation ID 和 extension namespace-count focused checks；checkpoint `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`（`test: cover core ids and namespace limits`）；required package suite 6 files / 21 tests PASS。
-- [x] 2026-08-12T12:28Z 针对 final package HEAD 重跑全部 required gates，并生成 final tarball `/tmp/agent-feedback-g02-final2-pack.eGCyxc/agent-feedback.tgz`（SHA-256 `6502b294a648a592c99bf472744fd26de5a0dea5e6452d7cf3865daf4615a03c`）及 clean offline/frozen consumer `/tmp/agent-feedback-g02-final2-offline.r53eQi`；全部 PASS。
-- [x] 2026-08-12T12:31Z 写完 criterion-by-criterion outcomes；Portal Goal 02 evidence checkpoint `d1338acb6d9546a2bf21474478afd1f5a9a6feda`（`docs: record Agent Feedback Goal 02`）。
+- [x] 2026-08-12T12:28Z 针对 final package HEAD 重跑全部 required gates，并生成 final tarball `/tmp/agent-annotations-g02-final2-pack.eGCyxc/agent-annotations.tgz`（SHA-256 `6502b294a648a592c99bf472744fd26de5a0dea5e6452d7cf3865daf4615a03c`）及 clean offline/frozen consumer `/tmp/agent-annotations-g02-final2-offline.r53eQi`；全部 PASS。
+- [x] 2026-08-12T12:31Z 写完 criterion-by-criterion outcomes；Portal Goal 02 evidence checkpoint `d1338acb6d9546a2bf21474478afd1f5a9a6feda`（`docs: record Agent Annotations Goal 02`）。
 - [x] 2026-08-12T12:34Z final audit 将 extension byte-limit test 与 8 KiB string limit 解耦，checkpoint `1565ab5aaa89471340117bab928dcb4ed85fac84`（`test: isolate extension byte limit`）；重跑 required gates 和 clean tarball consumer 全部 PASS。
 - [x] 2026-08-12T13:17Z 独立复核确认并修复四个 Goal 02 缺陷：unsafe integer revision、稀疏 `sourceStack` 的非 JSON round-trip、quoted input/JSON/URL secret redaction 漏项，以及 all-mode Markdown 非完整 golden；package checkpoint `ad13f94f3042609cf014dd69029ffd1725c3ac5c`（`fix: harden Goal 02 core contracts`）。
-- [x] 2026-08-12T13:18Z 对 final package checkpoint 重跑全部 required gates、purity/legacy scan 与 adversarial runtime checks；生成 final tarball `/tmp/agent-feedback-g02-independent-pack.Sni0l1/agent-feedback.tgz`（SHA-256 `afa18b8131235b030105c8a5302963321b0d4d5f921bc601cda9b5ebdd3763ad`）；全部 PASS。
+- [x] 2026-08-12T13:18Z 对 final package checkpoint 重跑全部 required gates、purity/legacy scan 与 adversarial runtime checks；生成 final tarball `/tmp/agent-annotations-g02-independent-pack.Sni0l1/agent-annotations.tgz`（SHA-256 `afa18b8131235b030105c8a5302963321b0d4d5f921bc601cda9b5ebdd3763ad`）；全部 PASS。
 
 ### Surprises & Discoveries
 
@@ -123,7 +123,7 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 - 2026-08-12：先完成 embedded 实现及 caller trace，再决定复用范围；不因类型名相似而复制旧 PortalStudio schema 或 host/environment 分支。
 - 2026-08-12：不新增 `/core` public export；公共 runtime API 由冻结 root entry 导出，`/types` 只导出类型。原因是共享合同只冻结四个 subpath，Goal 02 不需要扩大公共入口面。
 - 2026-08-12：mutation 对已验证 task + typed request 执行，显式接收 `updatedAt`，避免 core 读取时钟；冲突固定返回 `expectedRevision`、`actualRevision` 和未修改的 current task。
-- 2026-08-12：Extension Registry 实现仍留 Goal 05；Goal 02 仅交付 `AgentFeedbackExtensionRedactor` pure contract 与 `annotation.extensions[extensionId]` 的 bounded namespace setter/pipeline。
+- 2026-08-12：Extension Registry 实现仍留 Goal 05；Goal 02 仅交付 `AgentAnnotationsExtensionRedactor` pure contract 与 `annotation.extensions[extensionId]` 的 bounded namespace setter/pipeline。
 - 2026-08-12：使用 Web 标准 `TextEncoder` 计算 UTF-8 JSON byte limits，使用 `globalThis.crypto.randomUUID()` 生成 ID；不为 Node/browser 添加 fallback 或环境判断。
 - 2026-08-12：独立复核仅修复四个可复现的 Goal 02 合同缺陷；保留 typed mutation API、现有 ID 合同及模块边界，不引入 browser/server fallback、dependency 或新 abstraction。
 
@@ -131,9 +131,9 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 
 #### 实际交付
 
-- standalone package 新增全新 `agent-feedback.task.v1` schema/types、strict validator/create API、Web-standard UUID ID、annotation selectors、revision-aware pure mutation、Markdown/JSON formatter、generic + extension redactor pipeline，以及 plain-data selection/placement/hotkey definitions。
+- standalone package 新增全新 `agent-annotations.task.v1` schema/types、strict validator/create API、Web-standard UUID ID、annotation selectors、revision-aware pure mutation、Markdown/JSON formatter、generic + extension redactor pipeline，以及 plain-data selection/placement/hotkey definitions。
 - Extension 数据只位于 `annotation.extensions[extensionId]`；单 namespace 16 KiB、64 keys、8 levels/100 array items，上限 20 namespaces；task 上限 256 KiB。
-- root export 提供 runtime core API，`@gchust/agent-feedback/types` 提供全部 public types；无新增 subpath dependency 或 package dependency。
+- root export 提供 runtime core API，`@gchust/agent-annotations/types` 提供全部 public types；无新增 subpath dependency 或 package dependency。
 
 #### 未交付
 
@@ -146,21 +146,21 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 - `pnpm test -- core` → PASS：6 files / 21 tests，exit 0（首次 15/16 FAIL 的 `input_value=` 已在通用 redactor 根因修复）。
 - 独立复核 final `pnpm test -- core` → PASS：6 files / 22 tests，exit 0；新增 safe revision、sparse stack、full all-mode golden 与 quoted secret checks。
 - `pnpm build` → PASS：tsdown 输出 18 files，root/types 纯 core build，exit 0。
-- `pnpm pack --json --out /tmp/agent-feedback-g02-final3-pack.lQQkyq/agent-feedback.tgz` → PASS：21 files，仅 dist、LICENSE、README、package.json；SHA-256 `6502b294a648a592c99bf472744fd26de5a0dea5e6452d7cf3865daf4615a03c`。
+- `pnpm pack --json --out /tmp/agent-annotations-g02-final3-pack.lQQkyq/agent-annotations.tgz` → PASS：21 files，仅 dist、LICENSE、README、package.json；SHA-256 `6502b294a648a592c99bf472744fd26de5a0dea5e6452d7cf3865daf4615a03c`。
 - `pnpm exec publint` → PASS：`All good!`。
 - `pnpm exec attw --pack .` → PASS：repository `.attw.json` 采用冻结 ESM-only profile；Node ESM/bundler 全绿。
 - `rg -n "PortalStudio|portal-studio|schemaVersion:\\s*[2-9]|@nocobase|data-nb-|NOCOBASE_" src dist` → PASS：无结果。
 - core build import scan（React/ReactDOM/Vite/Node built-ins/NocoBase）→ PASS：无结果。
-- tarball-only `/types` consumer TypeScript compile → PASS：`/tmp/agent-feedback-g02-final3-consumer.VZTtSa`。
-- clean second Fixture `pnpm install --frozen-lockfile --offline` + typecheck + runtime smoke → PASS：`/tmp/agent-feedback-g02-final3-offline.AWrLtf`，打印 `packed schema/mutation/formatter ok`。
+- tarball-only `/types` consumer TypeScript compile → PASS：`/tmp/agent-annotations-g02-final3-consumer.VZTtSa`。
+- clean second Fixture `pnpm install --frozen-lockfile --offline` + typecheck + runtime smoke → PASS：`/tmp/agent-annotations-g02-final3-offline.AWrLtf`，打印 `packed schema/mutation/formatter ok`。
 - Portal production diff scan `git diff --name-only a1c7591 -- src scripts vite.config.ts package.json pnpm-lock.yaml` → PASS：无结果。
-- 独立复核 final `pnpm pack --json --out /tmp/agent-feedback-g02-independent-pack.Sni0l1/agent-feedback.tgz` → PASS：21 files，仅 dist、LICENSE、README、package.json；SHA-256 `afa18b8131235b030105c8a5302963321b0d4d5f921bc601cda9b5ebdd3763ad`。
+- 独立复核 final `pnpm pack --json --out /tmp/agent-annotations-g02-independent-pack.Sni0l1/agent-annotations.tgz` → PASS：21 files，仅 dist、LICENSE、README、package.json；SHA-256 `afa18b8131235b030105c8a5302963321b0d4d5f921bc601cda9b5ebdd3763ad`。
 - 独立复核 adversarial core script → PASS：unsafe revision 与 sparse stack 被拒绝，quoted input/JSON/`client_secret` 被遮蔽，revision conflict 返回原 task。
 - pre-amend packed consumer 已验证 `/types` compile、root runtime、四入口 import 和 clean offline/frozen reinstall；该 consumer 不作为 final `ad13f94` tarball 证据。
 
 #### Acceptance criteria
 
-- **G02-001 PASS** — constants 与测试精确断言 `agent-feedback.task.v1` / `1`。
+- **G02-001 PASS** — constants 与测试精确断言 `agent-annotations.task.v1` / `1`。
 - **G02-002 PASS** — package `src`/`dist` 禁止 Portal Studio 模式 scan 无结果。
 - **G02-003 PASS** — validator 只接受 schemaVersion 1；0/2/6 rejection tested；无 migration/normalizer。
 - **G02-004 PASS** — strict full-task validator 接受含 completion/evidence/extension 的完整合法 fixture，并拒绝 unknown task/annotation field、undefined/NaN/cyclic JSON、unsafe revision、sparse stack、key/array/depth/byte/task limits。
@@ -175,12 +175,12 @@ rg -n "PortalStudio|portal-studio|schemaVersion:\s*[2-9]|@nocobase|data-nb-|NOCO
 
 #### 本地 checkpoint commits
 
-- agent-feedback: `3ffd140b0b2870765503623816aa345a43853935`, `d0969283a3aada8bad426d4de14830b435909f53`, `b6f3b6c126d8b4a475133f90a961eb8f63ad5d52`, `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`, `1565ab5aaa89471340117bab928dcb4ed85fac84`, `ad13f94f3042609cf014dd69029ffd1725c3ac5c`。
+- agent-annotations: `3ffd140b0b2870765503623816aa345a43853935`, `d0969283a3aada8bad426d4de14830b435909f53`, `b6f3b6c126d8b4a475133f90a961eb8f63ad5d52`, `bb6749deef3d8f2fb1b05348c8da72a97a3b04b4`, `1565ab5aaa89471340117bab928dcb4ed85fac84`, `ad13f94f3042609cf014dd69029ffd1725c3ac5c`。
 - portal-template-default: `d1338acb6d9546a2bf21474478afd1f5a9a6feda`；本 SHA 记录 follow-up commit 见最终报告。
 
 #### 下一 Goal 的可靠起点
 
-Goal 03 可从 `@gchust/agent-feedback` root 的 host-neutral task core 和 `/types` contracts 开始，只在 browser layer 引入 DOM/React/React Grab；不得把 live `Element` 或 environment checks 回填 core，也不得提前实现 Goal 04 server/CLI 或 Goal 05 Registry。
+Goal 03 可从 `@gchust/agent-annotations` root 的 host-neutral task core 和 `/types` contracts 开始，只在 browser layer 引入 DOM/React/React Grab；不得把 live `Element` 或 environment checks 回填 core，也不得提前实现 Goal 04 server/CLI 或 Goal 05 Registry。
 
 ## 最终报告格式
 
@@ -189,7 +189,7 @@ Goal: GXX
 Result: PASS | FAIL | BLOCKED
 
 Changed files by repository:
-- agent-feedback: ...
+- agent-annotations: ...
 - portal-template-default: ...
 
 Commands run:

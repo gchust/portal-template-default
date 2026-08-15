@@ -23,9 +23,9 @@ importers:
       '@fontsource-variable/geist':
         specifier: ^5.3.0
         version: 5.3.0
-      '@gchust/agent-feedback':
-        specifier: file:/root/work/agent-feedback-ui-fix-final-20260814-Xfmuch/gchust-agent-feedback-0.1.0-alpha.0.tgz
-        version: file:../agent-feedback-ui-fix-final-20260814-Xfmuch/gchust-agent-feedback-0.1.0-alpha.0.tgz(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))
+      '@gchust/agent-annotations':
+        specifier: file:/root/work/agent-annotations-final-rename-20260815-HPbrKc/gchust-agent-annotations-0.1.0-alpha.0.tgz
+        version: file:../agent-annotations-final-rename-20260815-HPbrKc/gchust-agent-annotations-0.1.0-alpha.0.tgz(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))
       '@hookform/resolvers':
         specifier: ^5.0.1
         version: 5.4.0(react-hook-form@7.82.0(react@19.1.0))
@@ -997,8 +997,8 @@ packages:
   '@fontsource-variable/geist@5.3.0':
     resolution: {integrity: sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA==}
 
-  '@gchust/agent-feedback@file:../agent-feedback-ui-fix-final-20260814-Xfmuch/gchust-agent-feedback-0.1.0-alpha.0.tgz':
-    resolution: {integrity: sha512-lp7IRbSGJIa8n1VwhI0trYUZzSKftVkLxWenT4hBvcP3SvPD02JRyGRot/A8M+S0PDzvxzIzqPewevIGfd9mIA==, tarball: file:../agent-feedback-ui-fix-final-20260814-Xfmuch/gchust-agent-feedback-0.1.0-alpha.0.tgz}
+  '@gchust/agent-annotations@file:../agent-annotations-final-rename-20260815-HPbrKc/gchust-agent-annotations-0.1.0-alpha.0.tgz':
+    resolution: {integrity: sha512-bmsD9MtH9St3af0l4N7+a9/QC9md7ufxnQW/MddeVbBysBD9m9RsOhopQyJp9wMmKS0mHl1dIbDKjl4JYmMPsg==, tarball: file:../agent-annotations-final-rename-20260815-HPbrKc/gchust-agent-annotations-0.1.0-alpha.0.tgz}
     version: 0.1.0-alpha.0
     engines: {node: '>=20'}
     hasBin: true
@@ -6113,7 +6113,7 @@ snapshots:
 
   '@fontsource-variable/geist@5.3.0': {}
 
-  '@gchust/agent-feedback@file:../agent-feedback-ui-fix-final-20260814-Xfmuch/gchust-agent-feedback-0.1.0-alpha.0.tgz(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))':
+  '@gchust/agent-annotations@file:../agent-annotations-final-rename-20260815-HPbrKc/gchust-agent-annotations-0.1.0-alpha.0.tgz(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(vite@6.4.3(@types/node@20.19.43)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))':
     dependencies:
       react: 19.1.0
       react-dom: 19.1.0(react@19.1.0)

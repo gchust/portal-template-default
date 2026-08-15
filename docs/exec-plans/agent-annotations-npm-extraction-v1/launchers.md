@@ -3,7 +3,7 @@
 每次只复制当前阶段的 launcher。路径假设本 Goal 套件位于父工作区：
 
 ```text
-docs/exec-plans/agent-feedback-npm-extraction-v1/
+docs/exec-plans/agent-annotations-npm-extraction-v1/
 ```
 
 或你已经将这些文件复制到两个仓库都可访问的位置。
@@ -12,9 +12,9 @@ docs/exec-plans/agent-feedback-npm-extraction-v1/
 
 ```text
 /plan Read:
-- docs/exec-plans/agent-feedback-npm-extraction-v1/00-project-constants.md
-- docs/exec-plans/agent-feedback-npm-extraction-v1/00-shared-contract.md
-- docs/exec-plans/agent-feedback-npm-extraction-v1/<CURRENT-GOAL>.md
+- docs/exec-plans/agent-annotations-npm-extraction-v1/00-project-constants.md
+- docs/exec-plans/agent-annotations-npm-extraction-v1/00-shared-contract.md
+- docs/exec-plans/agent-annotations-npm-extraction-v1/<CURRENT-GOAL>.md
 
 Inspect the actual two-repository workspace and current HEADs. Produce a
 criterion-by-criterion repository adaptation for this Goal only. Map every
@@ -36,7 +36,7 @@ Goal.
 ## Goal 01
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 01.
+/goal Complete Agent Annotations NPM Extraction Goal 01.
 
 Read 00-project-constants.md, 00-shared-contract.md, and
 01-goal-baseline-and-package-skeleton.md. Establish the two-repository
@@ -53,11 +53,11 @@ workspace link, stop with exact evidence. Do not start Goal 02.
 ## Goal 02
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 02.
+/goal Complete Agent Annotations NPM Extraction Goal 02.
 
 Read the project constants, shared contract, and
 02-goal-generic-core-and-schema.md. Move only the host-neutral pure core into
-the standalone package under the new agent-feedback.task.v1 contract. Do not
+the standalone package under the new agent-annotations.task.v1 contract. Do not
 add PortalStudio compatibility, browser UI, Vite server, or NocoBase coupling.
 
 Continue until every G02 criterion has fresh tests, build, type-consumer and
@@ -67,7 +67,7 @@ packed-artifact evidence. Do not start Goal 03.
 ## Goal 03
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 03.
+/goal Complete Agent Annotations NPM Extraction Goal 03.
 
 Read the project constants, shared contract, and
 03-goal-generic-browser-runtime.md. Deliver the complete generic React browser
@@ -83,7 +83,7 @@ evidence. Do not start Goal 04.
 ## Goal 04
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 04.
+/goal Complete Agent Annotations NPM Extraction Goal 04.
 
 Read the project constants, shared contract, and
 04-goal-vite-server-cli-packed-slice.md. Extract the serve-only Vite plugin,
@@ -98,7 +98,7 @@ every G04 criterion has fresh process, browser, package and build evidence.
 ## Goal 05
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 05.
+/goal Complete Agent Annotations NPM Extraction Goal 05.
 
 Read the project constants, shared contract, and
 05-goal-extension-registry.md. Implement the public Client Extension Registry
@@ -113,7 +113,7 @@ fixture evidence. Do not start Goal 06.
 ## Goal 06
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 06.
+/goal Complete Agent Annotations NPM Extraction Goal 06.
 
 Read the project constants, shared contract, and
 06-goal-source-and-protocol-reliability.md. Fix source path canonicalization,
@@ -128,7 +128,7 @@ fresh unit, E2E, process and audit-failure evidence. Do not start Goal 07.
 ## Goal 07
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 07.
+/goal Complete Agent Annotations NPM Extraction Goal 07.
 
 Read the project constants, shared contract, and
 07-goal-browser-evidence-and-runtime-reliability.md. Fix screenshot mapping and
@@ -144,7 +144,7 @@ results. Do not start Goal 08.
 ## Goal 08
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 08.
+/goal Complete Agent Annotations NPM Extraction Goal 08.
 
 Read the project constants, shared contract, and
 08-goal-nocobase-thin-integration-and-delete-embedded.md. Install the packed
@@ -160,7 +160,7 @@ evidence. Do not start Goal 09.
 ## Goal 09
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 09.
+/goal Complete Agent Annotations NPM Extraction Goal 09.
 
 Read the project constants, shared contract,
 FINAL-ACCEPTANCE-MATRIX.md, and
@@ -176,7 +176,7 @@ credentials or start Goal 10.
 ## Goal 10 — only after human publication
 
 ```text
-/goal Complete Agent Feedback NPM Extraction Goal 10.
+/goal Complete Agent Annotations NPM Extraction Goal 10.
 
 Read the project constants, shared contract, and
 10-goal-post-publish-registry-cutover.md. First prove that the exact published

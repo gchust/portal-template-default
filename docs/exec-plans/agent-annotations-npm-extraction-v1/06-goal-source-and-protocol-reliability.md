@@ -38,7 +38,7 @@
 
 ### Audit
 
-新增 `agent-feedback audit` 或 package script，检查：
+新增 `agent-annotations audit` 或 package script，检查：
 
 - React Grab primitives importer = 1；
 - 默认 React Grab UI import = 0；
@@ -76,9 +76,9 @@ pnpm test -- source-path revision cli mcp audit
 pnpm test:e2e -- source-benchmark duplicate-basename
 pnpm build
 pnpm pack --json
-pnpm exec agent-feedback audit
-pnpm exec agent-feedback --help
-pnpm exec agent-feedback mcp   # 由 smoke harness 完成 initialize/tools-list
+pnpm exec agent-annotations audit
+pnpm exec agent-annotations --help
+pnpm exec agent-annotations mcp   # 由 smoke harness 完成 initialize/tools-list
 ```
 
 需要附上 duplicate-basename E2E 断言的完整 expected/actual path 证据。
@@ -94,8 +94,8 @@ pnpm exec agent-feedback mcp   # 由 smoke harness 完成 initialize/tools-list
 - [x] 2026-08-13：确认 package HEAD `7f27b86155bedbc4adc6c397f4207df154bd87db` 与 Portal HEAD `22895e40cf2d296886d56e78f6c5e54ca54c4f17` 均为 clean 起点；已完整读取 AGENTS、冻结常量、共享合同、本 Goal 与 launcher。
 - [x] 2026-08-13：完成 browser raw source -> Vite post-React sourcemap -> server canonicalization -> exact source revision -> CLI/MCP 的真实调用链修复；未修改 Portal production/runtime source。
 - [x] 2026-08-13：`pnpm test -- source-path revision cli mcp audit` PASS（16 files / 74 tests），完整 `pnpm test` PASS（16 / 74），`pnpm typecheck`、`pnpm build`、`pnpm run audit`、`pnpm check:package` 均 PASS。
-- [x] 2026-08-13：fresh external packed consumer `/tmp/agent-feedback-g06-final-rnbPMl/consumer` 以 React/ReactDOM `19.2.8` 安装相对 tarball，随后 frozen offline reinstall PASS；完整 packed fixture E2E 的 vertical、source benchmark、SIGTERM process smoke 全部 PASS。
-- [x] 2026-08-13：packed binary `pnpm exec agent-feedback --help`、MCP initialize/tools-list smoke PASS；`pnpm pack --json` 得到 38-file tarball，仅含 `LICENSE`、`README.md`、`dist`、`package.json`，无 fixture/source/runtime-dir 泄漏。`dist/audit/index.mjs` 中旧词与 host 词仅是 audit 检测规则字面量，按 audit 实现 allowlist 处理，不是 production hardcoding。
+- [x] 2026-08-13：fresh external packed consumer `/tmp/agent-annotations-g06-final-rnbPMl/consumer` 以 React/ReactDOM `19.2.8` 安装相对 tarball，随后 frozen offline reinstall PASS；完整 packed fixture E2E 的 vertical、source benchmark、SIGTERM process smoke 全部 PASS。
+- [x] 2026-08-13：packed binary `pnpm exec agent-annotations --help`、MCP initialize/tools-list smoke PASS；`pnpm pack --json` 得到 38-file tarball，仅含 `LICENSE`、`README.md`、`dist`、`package.json`，无 fixture/source/runtime-dir 泄漏。`dist/audit/index.mjs` 中旧词与 host 词仅是 audit 检测规则字面量，按 audit 实现 allowlist 处理，不是 production hardcoding。
 
 ### Surprises & Discoveries
 
@@ -107,14 +107,14 @@ pnpm exec agent-feedback mcp   # 由 smoke harness 完成 initialize/tools-list
 
 - 2026-08-13：所有通用修复、测试、audit 与 fixture 仅进入 standalone package；Portal 仓库只持续更新本 Goal Living ExecPlan，绝不修改 production/runtime source。
 - 2026-08-13：只有 leading `/src/...` 作为 Vite root-relative special case；其他 POSIX absolute path 均按真实 absolute path 验证，绝不剥离 leading slash 后猜入 workspace。
-- 2026-08-13：MCP `wait_verification` 以 workspace cwd 的 exact `sourceRevision` 为输入、轮询和结果；`AGENT_FEEDBACK_DIR` 只覆盖存储位置。
+- 2026-08-13：MCP `wait_verification` 以 workspace cwd 的 exact `sourceRevision` 为输入、轮询和结果；`AGENT_ANNOTATIONS_DIR` 只覆盖存储位置。
 - 2026-08-13：architecture audit 读取 whole-file 内容并使用 multiline-safe forbidden patterns；每一种禁止架构以及 multiline transformed-code、basename、built-in bypass 均有注入失败测试。
 
 ### Outcomes & Retrospective
 
 实际交付：standalone package 内完成 exact source canonicalization、post-React served sourcemap normalization、unresolved/null、exact source revisions、schema-v1 CLI/read-only MCP、permanent architecture audit，以及 duplicate basename/memo/forwardRef/ReactDOM Portal packed browser benchmark。未交付：无 Goal 06 内缺项；Goal 07–10 均未开始。
 
-Fresh browser evidence（`/tmp/agent-feedback-g06-final-rnbPMl/evidence/packed-e2e.log`）：
+Fresh browser evidence（`/tmp/agent-annotations-g06-final-rnbPMl/evidence/packed-e2e.log`）：
 
 ```text
 expected duplicate-a = src/duplicate-a/Card.tsx:1:33
@@ -141,7 +141,7 @@ Acceptance classification：
 - **G06-008 PASS** — wrong duplicate leaves task/source revision and sourceFiles unchanged; selected duplicate changes only sourceRevision, with hashes above; process MCP test proves the same wait contract.
 - **G06-009 PASS** — packed MCP tools are exactly `list_annotations`, `print_task`, `verify_task`, `read_diagnostics`, `list_screenshots`, `wait_verification`; no capture/create/old-schema tool or text.
 - **G06-010 PASS** — built CLI process tests cover every public command; packed consumer runs the real bin for vertical CLI flow, `--help`, audit and MCP process smoke.
-- **G06-011 PASS** — `pnpm run audit` reports `[agent-feedback] architecture audit PASS`.
+- **G06-011 PASS** — `pnpm run audit` reports `[agent-annotations] architecture audit PASS`.
 - **G06-012 PASS** — injected tests fail sole importer, React Grab UI, element-source, Fiber/private, transformed-code, basename, old schema, NocoBase and built-in bypass patterns, including multiline violations.
 - **G06-013 PASS** — README command list equals packed `--help`; MCP exact-source wait signature is documented and process-verified.
 - **G06-014 PASS** — Portal diff is this Living ExecPlan only; no Portal production/runtime source or NocoBase patch changed.
@@ -155,7 +155,7 @@ Goal: GXX
 Result: PASS | FAIL | BLOCKED
 
 Changed files by repository:
-- agent-feedback: ...
+- agent-annotations: ...
 - portal-template-default: ...
 
 Commands run:

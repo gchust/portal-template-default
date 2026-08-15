@@ -42,7 +42,7 @@
 
 ## 验收标准
 
-- **G03-001** `mountAgentFeedback()` 和 unmount API 可由 public root import。
+- **G03-001** `mountAgentAnnotations()` 和 unmount API 可由 public root import。
 - **G03-002** Playground 不安装 `@nocobase/*` 且能完整运行。
 - **G03-003** Pick 只创建单目标 Annotation。
 - **G03-004** Multi 创建一条多目标 Annotation。
@@ -111,8 +111,8 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
 
 ### Surprises & Discoveries
 
-- The standalone repository is `/root/work/agent-feedback` rather than the
-  constants file's parent-directory sketch `agent-feedback-workspace/agent-feedback`;
+- The standalone repository is `/root/work/agent-annotations` rather than the
+  constants file's parent-directory sketch `agent-annotations-workspace/agent-annotations`;
   its accepted Goal 02 HEAD and clean state are otherwise exact.
 - Goal 02 already owns the generic v1 schema, mutation, format, redaction,
   selection, placement, and hotkey primitives, so Goal 03 can reuse those
@@ -122,7 +122,7 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
   to `localhost,127.0.0.1`; the checked-in Playwright config also passes them
   to its web server.
 - A packed consumer is only valid after the tarball leaves the package repo:
-  the final fixture used external artifact `agent-feedback-g03.tgz`, then a
+  the final fixture used external artifact `agent-annotations-g03.tgz`, then a
   clean `--frozen-lockfile --offline` reinstall before build and E2E.
 - Dock coordinates previously lived only on the current DOM node, so any
   render reset the drag. Capture listeners also allowed composed Shadow-host
@@ -162,7 +162,7 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
 
 ### Outcomes & Retrospective
 
-- Delivered public async `mountAgentFeedback()`/idempotent unmount, Shadow DOM
+- Delivered public async `mountAgentAnnotations()`/idempotent unmount, Shadow DOM
   runtime, dock/toolbar, Pick/Multi/Area, composer, markers/editor/list/help,
   hotkeys/tooltips, open/completed/reopen/delete/copy flows, diagnostics,
   host/enricher/redactor/exporter contracts, and `MemoryTaskTransport`.
@@ -177,21 +177,21 @@ rg -n "from ['\"]react-grab['\"]|element-source|__reactFiber\$|transformResult\.
 - Packed boundary PASS: external tarball SHA-256
   `3eb252c392f14348f81491ae177f79c51b73af08d1d47e8d9e946a002d8771ea`;
   the initial clean consumer
-  `/root/work/agent-feedback-workspace-artifacts/g03-independent-review.RBMMwn/final-consumer.KgRvRS`
+  `/root/work/agent-annotations-workspace-artifacts/g03-independent-review.RBMMwn/final-consumer.KgRvRS`
   moved its seeded `node_modules` outside the consumer, reinstalled with
   `--frozen-lockfile --offline`, then passed Vite build and all 3 E2E tests.
   A second clean post-commit consumer at
-  `/root/work/agent-feedback-workspace-artifacts/g03-independent-review.RBMMwn/postcommit-consumer.VSWQOC`
+  `/root/work/agent-annotations-workspace-artifacts/g03-independent-review.RBMMwn/postcommit-consumer.VSWQOC`
   repeated the frozen offline install, Vite build, and focused real-browser
   closed loop against the byte-identical post-commit tarball.
 - Evidence root:
-  `/root/work/agent-feedback-workspace-artifacts/g03-independent-review.RBMMwn/`;
+  `/root/work/agent-annotations-workspace-artifacts/g03-independent-review.RBMMwn/`;
   post-fix screenshots/traces are under `browser-post-audit/`, packed-consumer
   evidence is under `final-consumer-browser/`, and command logs are under
   `commands/`. The verified tarball is
-  `pack/agent-feedback-g03-independent-final.tgz`; the byte-identical
+  `pack/agent-annotations-g03-independent-final.tgz`; the byte-identical
   post-commit pack is
-  `committed-pack.DhU9MD/gchust-agent-feedback-0.1.0-alpha.0.tgz`, and its
+  `committed-pack.DhU9MD/gchust-agent-annotations-0.1.0-alpha.0.tgz`, and its
   focused consumer trace is under `postcommit-consumer-browser/`.
 - G03-001 PASS — public root exports mount and returned unmount/API.
 - G03-002 PASS — playground has no `@nocobase/*`; source audit is empty.
@@ -221,7 +221,7 @@ Goal: GXX
 Result: PASS | FAIL | BLOCKED
 
 Changed files by repository:
-- agent-feedback: ...
+- agent-annotations: ...
 - portal-template-default: ...
 
 Commands run:

@@ -3,13 +3,13 @@
 这些常量用于消除低参数模型在命名、路径和协议上的自由发挥。Goal 01 完成后视为冻结。
 
 ```yaml
-workspaceDirectory: agent-feedback-workspace
-packageRepositoryDirectory: agent-feedback
+workspaceDirectory: agent-annotations-workspace
+packageRepositoryDirectory: agent-annotations
 templateRepositoryDirectory: portal-template-default
 
-packageName: "@gchust/agent-feedback"
-packageDisplayName: "Agent Feedback"
-packageDescription: "Developer-only visual annotations and Code Agent feedback for React/Vite applications"
+packageName: "@gchust/agent-annotations"
+packageDisplayName: "Agent Annotations"
+packageDescription: "Developer-only visual annotations handed to Code Agents in React/Vite applications"
 packageLicense: MIT
 initialVersion: "0.1.0-alpha.0"
 firstStableVersion: "0.1.0"
@@ -24,16 +24,16 @@ reactDomPeer: "^19.0.0"
 vitePeerInitial: "^6.0.0"
 reactGrabDependency: "0.1.50"
 
-taskSchemaId: "agent-feedback.task.v1"
+taskSchemaId: "agent-annotations.task.v1"
 taskSchemaVersion: 1
-runtimeDirectory: ".agent-feedback"
-endpointPrefix: "/__agent-feedback"
-tokenHeader: "x-agent-feedback-token"
-clientRootId: "agent-feedback-root"
-clientRootAttribute: "data-agent-feedback-root"
+runtimeDirectory: ".agent-annotations"
+endpointPrefix: "/__agent-annotations"
+tokenHeader: "x-agent-annotations-token"
+clientRootId: "agent-annotations-root"
+clientRootAttribute: "data-agent-annotations-root"
 reactGrabIgnoreAttribute: "data-react-grab-ignore"
-cssClassPrefix: "af-"
-virtualClientModule: "virtual:agent-feedback/client"
+cssClassPrefix: "aa-"
+virtualClientModule: "virtual:agent-annotations/client"
 
 clientExtensionApiVersion: 1
 nocobaseExtensionId: "nocobase.portal"

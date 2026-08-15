@@ -90,8 +90,8 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - [x] 2026-08-13T02:08Z 新增 `playgrounds/extension-demo`，Demo Extension 仅从公开 `/extension` 导入，交付 Copy JSON、custom panel、Ctrl+Alt+J、target enricher、JSON exporter、redactor 与 setup/dispose counters；同一 external consumer source/layout 扩展至 packed React/Vite fixture。
 - [x] 2026-08-13T02:12Z 首轮浏览器验证准确暴露 panel focus 表达式返回值误用与 Demo redactor 数据层级误判；修正共享 runtime focus 根因和 external redactor 后，focused tests 14 files / 54 tests 与 demo E2E 通过。
 - [x] 2026-08-13T02:16Z HMR acceptance 准确暴露 Vite virtual module 未 self-accept；最小修正为 virtual module `hot.accept()`，复用 checkpoint-B symbol-key cleanup，验证 setup=2/dispose=1、按钮=1，shortcut listener 每次只执行一次。
-- [x] 2026-08-13T02:17Z final required gates PASS；fresh repo-external evidence root `/root/work/agent-feedback-g05c-evidence-cuQ4RC/` 包含日志、截图、trace、task/counters JSON、tarball、manifest、hash 与 packed consumer。
-- [x] 2026-08-13T02:32Z 独立 review 从指定 clean package `2653e08af0e9aaef1038c683ace646ac0dc4b42c` 与 Portal `140475af1061714608071b12d0a693dc923d943f` 开始；未复用实现线程 evidence，fresh evidence root 为 `/root/work/agent-feedback-g05-independent-review-20260813-mGQOt2/`。
+- [x] 2026-08-13T02:17Z final required gates PASS；fresh repo-external evidence root `/root/work/agent-annotations-g05c-evidence-cuQ4RC/` 包含日志、截图、trace、task/counters JSON、tarball、manifest、hash 与 packed consumer。
+- [x] 2026-08-13T02:32Z 独立 review 从指定 clean package `2653e08af0e9aaef1038c683ace646ac0dc4b42c` 与 Portal `140475af1061714608071b12d0a693dc923d943f` 开始；未复用实现线程 evidence，fresh evidence root 为 `/root/work/agent-annotations-g05-independent-review-20260813-mGQOt2/`。
 - [x] 2026-08-13T02:40Z fresh adversarial registry inspection 重点复核不同 `key`/`code` 配对；直接在指定 `2653e08` snapshot 运行断言，确认现有 normalized signature map 已分别拒绝同 key 和同 code，未发现需要保留的 package defect。
 - [x] 2026-08-13T02:44Z 独立 final gates 全部 PASS：typecheck、focused/full unit、Demo 与 built-in Chromium、build、package lint、fresh pack、frozen relative-tarball external consumer E2E/build/CLI、required scans、provenance、diff 与 clean-tree。
 
@@ -107,7 +107,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 
 - 2026-08-13：Demo playground 和 packed fixture 各保留一份真正 external consumer file；两者只 import public package exports。未把 Demo Extension 移入 package source/export，避免把示例变成内置实现或 source-path shortcut。
 - 2026-08-13：复用 checkpoint-B registry/runtime，不新增 demo adapter、fixture framework或 dependency；README 仅记录最小 runnable extension + Vite registration。
-- 2026-08-13：Vite virtual module 只增加 `import.meta.hot.accept()`，继续复用 checkpoint-B `Symbol.for("agent-feedback.mount")` cleanup；未扩展 public package types/API 或新增 window property。
+- 2026-08-13：Vite virtual module 只增加 `import.meta.hot.accept()`，继续复用 checkpoint-B `Symbol.for("agent-annotations.mount")` cleanup；未扩展 public package types/API 或新增 window property。
 - 2026-08-13：`playgrounds/extension-demo` 是 package-repo playground，允许 package link；发布边界的 `fixtures/packed-react-vite` 则只在 fresh repo-external copy 中使用相对 tarball并冻结安装。两者职责不混用。
 - 2026-08-13：Ponytail ladder 要求不保留无效改动；独立 executable check 证实 `2653e08` 已满足 G05-009 后，撤销临时 registry 改动，package 最终源码树与指定 HEAD 内容一致。
 
@@ -127,15 +127,15 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 
 #### 运行过的命令及结果
 
-- `pnpm typecheck` → PASS，exit 0；final log `/root/work/agent-feedback-g05c-evidence-cuQ4RC/final-typecheck.log`。
+- `pnpm typecheck` → PASS，exit 0；final log `/root/work/agent-annotations-g05c-evidence-cuQ4RC/final-typecheck.log`。
 - `pnpm test -- registry extension toolbar hotkeys panels` → PASS，14 files / 54 tests；final log `final-focused-tests.log`。
-- `AGENT_FEEDBACK_EVIDENCE=.../demo-acceptance-pass pnpm --dir playgrounds/extension-demo test:e2e` → PASS，1 Chromium test；toolbar/action/order、aria-label/Tooltip/Help/listener parity、panel exclusivity/close/focus、task namespace/redaction/exporter、setup/dispose 与 HMR no-duplicate checks all executed；screenshots/trace/task/counters under `demo-acceptance-pass/`。
+- `AGENT_ANNOTATIONS_EVIDENCE=.../demo-acceptance-pass pnpm --dir playgrounds/extension-demo test:e2e` → PASS，1 Chromium test；toolbar/action/order、aria-label/Tooltip/Help/listener parity、panel exclusivity/close/focus、task namespace/redaction/exporter、setup/dispose 与 HMR no-duplicate checks all executed；screenshots/trace/task/counters under `demo-acceptance-pass/`。
 - `pnpm build` → PASS，31 public build artifacts plus shared chunks; `build.log`。
 - `pnpm check:package` → PASS，publint `All good!` and ATTW ESM-only Node ESM/bundler green；`package-check.log`。
-- final `pnpm pack --json --pack-destination /root/work/agent-feedback-g05c-evidence-cuQ4RC/delivery-pack` → PASS，34-file public manifest, tarball `gchust-agent-feedback-0.1.0-alpha.0.tgz`, SHA-256 `d998dc1b6ac8205eaebfa9d6585a5c9a2db1de0de58b62a353913dcf4612f795`；`delivery-pack.json`, `delivery-pack.sha256`。
-- final external packed consumer `pnpm install --lockfile-only --ignore-scripts` + `pnpm install --frozen-lockfile` → PASS；consumer `/root/work/agent-feedback-g05c-evidence-cuQ4RC/delivery-packed-consumer/` uses only `file:./gchust-agent-feedback.tgz`。
-- final external packed consumer `AGENT_FEEDBACK_EVIDENCE=.../delivery-packed-pass pnpm test:e2e` → PASS，1 Chromium packed vertical flow + direct Vite SIGTERM cleanup；`delivery-packed-test.log` and `delivery-packed-pass/vertical-loop.png`。
-- final external packed consumer `pnpm build` + `pnpm exec agent-feedback --help` → PASS；production build 26 modules and CLI help lists six commands；`delivery-packed-build.log`, `delivery-packed-cli-help.log`。
+- final `pnpm pack --json --pack-destination /root/work/agent-annotations-g05c-evidence-cuQ4RC/delivery-pack` → PASS，34-file public manifest, tarball `gchust-agent-annotations-0.1.0-alpha.0.tgz`, SHA-256 `d998dc1b6ac8205eaebfa9d6585a5c9a2db1de0de58b62a353913dcf4612f795`；`delivery-pack.json`, `delivery-pack.sha256`。
+- final external packed consumer `pnpm install --lockfile-only --ignore-scripts` + `pnpm install --frozen-lockfile` → PASS；consumer `/root/work/agent-annotations-g05c-evidence-cuQ4RC/delivery-packed-consumer/` uses only `file:./gchust-agent-annotations.tgz`。
+- final external packed consumer `AGENT_ANNOTATIONS_EVIDENCE=.../delivery-packed-pass pnpm test:e2e` → PASS，1 Chromium packed vertical flow + direct Vite SIGTERM cleanup；`delivery-packed-test.log` and `delivery-packed-pass/vertical-loop.png`。
+- final external packed consumer `pnpm build` + `pnpm exec agent-annotations --help` → PASS；production build 26 modules and CLI help lists six commands；`delivery-packed-build.log`, `delivery-packed-cli-help.log`。
 - source/declaration audits → PASS：required toolbar switch/case scan no matches; setter/`React.Dispatch` declaration scan no matches; external import scan proves `/extension`, `/vite`, and `clientExtensions` only.
 - independent final `pnpm typecheck` → PASS；`logs/final-typecheck.log`。
 - independent final focused/full `pnpm test` → PASS，14 files / 54 tests；`logs/final-focused-tests.log`, `logs/final-full-tests.log`。
@@ -154,7 +154,7 @@ rg -n "setMode|setTask|setAnnotations|setOpen|React\.Dispatch" dist/extension di
 - **G05-002 PASS** — all Pick/Multi/Area/Copy/Visibility/List/Help actions remain in `builtin-extension.ts`; required client switch/case scan has no matches.
 - **G05-003 PASS** — browser exact action order is `pick,multi,area,copy,demo-copy-json,visibility,list,demo-panel-action,help,toggle`.
 - **G05-004 PASS** — Copy JSON aria-label and Tooltip both `Ctrl+Alt+J`, Help contains the same value, and keyboard listener increments the action exactly once before/after HMR.
-- **G05-005 PASS** — browser opens Demo panel over List with one `.af-panel`, focuses Close Demo, closes it, and returns focus to Demo toolbar action.
+- **G05-005 PASS** — browser opens Demo panel over List with one `.aa-panel`, focuses Close Demo, closes it, and returns focus to Demo toolbar action.
 - **G05-006 PASS** — `task-extension.json` has only `annotation.extensions["demo.extension"]["target-context"]`.
 - **G05-007 PASS** — public snapshot lists `demo-json`; explicit exporter copies parseable `{ format: "demo-json" }` content.
 - **G05-008 PASS** — captured/persisted/exported data keeps `demoKind`/`kept` and contains no `redactMe`.
@@ -177,7 +177,7 @@ Goal: GXX
 Result: PASS | FAIL | BLOCKED
 
 Changed files by repository:
-- agent-feedback: ...
+- agent-annotations: ...
 - portal-template-default: ...
 
 Commands run:

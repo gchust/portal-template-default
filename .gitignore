@@ -27,8 +27,8 @@ dist-ssr
 .env.e2e
 .env.e2e.local
 
-# Agent Feedback dev runtime (session token + task files)
-/.agent-feedback/
+# Agent Annotations dev runtime (session token + task files)
+/.agent-annotations/
 
 # Editor directories and files
 

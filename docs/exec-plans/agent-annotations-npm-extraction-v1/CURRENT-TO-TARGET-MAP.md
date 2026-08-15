@@ -37,7 +37,7 @@
 | `diagnostics.ts` | `src/client/evidence/diagnostics.ts` | generic capture/redaction |
 | `screenshot.ts` | `src/client/evidence/screenshot.ts` | Goal 07 修正确性 |
 | `capture-freeze.ts`、`useCaptureFreeze.ts` | `src/client/inspection/freeze.ts` | 只使用 React Grab 公共 freeze |
-| `styles.ts` | `src/client/styles/` | `.af-` 前缀与 Shadow DOM |
+| `styles.ts` | `src/client/styles/` | `.aa-` 前缀与 Shadow DOM |
 
 ## 3. 感知域：Goals 03、06、07
 
@@ -90,12 +90,12 @@ src/extension/
 只留在 Default Portal：
 
 ```text
-src/agent-feedback/nocobase-extension.ts
+src/agent-annotations/nocobase-extension.ts
 ```
 
 它可导入：
 
-- `@gchust/agent-feedback/extension`；
+- `@gchust/agent-annotations/extension`；
 - `@nocobase/portal-sdk/i18n`；
 - 必要 NocoBase redactor API。
 

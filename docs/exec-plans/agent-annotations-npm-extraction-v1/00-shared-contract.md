@@ -29,14 +29,14 @@ package.json                          react-grab、tsx、Studio scripts
 
 ```mermaid
 flowchart TB
-  subgraph PKG["@gchust/agent-feedback — standalone NPM package"]
+  subgraph PKG["@gchust/agent-annotations — standalone NPM package"]
     CORE["Core\nTask schema · mutation · format · redaction"]
     CLIENT["React client runtime\nToolbar · annotations · markers · hotkeys"]
     INSPECT["React Grab inspection\n唯一通用感知引擎"]
     REG["Extension Registry\nToolbar · panel · enricher · exporter · redactor"]
     VITE["Vite plugin\nserve-only injection · local API"]
     STORE["File task store\nrevision · evidence"]
-    CLI["agent-feedback CLI / read-only MCP"]
+    CLI["agent-annotations CLI / read-only MCP"]
     CORE --> CLIENT
     INSPECT --> CLIENT
     REG --> CLIENT
@@ -45,7 +45,7 @@ flowchart TB
   end
 
   subgraph HOST["NocoBase Default Portal"]
-    VC["vite.config.ts\nagentFeedback()"]
+    VC["vite.config.ts\nagentAnnotations()"]
     EXT["nocobase-extension.ts\ni18n · data-nb context · identity · redaction"]
     APP["Portal application"]
     VC --> VITE
@@ -73,10 +73,10 @@ flowchart TB
 第一版只发布一个包：
 
 ```text
-@gchust/agent-feedback
-@gchust/agent-feedback/vite
-@gchust/agent-feedback/extension
-@gchust/agent-feedback/types
+@gchust/agent-annotations
+@gchust/agent-annotations/vite
+@gchust/agent-annotations/extension
+@gchust/agent-annotations/types
 ```
 
 可增加 `./testing` 作为非生产测试入口，但不得暴露内部文件路径。
@@ -95,11 +95,11 @@ flowchart TB
 新包使用：
 
 ```text
-schema id:      agent-feedback.task.v1
+schema id:      agent-annotations.task.v1
 schema version: 1
-data dir:       .agent-feedback
-endpoint:       /__agent-feedback
-token header:   x-agent-feedback-token
+data dir:       .agent-annotations
+endpoint:       /__agent-annotations
+token header:   x-agent-annotations-token
 ```
 
 不读取、不迁移：
@@ -131,8 +131,8 @@ Goal 08 后，模板中允许保留的 Studio 集成仅限：
 ```text
 package.json 中一个 NPM 依赖和可选 CLI 别名
 vite.config.ts 中一次插件注册
-src/agent-feedback/nocobase-extension.ts（或最多三个薄文件）
-.gitignore 中 .agent-feedback
+src/agent-annotations/nocobase-extension.ts（或最多三个薄文件）
+.gitignore 中 .agent-annotations
 少量 NocoBase 集成 E2E
 ```
 
@@ -200,7 +200,7 @@ NocoBase Extension 只负责：
     }
   },
   "bin": {
-    "agent-feedback": "./dist/cli/index.js"
+    "agent-annotations": "./dist/cli/index.js"
   }
 }
 ```
@@ -210,12 +210,12 @@ NocoBase Extension 只负责：
 ### 4.2 Vite plugin
 
 ```ts
-import agentFeedback from "@gchust/agent-feedback/vite";
+import agentAnnotations from "@gchust/agent-annotations/vite";
 
-agentFeedback({
+agentAnnotations({
   root,
-  dir: ".agent-feedback",
-  endpoint: "/__agent-feedback",
+  dir: ".agent-annotations",
+  endpoint: "/__agent-annotations",
   allowRemote: false,
   clientExtensions: [absoluteBrowserModulePath],
 });
@@ -233,15 +233,15 @@ agentFeedback({
 ### 4.3 Client Extension
 
 ```ts
-export interface AgentFeedbackClientExtension {
+export interface AgentAnnotationsClientExtension {
   id: string;
   apiVersion: 1;
-  setup?(context: AgentFeedbackExtensionContext): void | (() => void);
+  setup?(context: AgentAnnotationsExtensionContext): void | (() => void);
   toolbar?: ToolbarContribution[];
   panels?: PanelContribution[];
   targetEnrichers?: TargetEnricher[];
-  exporters?: FeedbackExporter[];
-  redactors?: FeedbackRedactor[];
+  exporters?: AnnotationExporter[];
+  redactors?: AnnotationRedactor[];
   messages?: LocaleMessages;
   host?: HostIntegration;
 }
@@ -251,8 +251,8 @@ export interface AgentFeedbackClientExtension {
 
 ```ts
 export function defineClientExtension(
-  extension: AgentFeedbackClientExtension
-): AgentFeedbackClientExtension;
+  extension: AgentAnnotationsClientExtension
+): AgentAnnotationsClientExtension;
 ```
 
 ### 4.4 Toolbar contribution
@@ -368,15 +368,15 @@ export interface StudioPublicApi {
 最终使用通用命名，例如：
 
 ```ts
-export interface AgentFeedbackTask {
-  schema: "agent-feedback.task.v1";
+export interface AgentAnnotationsTask {
+  schema: "agent-annotations.task.v1";
   schemaVersion: 1;
   taskId: string;
   taskRevision: number;
   status: "active" | "completed";
   createdAt: string;
   updatedAt: string;
-  annotations: AgentFeedbackAnnotation[];
+  annotations: AgentAnnotation[];
 }
 ```
 
@@ -412,7 +412,7 @@ Annotation 保留：
 - input/textarea/password value 不采集；
 - source path 必须经 server root canonicalization；
 - API 不提供任意 shell 或任意文件读取；
-- CLI 只操作 `.agent-feedback` 合同范围；
+- CLI 只操作 `.agent-annotations` 合同范围；
 - production build 完全剔除。
 
 ## 8. 测试层次

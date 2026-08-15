@@ -1,4 +1,4 @@
-# Agent Feedback 通用 NPM 库抽离：Codex Goal 套件 v1
+# Agent Annotations 通用 NPM 库抽离：Codex Goal 套件 v1
 
 本套件用于把当前 `portal-template-default` 中内置的 Portal Studio，抽离成独立发布的通用 React/Vite NPM 工具，并让 NocoBase Default Portal 只保留极薄的宿主扩展。
 
@@ -15,7 +15,7 @@
 ## 1. 最终目标
 
 ```text
-独立 NPM 包 @gchust/agent-feedback
+独立 NPM 包 @gchust/agent-annotations
 ├── 通用 React 浏览器运行时
 ├── react-grab 感知引擎
 ├── Annotation / Marker / Task / Revision
@@ -36,9 +36,9 @@ NocoBase Default Portal
 Codex 应从同时包含两个 Git 仓库的父目录启动：
 
 ```text
-agent-feedback-workspace/
-├── agent-feedback/                 # 新建的独立 Git 仓库
-└── portal-template-default/        # 当前 feat-agent-feedback 分支
+agent-annotations-workspace/
+├── agent-annotations/                 # 新建的独立 Git 仓库
+└── portal-template-default/        # 当前 feat-agent-annotations 分支
 ```
 
 硬性规则：
@@ -46,15 +46,15 @@ agent-feedback-workspace/
 - 两个目录最终必须是独立 Git 仓库。
 - 不要把新 NPM 库永久放进 Default Portal 的 `packages/` 子目录。
 - 不要使用 Git submodule 作为最终分发方式。
-- Goal 01 可以创建 `agent-feedback/`；若 Codex 的沙箱不能写入父工作区，必须停止并报告，不能把库偷偷建在模板内部。
+- Goal 01 可以创建 `agent-annotations/`；若 Codex 的沙箱不能写入父工作区，必须停止并报告，不能把库偷偷建在模板内部。
 
 ## 3. 开始前只允许修改一次的常量
 
 先阅读 `00-project-constants.md`。默认使用：
 
 ```text
-NPM package: @gchust/agent-feedback
-Repository:  agent-feedback
+NPM package: @gchust/agent-annotations
+Repository:  agent-annotations
 License:     MIT
 Initial RC:  0.1.0-alpha.0
 ```
@@ -84,7 +84,7 @@ Initial RC:  0.1.0-alpha.0
 | Goal | 单一结束状态 |
 |---|---|
 | 01 | 两仓库工作区、独立包骨架和当前行为基线已建立，模板功能未改变 |
-| 02 | 通用纯核心已迁入独立包，并以全新 `agent-feedback.task.v1` 合同通过单测 |
+| 02 | 通用纯核心已迁入独立包，并以全新 `agent-annotations.task.v1` 合同通过单测 |
 | 03 | 独立包的浏览器运行时在无 NocoBase 的 React/Vite Playground 中完成批注闭环 |
 | 04 | Vite 插件、文件存储和 CLI 已迁入包，packed tarball 可在空白应用中完成真实闭环 |
 | 05 | 工具栏正式插件化；内置动作与第三方动作使用同一 Registry |
@@ -177,7 +177,7 @@ Goal 09 只产出发布候选，不要求 Codex 使用你的 NPM 凭据发布。
 Goal 10 的前置条件是：
 
 ```bash
-npm view @gchust/agent-feedback@<published-version> version
+npm view @gchust/agent-annotations@<published-version> version
 ```
 
 能够从 registry 返回目标版本。若尚未发布，Goal 10 必须保持 BLOCKED，不能伪造 registry 依赖成功。

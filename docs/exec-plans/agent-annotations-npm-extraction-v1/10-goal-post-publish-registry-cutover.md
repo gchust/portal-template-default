@@ -4,12 +4,12 @@
 
 ## 单一完成状态
 
-Default Portal 使用 NPM registry 中已发布的精确 `@gchust/agent-feedback` 版本；不依赖 sibling repo、workspace link、file path 或 tarball，并从独立 clean clone 通过完整验证。
+Default Portal 使用 NPM registry 中已发布的精确 `@gchust/agent-annotations` 版本；不依赖 sibling repo、workspace link、file path 或 tarball，并从独立 clean clone 通过完整验证。
 
 ## 前置硬门禁
 
 ```bash
-npm view @gchust/agent-feedback@<version> version
+npm view @gchust/agent-annotations@<version> version
 ```
 
 必须精确返回目标版本。否则立即 BLOCKED，不允许修改模板 dependency 来引用不存在版本。
@@ -38,15 +38,15 @@ npm view @gchust/agent-feedback@<version> version
 ## 必须运行
 
 ```bash
-npm view @gchust/agent-feedback@<version> version
+npm view @gchust/agent-annotations@<version> version
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm test:sdk
 pnpm build
 pnpm test:e2e
-pnpm exec agent-feedback --help
-pnpm exec agent-feedback list
+pnpm exec agent-annotations --help
+pnpm exec agent-annotations list
 rg -n "file:|link:|workspace:|\.tgz" package.json pnpm-lock.yaml
 ```
 
@@ -87,7 +87,7 @@ Goal: GXX
 Result: PASS | FAIL | BLOCKED
 
 Changed files by repository:
-- agent-feedback: ...
+- agent-annotations: ...
 - portal-template-default: ...
 
 Commands run:

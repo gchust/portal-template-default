@@ -44,11 +44,11 @@ Canonical NocoBase Registry source lives under `registry/`. In this source repos
 
 Keep Registry items portable and focused on reusable API adapters, hooks, components, and small demos. Update `registry.config.json` whenever an item's files, dependencies, or installation target changes. Validate Registry changes with the normal application build and the relevant regression scripts.
 
-## Agent Feedback NPM extraction
+## Agent Annotations NPM extraction
 
-For Agent Feedback extraction work, read `00-project-constants.md`,
+For Agent Annotations extraction work, read `00-project-constants.md`,
 `00-shared-contract.md`, and only the currently assigned numbered Goal under
-`docs/exec-plans/agent-feedback-npm-extraction-v1/`.
+`docs/exec-plans/agent-annotations-npm-extraction-v1/`.
 
 Complete and independently verify one Goal before starting the next. Keep its
 Progress, Surprises & Discoveries, Decision Log, and Outcomes & Retrospective

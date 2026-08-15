@@ -4,10 +4,10 @@ Goal 09 完成时，F-001 至 F-044 必须全部为 PASS。Goal 10 完成时再�
 
 ## A. 独立包与分发
 
-- **F-001** `agent-feedback/` 是独立 Git 仓库。
+- **F-001** `agent-annotations/` 是独立 Git 仓库。
 - **F-002** package name 与 `00-project-constants.md` 一致。
 - **F-003** ESM-only build 成功，所有公开 exports 可导入。
-- **F-004** `agent-feedback` bin 从 packed tarball 安装后可执行。
+- **F-004** `agent-annotations` bin 从 packed tarball 安装后可执行。
 - **F-005** React/React DOM 是 peer dependency，不被 bundle 成第二份。
 - **F-006** `react-grab` 精确版本由包自身依赖。
 - **F-007** package 中没有 `@nocobase/*` dependency/import。

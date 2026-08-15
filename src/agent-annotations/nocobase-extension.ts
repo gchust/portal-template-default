@@ -1,5 +1,5 @@
-import { defineClientExtension } from "@gchust/agent-feedback/extension";
-import type { AgentFeedbackJsonObject } from "@gchust/agent-feedback/types";
+import { defineClientExtension } from "@gchust/agent-annotations/extension";
+import type { AgentAnnotationsJsonObject } from "@gchust/agent-annotations/types";
 import { getCurrentLocale, translate } from "@nocobase/portal-sdk/i18n";
 import { portalI18nReady } from "@/providers/i18n/runtime";
 
@@ -16,7 +16,7 @@ const STRONG_ATTRIBUTES = [
 const SENSITIVE_CONTEXT_ATTRIBUTE = /^data-nb-(?:record(?:-id)?|value|default-value)$/;
 const message = (key: string, en: string, zh: string) =>
   translate(
-    `agentFeedback.${key}`,
+    `agentAnnotations.${key}`,
     { ns: "app" },
     getCurrentLocale().toLowerCase().startsWith("zh") ? zh : en
   );
@@ -35,13 +35,13 @@ const attributes = (element: Element) => {
   return { strong, contextual };
 };
 
-const redactNocoBaseContext = (value: AgentFeedbackJsonObject): AgentFeedbackJsonObject => {
-  const clean = (input: AgentFeedbackJsonObject): AgentFeedbackJsonObject =>
+const redactNocoBaseContext = (value: AgentAnnotationsJsonObject): AgentAnnotationsJsonObject => {
+  const clean = (input: AgentAnnotationsJsonObject): AgentAnnotationsJsonObject =>
     Object.fromEntries(
       Object.entries(input).flatMap(([key, entry]) =>
         SENSITIVE_CONTEXT_ATTRIBUTE.test(key)
           ? []
-          : [[key, entry && typeof entry === "object" && !Array.isArray(entry) ? clean(entry as AgentFeedbackJsonObject) : entry]]
+          : [[key, entry && typeof entry === "object" && !Array.isArray(entry) ? clean(entry as AgentAnnotationsJsonObject) : entry]]
       )
     );
   return clean(value);
