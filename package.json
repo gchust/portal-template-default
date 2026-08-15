@@ -12,7 +12,7 @@
     "@dicebear/core": "^9.4.3",
     "@eslint/js": "^9.25.0",
     "@fontsource-variable/geist": "^5.3.0",
-    "@gchust/agent-annotations": "file:/root/work/agent-annotations-final-rename-20260815-HPbrKc/gchust-agent-annotations-0.1.0-alpha.0.tgz",
+    "@gchust/agent-annotations": "file:/root/work/agent-annotations-base-fix-20260815-j5WYgd/gchust-agent-annotations-0.1.0-alpha.0.tgz",
     "@hookform/resolvers": "^5.0.1",
     "@nocobase/ai-employee-avatars": "^1.0.2",
     "@nocobase/portal-sdk": "workspace:^",
