@@ -150,6 +150,7 @@ artifacts/
 - [x] 2026-08-15: 从 `b6df160` 产出 25-file tarball `/root/work/agent-annotations-base-fix-20260815-j5WYgd/gchust-agent-annotations-0.1.0-alpha.0.tgz`，54843 bytes，SHA-256 `3f9c2b3c65477fbe97ea260d725bee37203003d4b50cd94655a11fdd9d17ed6e`；Portal consumer `b439bb69b83159bacdc6c4e67dc5baf67a8f1755` 的 typecheck、薄适配 2/2、production build/exclusion PASS。
 - [x] 2026-08-15: OpenCLI 通过 LAN `http://192.168.2.199:5173/x/main/users` 验证 `#agent-annotations-root`、`.aa-dock`、light theme、8/8 action SVG、0 可见 action 文本、5 个已恢复 marker 和 task GET 200；旧 root、dock 与 CLI 均不存在。被忽略的本地 `.env.local` LAN opt-in 同步为 `NOCOBASE_AGENT_ANNOTATIONS_ALLOW_REMOTE=true`。
 - [x] 2026-08-15: 独立 clean-room 审计已针对 package `b6df160ef8d787b6f90eff34e7efc54378de6d1c`、Portal `f13597d72688186213fd2f5f90c586845fb065fe` 和 exact RC 完整重跑；G09-001–G09-014 与 F-001–F-044 全部 PASS。最终报告复制到 `/root/work/agent-annotations-base-fix-20260815-j5WYgd/FINAL-ACCEPTANCE-REPORT.md`。
+- [x] 2026-08-15: 对 `c11645c` 的 metadata-only 复核确认其仅修改本 living plan，但发现将审计产品提交误写成当前分支头的自失效表述；改为稳定区分 `f13597d` 产品树与后续 plan-only 状态提交，不触碰 runtime 或 RC。
 
 ### Surprises & Discoveries
 
@@ -203,7 +204,7 @@ Result: PASS
 最终不可变目标：
 
 - package commit：`b6df160ef8d787b6f90eff34e7efc54378de6d1c`，公开仓库 `https://github.com/gchust/agent-annotations` 的 `main` 与之相同。
-- Portal commit：`f13597d72688186213fd2f5f90c586845fb065fe`，`feat-agent-annotations` 本地与远端分支均与之相同。
+- Portal 产品审计 commit：`f13597d72688186213fd2f5f90c586845fb065fe`；后续 Goal 状态提交只修改本 living plan，不改变该已审计产品树。
 - RC：`/root/work/agent-annotations-base-fix-20260815-j5WYgd/gchust-agent-annotations-0.1.0-alpha.0.tgz`，SHA-256 `3f9c2b3c65477fbe97ea260d725bee37203003d4b50cd94655a11fdd9d17ed6e`，54,843 bytes，25 files。
 - 独立证据：`/root/work/agent-annotations-g09-final-audit-20260815-q0NqRG/FINAL-INDEPENDENT-AUDIT.md`；发布候选旁的逐字副本为 `/root/work/agent-annotations-base-fix-20260815-j5WYgd/FINAL-ACCEPTANCE-REPORT.md`。
 
