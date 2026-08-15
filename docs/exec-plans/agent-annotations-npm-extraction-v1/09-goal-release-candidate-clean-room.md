@@ -143,7 +143,10 @@ artifacts/
 - [x] 2026-08-14: 局域网 HTTP 实测发现非 secure context 没有 `crypto.randomUUID`，导致新批注在提交前抛错；通用 core 在 `46b610df96607990849eb80dbaf0a03389482015` 使用 `crypto.getRandomValues` 生成 RFC 4122 UUID v4 fallback，并留下稳定回归测试。
 - [x] 2026-08-14: 从 `46b610d` 重产 25-file tarball `/root/work/agent-annotations-ui-fix-final-20260814-Xfmuch/gchust-agent-annotations-0.1.0-alpha.0.tgz`，54790 bytes，SHA-256 `fcc4eb8714afc59a03e06bf8d2b070afbdac75bdff8deb875fe55c6949108176`；package typecheck、21 files / 97 tests、build、architecture、publint/ATTW、docs、dependency 和 tarball audit 全部 PASS。
 - [x] 2026-08-14: Portal consumer `0f977bbbb48b4c6c0e65c065c0f048dac1df6f99` 安装 exact tarball 并更新 icon-only E2E selectors；typecheck、薄适配 2/2、build PASS。登录态局域网 Chromium 刷新后实测 `color-scheme: light`、白色 toolbar、9/9 控件（含 drag grip）均为 SVG 且无可见文字、2 个 marker 恢复，annotation list 和 task 文件均保留 `Light icon toolbar verification 2026-08-14`；Save/evidence POST 均为 200，截图在 `/root/work/agent-annotations-ui-fix-final-20260814-Xfmuch/portal-light-icons.png`。
-- [ ] 2026-08-14: 新 package commit 和 tarball 改变 RC，必须重新执行完整 G09-001–014 与 F-001–044 clean-room 独立验收后才可恢复 Goal 09 PASS。
+- [x] 2026-08-15: 用户将产品定名为 `@gchust/agent-annotations`，并明确要求 CLI、schema、endpoint、运行目录、环境变量、公开 API、DOM/CSS 标识、文件夹和仓库均不得保留旧品牌或兼容别名，也不为重命名增加测试。package 提交为 `2ac8b28` 和 `1a630686243e667757c4ce79225e7efc6ba975fd`。
+- [x] 2026-08-15: 从 `1a63068` 产出 25-file tarball `/root/work/agent-annotations-final-rename-20260815-HPbrKc/gchust-agent-annotations-0.1.0-alpha.0.tgz`，54797 bytes，SHA-256 `703962f2d4606b12481fe30baf2a31ee9a0276a72207033522639bf4fc7b8c7c`；package typecheck、21 files / 97 tests、build、architecture、publint/ATTW、docs、tarball、1 vertical + 1 source + 5 reliability browser E2E 和 SIGTERM 全部 PASS。
+- [x] 2026-08-15: Portal consumer `607605f8ce1ef59bf4a6665de27a5c9d70bcb771` 安装 exact tarball，并同步重命名 Vite 插件、薄适配、CLI aliases、LAN opt-in、runtime/test/docs/ExecPlan 路径；typecheck、薄适配 2/2、production build PASS，当前 tracked/worktree 扫描无旧品牌标识。
+- [ ] 2026-08-15: 重命名改变 RC 的公开合同和 provenance，必须重新执行完整 G09-001–014 与 F-001–044 clean-room 独立验收后才可恢复 Goal 09 PASS。
 
 ### Surprises & Discoveries
 
@@ -162,6 +165,7 @@ artifacts/
 - 既有 root-base fixtures 没有覆盖 Portal 实际 `/x/main/` dev base；`transformIndexHtml` 的根路径硬编码因此在真实 Portal 中使虚拟客户端模块 404，而此前 packed/root-base 浏览器门禁仍会通过。
 - comment update 实际已返回 200 并写入任务；“Save 无效”的直接 UX 原因是成功后 editor 仍打开且 toast 很短，失败分支则会抛出未处理异常。editor 距 marker 过远的直接原因是固定 `left:8px; top:8px`。
 - toolbar 和 editor 的 dark appearance 不是宿主 theme 继承，而是 Shadow Root 内显式 `color-scheme: dark` 和硬编码深色 palette；按钮占宽则来自直接插入 label 文本。局域网最终 Save 失败是另一独立根因：非 secure-context HTTP 暴露 `crypto.getRandomValues`，但不提供 `crypto.randomUUID`。
+- 只修改 NPM package name 仍会留下旧 CLI、schema、endpoint、运行目录和浏览器标识；这些属于同一个公开合同，必须一次性同名迁移。旧历史 commit 与仓外审计证据不是运行时兼容面，不改写历史。
 
 ### Decision Log
 
@@ -182,13 +186,16 @@ artifacts/
 - 2026-08-14: comment editor 由通用 runtime 相对 marker 放置，优先下方 8px、空间不足转上方并钳制 viewport；Save 期间禁用按钮，成功关闭 editor，失败保留原 DOM/草稿并显示错误。状态提示改为增量更新，避免失败提示本身重建表单并丢失输入；不增加依赖或 Portal adapter 补丁。
 - 2026-08-14: 复用公开 toolbar contribution 的 `icon` 合同和内联 SVG，不增加 icon dependency；默认只渲染 icon，`aria-label` 和现有 hover tooltip 继续提供文字。Shadow Root 使用明确 light tokens，避免继承宿主 dark theme。
 - 2026-08-14: UUID fallback 放在所有新实体共用的 core ID helper，使用原生 Web Crypto `getRandomValues` 并设置 UUID v4/version bits；不在 Portal adapter 或单个 Save caller 打补丁。
+- 2026-08-15: 新品牌只保留 `agent-annotations` / `Agent Annotations` 合同；不提供旧 CLI、schema、env、endpoint、类型或 CSS alias，不增加兼容层和新测试。已有测试仅同步公开名称。
 
 ### Outcomes & Retrospective
 
 Goal: G09
-Result: IN PROGRESS（2026-08-14 真实缺陷修复后等待新 RC 完整独立重审）
+Result: IN PROGRESS（2026-08-15 完成全量品牌迁移后等待新 RC 完整独立重审）
 
 2026-08-14 addendum：以下 2026-08-13 writer 结果保留为历史证据，但其 RC 与完成结论已被 `8da19fb`、`bc3b07d` 修复和后续 tarball 取代；不得用于当前发布候选的最终 PASS 声明。
+
+2026-08-15 addendum：package `1a63068` 与 Portal `607605f` 已完成 Agent Annotations 全量公开合同迁移；旧 RC provenance 继续只作历史证据。当前 exact tarball 是 54797-byte、25-file 的 `703962f2...` 产物。
 
 实际交付：
 
@@ -207,11 +214,11 @@ Result: IN PROGRESS（2026-08-14 真实缺陷修复后等待新 RC 完整独立�
 - packed Portal frozen install/typecheck/test/test:sdk/build/real E2E/CLI/production browser → PASS（23/58、9/30、2/2）；offline frozen reinstall 后 typecheck/tests/build → PASS；证据 `logs/196-*`～`logs/212-*`。缺少显式测试凭据的首次 E2E `logs/202-*` 为预期配置 FAIL，配置后 `logs/203-*` PASS。
 - exact tarball `sha256sum -c`, manifest diff, forbidden-member and 200000-byte size gate → PASS；证据 `logs/221-*`。
 
-Acceptance criteria：`46b610d` / `0f977bb` focused source、Portal 和真实局域网浏览器 checks PASS；当前新 RC 的 G09-001～G09-014 与 F-001～F-044 完整 clean-room matrix 尚未重跑，因此不得沿用旧 RC 的 PASS。
+Acceptance criteria：`1a63068` / `607605f` focused package、Portal 和 packed browser checks PASS；当前新 RC 的 G09-001～G09-014 与 F-001～F-044 完整 clean-room matrix 尚未重跑，因此不得沿用旧 RC 的 PASS。
 
 Known issues within this Goal: 非根 base 缺陷已修复；新 RC 的完整独立 clean-room re-audit 仍待执行。
 
-下一可靠起点：package `46b610df96607990849eb80dbaf0a03389482015`、Portal consumer `0f977bbbb48b4c6c0e65c065c0f048dac1df6f99`、exact tarball `/root/work/agent-annotations-ui-fix-final-20260814-Xfmuch/gchust-agent-annotations-0.1.0-alpha.0.tgz`、SHA-256 `fcc4eb8714afc59a03e06bf8d2b070afbdac75bdff8deb875fe55c6949108176`。Goal 10 未开始。
+下一可靠起点：package `1a630686243e667757c4ce79225e7efc6ba975fd`、Portal consumer `607605f8ce1ef59bf4a6665de27a5c9d70bcb771`、exact tarball `/root/work/agent-annotations-final-rename-20260815-HPbrKc/gchust-agent-annotations-0.1.0-alpha.0.tgz`、SHA-256 `703962f2d4606b12481fe30baf2a31ee9a0276a72207033522639bf4fc7b8c7c`。未执行 npm publish；Goal 10 未开始。
 
 ## 最终报告格式
 
